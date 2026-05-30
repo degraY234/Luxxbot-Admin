@@ -1,0 +1,4 @@
+/session_zetbot/
+/node_modules/
+.env
+*.log
