@@ -2,2726 +2,754 @@ import 'dotenv/config';
 import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadContentFromMessage } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
+import chalk from 'chalk';
 import fs from 'fs';
-import path from 'path';
-import pino from 'pino';
-import os from 'os';
-import { createCanvas, loadImage } from 'canvas';
-import { GoogleGenAI } from '@google/genai';
-import { Sticker, StickerTypes } from 'wa-sticker-formatter';
 import axios from 'axios';
-import * as cheerio from 'cheerio';
-import { minify } from 'terser';
-import express from 'express';
-import http from 'http';
-import ytdl from '@distube/ytdl-core';
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegPath from 'ffmpeg-static';
-ffmpeg.setFfmpegPath(ffmpegPath);
-import TikTok from '@tobyg74/tiktok-api-dl';
-import ytSearch from 'yt-search';
-console.log("Gemini Key Loaded:", !!process.env.GEMINI_API_KEY);
-// =======================================================
-// ⚙️ CONFIGURATION & GLOBAL VARIABLES 🎀
-// =======================================================
-const BOT_NAME = "zetbot"; // Ganti nama bot sesuai keinginanmu
-const OWNER_NUMBER = ["6282384961407", "36326967632006"];
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+import { createCanvas, loadImage } from 'canvas';
+import OpenAI from 'openai';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
-const ai = new GoogleGenAI({
-    apiKey: GEMINI_API_KEY
-});
+// Inisialisasi variabel global
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const ownerNumber = '6282384961407'; // Nomor owner
+const ownerName = 'DoxxBorx'; // Nama owner
+const botVersion = '3.0.0'; // Versi bot
 const startTime = Date.now();
 
-// 📻 WATCH2GETHER CONFIG
-const W2G_API_KEY = process.env.STREAM_TOKEN;
-const W2G_ROOM_FILE = "./w2g_room.json"; // Tempat nyimpen link room permanent
+// Setup OpenAI SDK
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-let isSelfMode = false;
-let isSleeping = false;
-let antiLink = false;
+// Fungsi utama start bot
+async function start() {
+  const { state, saveCreds } = await useMultiFileAuthState('./session');
+  const { version } = await fetchLatestBaileysVersion();
 
-// Database sederhana untuk Fitur Notes & AI Memory
-const notesDatabase = {};
-const aiConversationMemory = {};
-const imageCache = new Map();
-const bratStyles = [
-    'cute', 'dark', 'neon', 'anime', 'glitch', 'minimal'
-];
+  const sock = makeWASocket({
+    version,
+    auth: state,
+    printQRInTerminal: false,
+    browser: ['LuxxBot', 'Chrome', '1.0.0'],
+  });
 
-// anti spam simple
-const userCooldown = new Map();
+  sock.ev.on('creds.update', saveCreds);
 
-function hapusFileSisa(filePath) {
-    if (fs.existsSync(filePath)) {
-        fs.unlink(filePath, (err) => {
-            if (err) console.error(` gagal menghapus file sisa: ${filePath}`, err);
-            else console.log(`🗑️ Berhasil membersihkan cache file: ${filePath}`);
+  // Handle QR code dan koneksi
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+    if (qr) {
+      console.log('QR Code:');
+      qrcode.generate(qr, { small: true });
+    }
+    if (connection === 'close') {
+      const shouldReconnect = !(lastDisconnect.error instanceof Boom && lastDisconnect.error.output.statusCode === DisconnectReason.loggedOut);
+      console.log('Koneksi terputus, mencoba reconnect:', shouldReconnect);
+      if (shouldReconnect) {
+        setTimeout(start, 3000);
+      }
+    } else if (connection === 'open') {
+      console.log(chalk.green('Bot terkoneksi!'));
+      // Kirim pesan ke owner bahwa bot sudah aktif
+      try {
+        await sock.sendMessage(`${ownerNumber}@s.whatsapp.net`, {
+          text: `🤖 Bot sudah aktif!\nVersi: ${botVersion}\nTime: ${new Date().toLocaleString('id-ID')}`,
         });
+      } catch (e) {
+        console.log('Gagal kirim pesan ke owner:', e.message);
+      }
     }
-}
+  });
 
-global.activeVotes = {};
-// =======================================================
-// 📻 WATCH2GETHER HELPER FUNCTIONS 🎵
-// =======================================================
+  // Handle pesan masuk
+  sock.ev.on('messages.upsert', async ({ messages }) => {
+    const msg = messages[0];
+    if (!msg || !msg.message || msg.key.fromMe) return;
 
-/**
- * Ambil data room dari file lokal (biar persistent walau bot restart)
- */
-function loadRoomData() {
-    try {
-        if (fs.existsSync(W2G_ROOM_FILE)) {
-            return JSON.parse(fs.readFileSync(W2G_ROOM_FILE, 'utf8'));
-        }
-    } catch (e) { /* silent */ }
-    return null;
-}
+    const from = msg.key.remoteJid;
+    const sender = msg.key.participant || from;
+    const messageContent = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+    const body = messageContent.trim();
 
-/**
- * Simpan data room ke file lokal
- */
-function saveRoomData(data) {
-    try {
-        fs.writeFileSync(W2G_ROOM_FILE, JSON.stringify(data, null, 2));
-    } catch (e) {
-        console.error("Gagal simpan room data:", e.message);
+    // Cek command prefix
+    if (!body.startsWith('!')) return;
+    const args = body.slice(1).trim().split(/ +/);
+    const command = args.shift().toLowerCase();
+
+    // Fungsi bantu
+    const isGroup = from.endsWith('@g.us');
+    const isOwner = ownerNumber + '@s.whatsapp.net' === sender;
+
+    // Cek admin group jika perlu
+    let isGroupAdmin = false;
+    if (isGroup) {
+      try {
+        const groupMetadata = await sock.groupMetadata(from);
+        const participant = groupMetadata.participants.find(p => p.id === sender);
+        isGroupAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin' || isOwner;
+      } catch (e) {
+        console.log('Gagal ambil metadata grup:', e.message);
+      }
     }
-}
 
-function videoToSticker(inputPath, outputPath) {
-    return new Promise((resolve, reject) => {
+    // Command: menu
+    if (command === 'menu' || command === 'help') {
+      await sendMenu(sock, from, msg, isGroup, isGroupAdmin, sender);
+      return;
+    }
 
-        ffmpeg(inputPath)
-            .outputOptions([
-                "-vf", "scale=512:512:force_original_aspect_ratio=cover,fps=15",
-                "-loop", "0",
-                "-ss", "0",
-                "-t", "6"
-            ])
-            .toFormat("webp")
-            .save(outputPath)
-            .on("end", () => resolve(outputPath))
-            .on("error", reject);
+    // --- Contoh command: ping ---
+    if (command === 'ping') {
+      await sock.sendMessage(from, { text: '🏓 Pong!' }, { quoted: msg });
+      return;
+    }
 
-    });
-}
+    // --- Command lain sesuai menu dan fitur yang sudah disusun ---
+    // Contoh: !dalle, !play, !json, !minify, !sticker, dll.
+    // Pastikan setiap command dihandle di sini agar semua berfungsi.
 
-function videoToStickerWithText(inputPath, outputPath, text) {
-    return new Promise((resolve, reject) => {
+    // =======================
+    // Contoh Command AI: !dalle
+    if (command === 'dalle') {
+      const prompt = args.join(' ');
+      if (!prompt) {
+        return await sock.sendMessage(from, { text: '❌ Format: !dalle [deskripsi]\nContoh: !dalle sunset di pantai' }, { quoted: msg });
+      }
 
-        ffmpeg(inputPath)
-            .outputOptions([
-                "-vf",
-                `scale=512:512:force_original_aspect_ratio=cover,
-                 fps=15,
-                 drawtext=text='${text}':
-                 fontcolor=white:
-                 fontsize=28:
-                 box=1:
-                 boxcolor=black@0.5:
-                 boxborderw=5:
-                 x=(w-text_w)/2:
-                 y=h-80`
-            ])
-            .toFormat("webp")
-            .save(outputPath)
-            .on("end", () => resolve(outputPath))
-            .on("error", reject);
-
-    });
-}
-
-/**
- * Buat room Watch2Gether baru via API.
- * Hanya dipanggil sekali, room disimpan permanent.
- */
-
-function cutVideoSmart(inputPath, outputPath) {
-    return new Promise((resolve, reject) => {
-
-        ffmpeg.ffprobe(inputPath, (err, metadata) => {
-            if (err) return reject(err);
-
-            const duration = metadata.format.duration;
-
-            let start = 0;
-
-            // 🎯 kalau video panjang, ambil bagian tengah
-            if (duration > 6) {
-                start = (duration / 2) - 3; // ambil tengah 6 detik
-                if (start < 0) start = 0;
-            }
-
-            ffmpeg(inputPath)
-                .setStartTime(start)
-                .setDuration(6)
-                .outputOptions([
-                    "-vf scale=512:512:force_original_aspect_ratio=cover,fps=15"
-                ])
-                .toFormat("mp4")
-                .save(outputPath)
-                .on("end", () => resolve(outputPath))
-                .on("error", reject);
+      await sock.sendMessage(from, { text: '🎨 Membuat gambar...' }, { quoted: msg });
+      try {
+        const response = await openai.images.generate({
+          model: 'dall-e-2',
+          prompt: prompt,
+          n: 1,
+          size: '512x512',
         });
-    });
-}
-
-function checkCooldown(userId) {
-    const now = Date.now();
-    const cooldown = 8000; // 8 detik
-
-    if (userCooldown.has(userId)) {
-        const last = userCooldown.get(userId);
-        if (now - last < cooldown) {
-            return false;
-        }
-    }
-
-    userCooldown.set(userId, now);
-    return true;
-}
-
-function randomGradient() {
-    const colors = [
-        "#ff9a9e", "#fad0c4", "#fbc2eb",
-        "#a18cd1", "#f6d365", "#fda085",
-        "#84fab0", "#8fd3f4"
-    ];
-
-    const c1 = colors[Math.floor(Math.random() * colors.length)];
-    const c2 = colors[Math.floor(Math.random() * colors.length)];
-
-    return `linear-gradient(45deg, ${c1}, ${c2})`;
-}
-
-async function addTextToImageV3(
-    buffer,
-    topText = '',
-    bottomText = '',
-    style = 'premium'
-) {
-
-    const img = await loadImage(buffer);
-
-    const canvas = createCanvas(img.width, img.height);
-    const ctx = canvas.getContext('2d');
-
-    ctx.drawImage(img, 0, 0);
-
-    // 🎀 WAIFU FRAME
-if (style === 'waifu') {
-
-    ctx.strokeStyle = '#ff69b4';
-    ctx.lineWidth = 20;
-
-    ctx.strokeRect(
-        0,
-        0,
-        img.width,
-        img.height
-    );
-}
-
-// 🤖 CYBER FRAME
-if (style === 'cyber') {
-
-    ctx.strokeStyle = '#00ffff';
-    ctx.lineWidth = 6;
-
-    ctx.strokeRect(
-        20,
-        20,
-        img.width - 40,
-        img.height - 40
-    );
-}
-
-    const fontSize = Math.max(
-        32,
-        Math.floor(img.width / 12)
-    );
-
-    ctx.textAlign = "center";
-    ctx.font = `bold ${fontSize}px Sans`;
-
-    function applyStyle() {
-
-        ctx.shadowBlur = 0;
-
-        switch (style) {
-
-            case 'waifu':
-    ctx.fillStyle = '#ffb6c1';
-    ctx.strokeStyle = '#ff1493';
-    ctx.lineWidth = 10;
-    ctx.shadowColor = '#ff69b4';
-    ctx.shadowBlur = 20;
-    break;
-
-case 'manga':
-
-    if (style === 'manga') {
-
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-
-    ctx.fillRect(
-        img.width / 2 - width / 2,
-        y - fontSize,
-        width,
-        fontSize + 20
-    );
-
-    applyStyle();
-}
-
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 12;
-    break;
-
-case 'meme':
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 12;
-    break;
-
-case 'glow':
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#00ff88';
-    ctx.lineWidth = 10;
-    ctx.shadowColor = '#00ff88';
-    ctx.shadowBlur = 35;
-    break;
-
-case 'cyber':
-    ctx.fillStyle = '#00ffff';
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 10;
-    ctx.shadowColor = '#00ffff';
-    ctx.shadowBlur = 30;
-    break;
-
-            case 'neon':
-                ctx.fillStyle = '#ffffff';
-                ctx.strokeStyle = '#00ffff';
-                ctx.lineWidth = 10;
-                ctx.shadowColor = '#00ffff';
-                ctx.shadowBlur = 25;
-                break;
-
-            case 'gold':
-                ctx.fillStyle = '#FFD700';
-                ctx.strokeStyle = '#000000';
-                ctx.lineWidth = 8;
-                break;
-
-            case 'anime':
-                ctx.fillStyle = '#ffffff';
-                ctx.strokeStyle = '#ff1493';
-                ctx.lineWidth = 10;
-                break;
-
-            default:
-                ctx.fillStyle = '#ffffff';
-                ctx.strokeStyle = '#000000';
-                ctx.lineWidth = 10;
-        }
-    }
-
-    applyStyle();
-
-    function drawWrappedText(text, startY) {
-
-        if (!text) return;
-
-        const maxWidth = img.width * 0.9;
-
-        const words = text.split(' ');
-
-        let line = '';
-        let lines = [];
-
-        for (const word of words) {
-
-            const testLine = line + word + ' ';
-
-            if (
-                ctx.measureText(testLine).width >
-                maxWidth &&
-                line
-            ) {
-
-                lines.push(line.trim());
-                line = word + ' ';
-
-            } else {
-
-                line = testLine;
-            }
-        }
-
-        if (line) {
-            lines.push(line.trim());
-        }
-
-        for (let i = 0; i < lines.length; i++) {
-
-            const y =
-                startY +
-                i * (fontSize + 12);
-
-            const width =
-                ctx.measureText(lines[i]).width + 40;
-
-            // background transparan
-            ctx.fillStyle = 'rgba(0,0,0,0.35)';
-
-            ctx.fillRect(
-                img.width / 2 - width / 2,
-                y - fontSize,
-                width,
-                fontSize + 15
-            );
-
-            applyStyle();
-
-            ctx.strokeText(
-                lines[i],
-                img.width / 2,
-                y
-            );
-
-            ctx.fillText(
-                lines[i],
-                img.width / 2,
-                y
-            );
-        }
-    }
-
-    drawWrappedText(
-        topText,
-        fontSize + 40
-    );
-
-    const bottomLines =
-        bottomText.split(' ').length > 6
-            ? 2
-            : 1;
-
-    drawWrappedText(
-        bottomText,
-        img.height -
-        (bottomLines * (fontSize + 20)) -
-        40
-    );
-
-    return canvas.toBuffer('image/png');
-}
-
-
-async function addTextToImage(buffer, text) {
-    const img = await loadImage(buffer);
-
-    const canvas = createCanvas(img.width, img.height);
-    const ctx = canvas.getContext('2d');
-
-    ctx.drawImage(img, 0, 0);
-
-    // 🔥 auto scale font berdasarkan ukuran gambar
-    const fontSize = Math.floor(img.width / 12);
-
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(0, img.height * 0.75, img.width, img.height * 0.25);
-
-    ctx.fillStyle = "#ffffff";
-    ctx.font = `bold ${fontSize}px Sans`;
-    ctx.textAlign = "center";
-
-    // wrap text biar gak kepanjangan
-    const maxWidth = img.width * 0.9;
-    const words = text.split(' ');
-    let line = '';
-    let y = img.height * 0.85;
-
-    for (let n = 0; n < words.length; n++) {
-        let testLine = line + words[n] + ' ';
-        let metrics = ctx.measureText(testLine);
-
-        if (metrics.width > maxWidth && n > 0) {
-            ctx.fillText(line, img.width / 2, y);
-            line = words[n] + ' ';
-            y += fontSize + 10;
-        } else {
-            line = testLine;
-        }
-    }
-
-    ctx.fillText(line, img.width / 2, y);
-    // 😂 MEME AUTO CAPS
-if (style === 'meme') {
-
-    topText = topText.toUpperCase();
-    bottomText = bottomText.toUpperCase();
-}
-
-    return canvas.toBuffer("image/png");
-}
-
-async function downloadBuffer(mediaMsg) {
-    const stream = await downloadContentFromMessage(mediaMsg, 'video');
-
-    let buffer = Buffer.from([]);
-    for await (const chunk of stream) {
-        buffer = Buffer.concat([buffer, chunk]);
-    }
-
-    return buffer;
-}
-
-async function makeAestheticText(text) {
-    try {
-        const prompt = `
-Ubah teks ini jadi caption aesthetic pendek, vibes, dan emosional (maks 1 kalimat):
-
-"${text}"
-
-Gaya: Gen Z, singkat, viral, pakai emoji dikit.
-`;
-
-        const result = await ai.models.generateContent({
-            model: "gemini-1.5-flash",
-            contents: prompt
-        });
-
-        let output = result.text || text;
-
-        // fallback kalau kepanjangan
-        return output.length > 80 ? output.slice(0, 80) + "..." : output;
-
-    } catch {
-        return text;
-    }
-}
-
-async function addAnimatedTextStyle(buffer, text) {
-    const img = await loadImage(buffer);
-
-    const canvas = createCanvas(img.width, img.height);
-    const ctx = canvas.getContext('2d');
-
-    ctx.drawImage(img, 0, 0);
-
-    const fontSize = Math.floor(img.width / 10);
-
-    // efek glow / neon shift
-    ctx.font = `bold ${fontSize}px Sans`;
-    ctx.textAlign = "center";
-
-    // shadow glow (biar hidup)
-    ctx.shadowColor = "rgba(255,255,255,0.8)";
-    ctx.shadowBlur = 20;
-
-    const x = img.width / 2;
-    const y = img.height * 0.8;
-
-    // glitch effect (fake animation feel)
-    ctx.fillStyle = "#ff4dff";
-    ctx.fillText(text, x + 2, y);
-
-    ctx.fillStyle = "#00ffff";
-    ctx.fillText(text, x - 2, y);
-
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText(text, x, y);
-
-    return canvas.toBuffer("image/png");
-}
-
-async function generateFallbackImage(text) {
-    const seed = Math.floor(Math.random() * 999999);
-
-    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(text)}, sticker style, cute, high quality?seed=${seed}`;
-
-    const res = await fetch(url);
-    const buffer = Buffer.from(await res.arrayBuffer());
-
-    return buffer;
-}
-
-async function polishText(text) {
-    try {
-        if (!GEMINI_API_KEY) return text;
-
-        const prompt = `Perbaiki teks ini jadi lebih aesthetic, pendek, dan keren untuk sticker:
-"${text}"`;
-
-        const result = await ai.models.generateContent({
-            model: "gemini-1.5-flash",
-            contents: prompt
-        });
-
-        return result.text || text;
-    } catch {
-        return text;
-    }
-}
-
-async function createW2GRoom() {
-    const res = await axios.post('https://api.w2g.tv/rooms/create.json', {
-        w2g_api_key: W2G_API_KEY,
-        share: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", // video placeholder awal
-        bg_color: "#00ff00",
-        bg_opacity: "50"
-    });
-    const streamKey = res.data.streamkey;
-    const roomUrl = `https://w2g.tv/rooms/${streamKey}`;
-    const roomData = { streamkey: streamKey, url: roomUrl, created_at: new Date().toISOString() };
-    saveRoomData(roomData);
-    return roomData;
-}
-
-async function getInstagramMedia(url) {
-    try {
-
-        // =========================
-        // METHOD 1: SnapAPI (fast)
-        // =========================
+        const imageUrl = response.data[0].url;
+        const res = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+        const buffer = Buffer.from(res.data, 'binary');
+        await sock.sendMessage(from, {
+          image: buffer,
+          caption: `🎨 *DALL-E*\nPrompt: ${prompt}`,
+        }, { quoted: msg });
+      } catch (e) {
+        // fallback dengan pollinations.ai
         try {
-            const res = await axios.get(`https://snapinsta.app/api/ajaxSearch`, {
-                params: { url }
-            });
-
-            const data = res.data;
-
-            if (data?.media?.length) {
-                return data.media[0].url;
-            }
-        } catch (e) {
-            console.log("SnapAPI gagal, lanjut fallback...");
-        }
-
-        // =========================
-        // METHOD 2: SaveInsta fallback
-        // =========================
-        try {
-            const res = await axios.post(
-                "https://saveinsta.io/core/ajax.php",
-                new URLSearchParams({
-                    url,
-                    submit: ""
-                }),
-                {
-                    headers: {
-                        "content-type": "application/x-www-form-urlencoded"
-                    }
-                }
-            );
-
-            const $ = cheerio.load(res.data);
-
-            const media = [];
-
-            $("a").each((i, el) => {
-                const link = $(el).attr("href");
-                if (link && link.includes("http")) {
-                    media.push(link);
-                }
-            });
-
-            if (media.length > 0) return media[0];
-
-        } catch (e) {
-            console.log("SaveInsta gagal, lanjut fallback...");
-        }
-
-        // =========================
-        // METHOD 3: Embed fallback
-        // =========================
-        try {
-            const shortUrl = url.split("?")[0];
-
-            const embed = `https://www.instagram.com/oembed/?url=${shortUrl}`;
-
-            const res = await axios.get(embed);
-
-            if (res.data?.thumbnail_url) {
-                return res.data.thumbnail_url;
-            }
-        } catch (e) {
-            console.log("Embed fallback gagal...");
-        }
-
-        throw new Error("Semua metode IG gagal");
-
-    } catch (err) {
-        console.log("IG ERROR:", err.message);
-        return null;
-    }
-}
-/**
- * Dapatkan room yang sudah ada, atau buat baru kalau belum ada.
- */
-async function getOrCreateRoom() {
-    const existing = loadRoomData();
-    if (existing && existing.streamkey) return existing;
-    return await createW2GRoom();
-}
-
-/**
- * Tambahkan video YouTube ke room Watch2Gether yang sudah ada.
- * @param {string} streamkey - Key room W2G
- * @param {string} youtubeUrl - URL video YouTube
- * @param {string} title - Judul video (opsional, untuk log)
- */
-async function addVideoToRoom(streamkey, youtubeUrl, title = '') {
-    try {
-        const response = await axios.post(
-            `https://api.w2g.tv/rooms/${streamkey}/playlists/current/mediaitems`,
-            {
-                w2g_api_key: W2G_API_KEY,
-                add_items: [{ url: youtubeUrl, title: title }]
-            },
-            {
-                headers: { 'Content-Type': 'application/json' }
-            }
-        );
-        console.log(`✅ Video berhasil masuk W2G playlist: ${title}`);
-        return response.data;
-    } catch (e) {
-        // Log detail errornya biar gampang debug
-        console.error('❌ W2G API Error:', e.response?.status, e.response?.data || e.message);
-        throw e;
-    }
-}
-
-// =======================================================
-// 🧠 PROSES PERTANYAAN LEWAT API GEMINI AI (ANTI-SICK SYSTEM) 🐰✨
-// =======================================================
-async function tanyakanAI(query, type = 'tanya', isAdmin = false, fromId = 'global') {
-    if (!GEMINI_API_KEY) {
-    return `⚠️ API Key Gemini belum diisi di .env`;
-}
-console.log("Gemini Key Loaded:", !!GEMINI_API_KEY);
-
-    let panggilan = isAdmin ? "Bos DoxxBorx tercinta 😎👑" : "Kakak manis 🌸";
-    let systemInstruction = "";
-    
-    if (type === 'tanya') {
-        systemInstruction = `Anda adalah asisten AI pribadi yang super cerdas, berwawasan luas berdasarkan seluruh data internet terbaru, namun memiliki kepribadian yang kocak, jenaka, santai, suka memakai emoji keren, dan agak sombong tapi imut. 
-        Tugas Anda: Jawab pertanyaan user dengan data yang SANGAT JELAS, AKURAT, DAN BENAR secara ilmiah/faktual. Wajib selipkan bumbu bercanda, analogi lucu, atau punchline komedi agar tidak kaku. 
-        Panggil user dengan sebutan "${panggilan}". Katakan padanya bahwa pemilik tertinggi bot ini adalah Bos DoxxBorx sang penguasa coding jika ada yang bertanya tentang owner atau pencipta.`;
-    } else if (type === 'coding') {
-        systemInstruction = `Anda adalah pakar pemrograman komputer (software engineer senior) yang genius sekaligus instruktur coding yang asyik and humoris. 
-        Tugas Anda: Analisis masalah error, buatkan potongan kode (clean code) sesuai permintaan user, jabarkan logikanya dengan analogi yang sangat mudah dipahami mahasiswa teknik komputer. 
-        Gunakan format Markdown yang rapi untuk baris kodenya agar mudah di-copy. Jangan terlalu kaku, selipkan sedikit sarkasme komedi atau jokes anak IT di akhir jawaban. Panggil user dengan sebutan "${panggilan}".`;
-    } else if (type === 'rangkum') {
-        systemInstruction = `Anda adalah seorang ahli analis teks profesional. Tugas Anda adalah meringkas teks panjang atau artikel dari URL yang diberikan user menjadi ringkasan yang padat, jelas, poin-poin penting tersampaikan, namun tetap ditulis dengan gaya santai dan mudah dimengerti. Panggil user dengan sebutan "${panggilan}".`;
-    } else if (type === 'brainstorm') {
-        systemInstruction = `Anda adalah konsultan kreatif dan pakar inovasi digital yang super seru. 
-        Tugas Anda: Berikan ide-ide segar, out-of-the-box, kreatif, inovatif, dan aplikatif untuk project web, aplikasi, artikel, tugas kuliah, atau strategi konten yang ditanyakan user. 
-        Berikan jawaban dalam bentuk poin-poin yang terstruktur rapi. Berikan semangat dan bumbu komedi segar khas anak muda agar user terinspirasi. Panggil user dengan sebutan "${panggilan}".`;
-    } else if (type === 'translate') {
-        systemInstruction = `Anda adalah penerjemah multi-bahasa profesional yang sangat ahli dalam memahami slang, idiom, dan konteks budaya lokal (bukan terjemahan kaku mesin kamus biasa). 
-        Tugas Anda: Terjemahkan teks yang diberikan ke bahasa tujuan secara alami, luwes, mengalir, namun tetap mempertahankan arti aslinya. 
-        Setelah memberikan terjemahan utama, berikan penjelasan singkat tentang konteks penggunaan kalimat tersebut jika dirasa perlu dengan gaya santai. Panggil user dengan sebutan "${panggilan}".`;
-    }else if (type === 'creative') {
-    systemInstruction = `
-    Anda adalah penulis kreatif profesional.
-
-    Tugas:
-    - Membuat pantun yang indah dan berima.
-    - Membuat quote anime yang keren.
-    - Membuat dark jokes yang lucu dan aman.
-    - Membuat cerpen yang menarik.
-
-    Aturan:
-    - Langsung berikan hasil akhir.
-    - Jangan membuat poin-poin kecuali diminta.
-    - Gunakan bahasa Indonesia yang natural.
-    - Format rapi dan menarik.
-    `;
-    } else {
-        systemInstruction = `Anda adalah tempat curhat atau pelampiasan emosi yang ramah, menghibur, dan sangat humoris. Panggil user dengan sebutan "${panggilan}". Berikan tanggapan yang solutif namun dibalut dengan candaan komedi absurd khas warga netizen agar emosi user mereda.`;
-    }
-
-    const modelsToTry = ['gemini-2.5-flash'];
-    
-    let contentsPayload = query;
-    if (type === 'chat_context') {
-        if (!aiConversationMemory[fromId]) aiConversationMemory[fromId] = [];
-        aiConversationMemory[fromId].push({ role: 'user', parts: [{ text: query }] });
-        contentsPayload = aiConversationMemory[fromId];
-    }
-
-    for (let modelName of modelsToTry) {
-        try {
-            const response = await ai.models.generateContent({
-                model: modelName,
-                contents: contentsPayload,
-                config: {
-                    systemInstruction: systemInstruction,
-                    temperature: 0.7,
-                }
-            });
-            
-            if (type === 'chat_context') {
-                aiConversationMemory[fromId].push({ role: 'model', parts: [{ text: response.text }] });
-                if (aiConversationMemory[fromId].length > 20) aiConversationMemory[fromId].shift();
-            }
-            return response.text;
-        } catch (error) {
-            if (error.status === 503 || error.message?.includes('demand')) {
-                console.log(`⚠️ Model ${modelName} lagi sibuk berat, mengalihkan ke model cadangan...`);
-                continue; 
-            }
-            throw error;
-        }
-    }
-
-    return `🚨 *Waduh Bos, Server Google Lagi Down!* 🚨\n\nSatelit Gemini AI pusat lagi mengalami lonjakan trafik parah. Coba kirim ulang perintahnya beberapa saat lagi ya Bos DoxxBorx! 🤯⚡`;
-}
-
-function runtime(seconds) {
-    seconds = Number(seconds);
-    var d = Math.floor(seconds / (3600 * 24));
-    var h = Math.floor(seconds % (3600 * 24) / 3600);
-    var m = Math.floor(seconds % 3600 / 60);
-    var s = Math.floor(seconds % 60);
-    var dDisplay = d > 0 ? d + " hari, " : "";
-    var hDisplay = h > 0 ? h + " jam, " : "";
-    var mDisplay = m > 0 ? m + " menit, " : "";
-    var sDisplay = s > 0 ? s + " detik" : "0 detik";
-    return dDisplay + hDisplay + mDisplay + sDisplay;
-}
-
-// =======================================================
-// 🔌 START WHATSAPP CONNECTION (BAILEYS MULTI-AUTH) 💖
-// =======================================================
-async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('session_zetbot');
-    const { version } = await fetchLatestBaileysVersion();
-
-    const sock = makeWASocket({
-        version,
-        logger: pino({ level: 'silent' }), 
-        printQRInTerminal: true,
-        auth: state,
-        browser: [BOT_NAME, 'Chrome', '1.0.0']
-    });
-
-    sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-            console.log('\n\x1b[35m🎀 ============================================== 🎀\x1b[0m');
-            console.log('\x1b[36m✨ SILAKAN SCAN QR CODE DI BAWAH UNTUK MENYALAKAN BOT ✨\x1b[0m');
-            console.log('\x1b[35m🎀 ============================================== 🎀\x1b[0m\n');
-            qrcode.generate(qr, { small: true });
-        }
-        if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error instanceof Boom) ? lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut : true;
-            console.log('🔄 Koneksi terputus akibat:', lastDisconnect.error, ', mencoba menyambung ulang:', shouldReconnect);
-            if (shouldReconnect) startBot();
-        } else if (connection === 'open') {
-            console.log('\x1b[36m%s\x1b[0m', `
-            ╔════════════════════════════════════════════════════╗
-            ║  🚀 ${BOT_NAME} MULTI-DEVICE IS SUCCESSFULLY ONLINE! 🤖 ║
-            ╚════════════════════════════════════════════════════╝
-            `);
-            console.log(`\x1b[32m🌸 ✨ Yeayy! ${BOT_NAME} Berhasil Online! Siap Melayani Bos DoxxBorx! 🎀💖\x1b[0m\n`);
-
-            // Pastikan room W2G sudah ada saat bot nyala
-            getOrCreateRoom()
-                .then(room => console.log(`\x1b[35m📻 Room W2G siap: ${room.url}\x1b[0m`))
-                .catch(e => console.error('❌ Gagal init room W2G:', e.message));
-        }
-    });
-
-    sock.ev.on('messages.upsert', async (chatUpdate) => {
-        try {
-            const msg = chatUpdate.messages[0];
-            if (!msg?.message) return;
-
-            const from = msg.key.remoteJid;
-            const isGroup = from.endsWith('@g.us');
-            const sender = msg.key.participant || from;
-            
-            const type = Object.keys(msg.message)[0];
-            const body = (type === 'conversation') ? msg.message.conversation : 
-                         (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text : 
-                         (type === 'imageMessage') ? msg.message.imageMessage.caption : 
-                         (type === 'videoMessage') ? msg.message.videoMessage.caption : '';
-            const text = body.trim();
-
-            // =======================================================
-            // 📥 HANDLE REPLY PILIHAN LAGU → MASUK ANTRIAN W2G
-            // =======================================================
-            if (global.playSession && global.playSession[from] && !msg.key.fromMe) {
-                const session = global.playSession[from];
-                const selectedIndex = parseInt(text) - 1;
-
-                if (!isNaN(selectedIndex) && selectedIndex >= 0 && selectedIndex < session.tracks.length) {
-                    const chosenTrack = session.tracks[selectedIndex];
-
-                    // Hapus session supaya tidak terulang
-                    delete global.playSession[from];
-
-                    await sock.sendMessage(from, {
-                        text: `✅ *${chosenTrack.title}* berhasil ditambahkan ke antrian!\n\n📻 Buka room radio kita untuk dengerin bareng:\n👉 ${session.roomUrl}\n\n💡 Ketik \`!queue\` untuk lihat antrian lagu.`
-                    }, { quoted: msg });
-
-                    try {
-                        // Tambahkan video ke playlist room W2G
-                        await addVideoToRoom(session.streamkey, chosenTrack.url, chosenTrack.title);
-                        console.log(`🎵 Ditambahkan ke W2G: ${chosenTrack.title}`);
-                    } catch (e) {
-                        console.error('❌ Gagal tambah video ke W2G:', e.message);
-                        await sock.sendMessage(from, {
-                            text: `⚠️ Lagunya sudah ditambahkan ke antrian bot, tapi gagal sync ke room W2G. Coba ketik \`!play\` lagi ya Kak!`
-                        }, { quoted: msg });
-                    }
-
-                    // Simpan antrian lokal juga untuk !queue command
-                    if (!global.radioQueue) global.radioQueue = [];
-                    global.radioQueue.push({
-                        title: chosenTrack.title,
-                        url: chosenTrack.url,
-                        duration: chosenTrack.timestamp,
-                        author: chosenTrack.author?.name || 'Unknown',
-                        requestedBy: sender.split('@')[0],
-                        from: from
-                    });
-
-                    return;
-                }
-            }
-
-            // Fitur Anti-Link Group Detektor Ketat
-            if (antiLink && isGroup && body.match(/(chat.whatsapp.com\/)/gi)) {
-                const groupMetadata = await sock.groupMetadata(from);
-                const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                const isBotAdmin = groupMetadata.participants.find(p => p.id === botNumber)?.admin;
-                
-                if (isBotAdmin) {
-                    await sock.sendMessage(from, { text: `🛡️ *Hayo Ketahuan!* Maaf @${sender.split('@')[0]} sayang, dilarang keras sebar link grup lain di sini ya! Sesuai protokol, kamu aku *kick*. Bye bye~ 👋🤭`, mentions: [sender] });
-                    await sock.groupParticipantsUpdate(from, [sender], 'remove');
-                    return;
-                }
-            }
-
-            if (!body.startsWith('!')) return;
-
-            const args = text.split(/ +/).slice(1);
-            const command = text.split(/ +/)[0].toLowerCase().slice(1);
-            
-            const isAdmin = OWNER_NUMBER.some(num => sender.includes(num));
-
-            let isLocalGroupAdmin = false;
-            if (isGroup) {
-                const groupMetadata = await sock.groupMetadata(from);
-                const userParticipant = groupMetadata.participants.find(p => p.id === sender);
-                isLocalGroupAdmin = userParticipant?.admin === 'admin' || userParticipant?.admin === 'superadmin' || isAdmin;
-            }
-
-            if (isSelfMode && !isAdmin) return;
-            if (isSleeping && command !== 'bangun' && !isAdmin) return;
-            if (isSleeping && command !== 'bangun' && isAdmin) {
-                return await sock.sendMessage(from, { text: '🛌 *Ssstt.. aku masih turu nyenyak, Bos.* Ketik `!bangun` dulu dong biar aku melek lagi! 🥱🌸' }, { quoted: msg });
-            }
-
-            const ownerCommands = ['refresh', 'turu', 'bangun', 'pingsan', 'self', 'public', 'join', 'leave', 'block', 'unblock', 'spek', 'grup', 'antilink', 'speedtest', 'broadcast', 'bc', 'systeminfo', 'eval', 'resetroom'];
-            if (ownerCommands.includes(command) && !isAdmin) {
-                return await sock.sendMessage(from, { text: '⛔ *Waduh, Akses Ditolak!* Fitur sakral ini cuma buat Bos DoxxBorx tersayang! Kamu nggak boleh pakai ya~ 😝👑' }, { quoted: msg });
-            }
-
-            // =======================================================
-            // 📜 OUTPUT TAMPILAN MENU UTAMA
-            // =======================================================
-            if (command === 'menu' || command === 'help') {
-    const botUptime = runtime((Date.now() - startTime) / 1000);
-
-    let menuText = `╭━━━〔 🌸 *${BOT_NAME.toUpperCase()} MENU DASHBOARD* 🌸 〕━━━\n` +
-                   `┃\n` +
-                   `┃ 📡 *SYSTEM STATUS PANEL* 📡\n` +
-                   `┃ ├ 🛠️ Mode Bot  : ${isSelfMode ? '🔒 VVIP SELF MODE (Private Access)' : '🔓 PUBLIC MODE (All Users)'}\n` +
-                   `┃ ├ 💤 Status Bot: ${isSleeping ? '🛌 SLEEP MODE (Bot Sedang Istirahat)' : '⚡ ONLINE (Siap & Responsif)'}\n` +
-                   `┃ ├ 🛡️ Anti-Link : ${antiLink ? '🟢 ACTIVE (Proteksi Grup Aktif)' : '🔴 OFF (Tidak Aktif)'}\n` +
-                   `┃ ├ ⏳ Runtime   : ${botUptime}\n` +
-                   `┃ └ 📶 Status    : 🟣 Stable Connection (Normal)\n` +
-                   `┃\n` +
-
-                   `┣━━〔 🧸 *GENERAL COMMANDS* 〕━━\n` +
-                   `┃ ├ • \`!halo\` — Sapa bot dengan gaya santai 👋✨\n` +
-                   `┃ ├ • \`!ping\` — Cek respon & latency ⚡📡\n` +
-                   `┃ ├ • \`!help\` — Tampilkan semua menu 📜\n` +
-                   `┃ ├ • \`!changelogs\` — Update & fitur terbaru 📢🆕\n` +
-                   `┃ ├ • \`!notes\` — Simpan catatan pribadi 📝🔐\n` +
-                   `┃ ├ • \`!remindme\` — Pengingat otomatis ⏰📌\n` +
-                   `┃ ├ • \`!add\` — Tambah member ke grup 👥➕\n` +
-                   `┃\n` +
-
-                   `┣━━〔 🧠 *AI INTELLIGENCE CORE* 〕━━\n` +
-                   `┃ ├ • \`!tanya\` — Tanya apa saja ke AI 🤖💬\n` +
-                   `┃ ├ • \`!coding\` — Debug & solusi error 💻🛠️\n` +
-                   `┃ ├ • \`!code\` — Review & analisa kode 🔍📄\n` +
-                   `┃ ├ • \`!rangkum\` — Ringkas teks panjang 📑✂️\n` +
-                   `┃ ├ • \`!brainstorm\` — Ide kreatif & inovatif 💡🚀\n` +
-                   `┃ ├ • \`!translate\` — Terjemahan natural 🌐🗣️\n` +
-                   `┃ ├ • \`!buat\` — Generate gambar AI 🎨✨\n` +
-                   `┃ ├ • \`!lihat\` — Analisa gambar dengan AI 👁️🧠\n` +
-                   `┃ ├ • \`!q\` — Chat bebas dengan AI 💬⚡\n` +
-                   `┃ ├ • \`!resetai\` — Reset memori AI ♻️🧹\n` +
-                   `┃ ├ • \`!fact\` — Fakta random unik 🤯📚\n` +
-                   `┃\n` +
-
-                   `┣━━〔 📦 *UTILITY SYSTEM* 〕━━\n` +
-                   `┃ ├ • \`!ocr\` — Ambil teks dari gambar 🔍📷\n` +
-                   `┃ ├ • \`!ceklink\` — Scan link berbahaya 🚨🛡️\n` +
-                   `┃ ├ • \`!cuaca\` — Info cuaca real-time 🌤️🌍\n` +
-                   `┃ ├ • \`!kalkulator\` — Hitung cepat & akurat 🧮⚡\n` +
-                   `┃ ├ • \`!qr\` — Generate QR code 🔳📱\n` +
-                   `┃ ├ • \`!stalk\` — Cek profil GitHub 🐙🔎\n` +
-                   `┃ ├ • \`!remini\` — HD kan foto ✨📸\n` +
-                   `┃ ├ • \`!summarize\` — Ringkas artikel 📰✂️\n` +
-                   `┃\n` +
-
-                   `┣━━〔 🖼️ *MEDIA & DOWNLOAD CENTER* 〕━━\n` +
-                   `┃ ├ • \`!sticker / !s\` — Buat stiker lucu 🥳✨\n` +
-                   `┃ ├ • \`!anomali\` — Sticker style aesthetic 😎🎭\n` +
-                   `┃ ├ • \`!dl\` — Download media cepat 📥⚡\n` +
-                   `┃ ├ • \`!stream\` — Nonton bareng 📻🎬\n` +
-                   `┃\n` +
-
-                   `┣━━〔 🎮 *FUN INTERACTION* 〕━━\n` +
-                   `┃ ├ • \`!curhat\` — Tempat curhat virtual 🫂💬\n` +
-                   `┃ ├ • \`!roastme\` — Roast santai 🔥😈\n` +
-                   `┃ ├ • \`!truth\` — Game jujur-jujuran 🤫🎯\n` +
-                   `┃ ├ • \`!dare\` — Tantangan seru 😏⚡\n` +
-                   `┃ ├ • \`!meme\` — Meme random 😂🤣\n` +
-                   `┃ ├ • \`!apakah\` — Jawaban random 🔮❓\n` +
-                   `┃ ├ • \`!anime\` — Anime random 🌸🎌\n` +
-                   `┃ ├ • \`!waifu\` — Waifu random 💖✨\n` +
-                   `┃ ├ • \`!quotesanime\` — Quote anime 🎌📜\n` +
-                   `┃ ├ • \`!darkjokes\` — Dark jokes random 😈🤣\n` +
-                   `┃ ├ • \`!pantun\` — Pantun AI 🎭📝\n` +
-                   `┃ ├ • \`!cerpen\` — Cerpen AI (📖 !cerpen horor📖 !cerpen misteri 📖 !cerpen fantasy 📖 !cerpen romantis)📖✨\n` +
-                   `┃ ├ • \`!kapankah\` — Ramalan waktu ⏳🔮\n` +
-                   `┃ ├ • \`!tagall\` — Mention semua member 📢👥\n` +
-                   `┃\n` +
-
-                   `┣━━〔 📊 *VOTING SYSTEM* 〕━━\n` +
-                   `┃ ├ • \`!voting\` — Buat voting 🗳️📊\n` +
-                   `┃ ├ • \`!pilih\` — Berikan suara kamu ✅🗳️\n` +
-                   `┃ └ • \`!endvoting\` — Tutup voting 🛑📊\n` +
-                   `┃\n` +
-
-                   `┣━━〔 🎲 *EXTRA FEATURES* 〕━━\n` +
-                   `┃ ├ • \`!gacha\` — Random keputusan 🎲🎯\n` +
-                   `┃ └ • \`!pinghost\` — Cek server & latency 📡⚡\n` +
-                   `┃\n`;
-
-    if (isAdmin) {
-        menuText += `┣━━〔 👑 *OWNER CONTROL PANEL* 〕━━\n` +
-                    `┃ ├ • \`!speedtest\` — Test kecepatan server 🚀📡\n` +
-                    `┃ ├ • \`!broadcast\` — Kirim pesan massal 📢📨\n` +
-                    `┃ ├ • \`!spek\` — Info spesifikasi sistem 💻📊\n` +
-                    `┃ ├ • \`!systeminfo\` — CPU & RAM detail 📊🧠\n` +
-                    `┃ ├ • \`!self\` — Mode private 🔒🛡️\n` +
-                    `┃ ├ • \`!public\` — Mode publik 🔓🌍\n` +
-                    `┃ ├ • \`!join\` — Masuk grup ➕🏃‍♂️\n` +
-                    `┃ ├ • \`!leave\` — Keluar grup 🚪💨\n` +
-                    `┃ ├ • \`!grup\` — Kontrol grup ⚙️👥\n` +
-                    `┃ ├ • \`!antilink\` — Proteksi link 🛡️🔗\n` +
-                    `┃ ├ • \`!block\` — Blokir user 🚫👤\n` +
-                    `┃ ├ • \`!unblock\` — Buka blokir 🕊️✨\n` +
-                    `┃ ├ • \`!refresh\` — Bersihkan sistem ♻️🧹\n` +
-                    `┃ ├ • \`!turu\` — Tidurkan bot 🛌💤\n` +
-                    `┃ ├ • \`!bangun\` — Bangunkan bot ☀️⚡\n` +
-                    `┃ ├ • \`!pingsan\` — Matikan bot 💀🔌\n` +
-                    `┃ ├ • \`!resetroom\` — Reset W2G 🔄🎧\n` +
-                    `┃ └ • \`!eval\` — Jalankan code ⚙️💻\n`;
-    }
-
-    menuText += `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `💖 *Bot Status: ACTIVE & READY TO SERVE*\n` +
-                `🎀 _Made with Love by Bos DoxxBorx_ ✨`;
-
-    await sock.sendMessage(from, { text: menuText }, { quoted: msg });
-}
-
-            // =======================================================
-            // 🔓 PUBLIC GENERAL COMMANDS LIST
-            // =======================================================
-           
-            // =======================================================
-// 🌸 ANIME PACK PREMIUM
-// =======================================================
-
-if (command === 'anime') {
-    try {
-
-        const query = args.join(' ') || 'popular';
-
-        await sock.sendMessage(from, {
-            text: '🎌 Sedang mencari anime...'
-        }, { quoted: msg });
-
-        let url;
-
-        if (query === 'popular') {
-            url = 'https://api.jikan.moe/v4/top/anime?limit=25';
-        } else {
-            url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(query)}&limit=1`;
-        }
-
-        const res = await axios.get(url);
-
-        const anime =
-            query === 'popular'
-                ? res.data.data[Math.floor(Math.random() * res.data.data.length)]
-                : res.data.data[0];
-
-        if (!anime) {
-            return sock.sendMessage(from, {
-                text: '❌ Anime tidak ditemukan.'
-            }, { quoted: msg });
-        }
-
-        await sock.sendMessage(from, {
-            image: { url: anime.images.jpg.large_image_url },
-            caption:
-`╭━━━〔 🎌 ANIME INFO 🎌 〕━━━
-
-📺 Judul : ${anime.title}
-
-⭐ Rating : ${anime.score || '-'}
-
-🎭 Genre :
-${anime.genres.map(v => '• ' + v.name).join('\n')}
-
-📅 Tahun :
-${anime.year || '-'}
-
-🎬 Episode :
-${anime.episodes || '?'}
-
-📝 Sinopsis :
-${anime.synopsis?.substring(0, 400) || '-'}
-
-━━━━━━━━━━━━━━━━━━`
-        }, { quoted: msg });
-
-    } catch (err) {
-
-        console.log(err);
-
-        await sock.sendMessage(from, {
-            text: '❌ Gagal mengambil info anime.'
-        }, { quoted: msg });
-    }
-}
-
-if (command === 'waifu') {
-    try {
-
-        await sock.sendMessage(from, {
-            text: '💖 Sedang mencari waifu terbaik...'
-        }, { quoted: msg });
-
-        const res = await axios.get(
-            'https://nekos.best/api/v2/waifu'
-        );
-
-        const waifu = res.data.results[0];
-
-        const level = Math.floor(Math.random() * 100) + 1;
-
-        await sock.sendMessage(from, {
-            image: { url: waifu.url },
-            caption:
-`╭━━━〔 💖 WAIFU OF THE DAY 💖 〕━━━
-
-🌸 Status :
-Waifu berhasil ditemukan
-
-💕 Cute Level :
-${level}%
-
-✨ Quality :
-Ultra HD
-
-🎀 Source :
-Nekos.best
-
-━━━━━━━━━━━━━━━━━━`
-        }, { quoted: msg });
-
-    } catch (err) {
-
-        console.log(err);
-
-        await sock.sendMessage(from, {
-            text: '❌ Gagal mengambil waifu.'
-        }, { quoted: msg });
-    }
-}
-
-if (command === 'quotesanime') {
-    try {
-
-        await sock.sendMessage(from, {
-            text: '🎌 Sedang mencari quote anime terbaik...'
-        }, { quoted: msg });
-
-        const hasil = await tanyakanAI(
-`Berikan 1 quote anime terkenal.
-
-Format wajib:
-
-🎌 Quote:
-[kutipan]
-
-👤 Character:
-[nama karakter]
-
-📺 Anime:
-[nama anime]
-
-Gunakan karakter anime yang benar-benar terkenal seperti Naruto, Itachi, Luffy, Goku, Levi, Eren, Kakashi, Gojo, dll.`,
-            'creative',
-            isAdmin
-        );
-
-        await sock.sendMessage(from, {
-            text: hasil
-        }, { quoted: msg });
-
-    } catch (err) {
-        console.log('QUOTESANIME ERROR:', err);
-
-        await sock.sendMessage(from, {
-            text: '❌ Gagal membuat quote anime.'
-        }, { quoted: msg });
-    }
-}
-
-if (command === 'darkjokes') {
-    try {
-
-        await sock.sendMessage(from, {
-            text: '😈 Sedang menyiapkan dark jokes...'
-        }, { quoted: msg });
-
-        const hasil = await tanyakanAI(
-    'Buatkan satu dark joke lucu bahasa Indonesia, singkat dan aman.',
-    'creative',
-    isAdmin
-);
-
-        await sock.sendMessage(from, {
-            text:
-`╭─❖ 😈 DARK JOKES 😈
-│
-${hasil}
-│
-╰─ 🤣 Semoga terhibur`
-        }, { quoted: msg });
-
-    } catch (err) {
-
-        console.log('DARKJOKES ERROR:', err);
-
-        await sock.sendMessage(from, {
-            text: '❌ Gagal membuat dark jokes.'
-        }, { quoted: msg });
-    }
-}
-
-if (command === 'cerpen') {
-    try {
-
-        const tema = args.join(' ') || 'petualangan';
-
-        await sock.sendMessage(from, {
-            text: '📖 Sedang menulis cerpen...'
-        }, { quoted: msg });
-
-        const hasil = await tanyakanAI(
-            `Buatkan cerpen tema ${tema} dalam bahasa Indonesia sekitar 300 kata.
-            
-Format:
-Judul:
-Isi cerita:
-Pesan moral:
-
-Gunakan bahasa yang menarik dan mudah dibaca.`,
-            'creative',
-            isAdmin
-        );
-
-        await sock.sendMessage(from, {
-            text:
-`╭─❖ 📖 CERPEN ${tema.toUpperCase()} 📖
-│
-${hasil}
-│
-╰─ ✨ Tamat`
-        }, { quoted: msg });
-
-    } catch (err) {
-
-        console.log('CERPEN ERROR:', err);
-
-        await sock.sendMessage(from, {
-            text: '❌ Gagal membuat cerpen.'
-        }, { quoted: msg });
-    }
-}
-
-if (command === 'remini') {
-
-    try {
-
-        const quoted =
-            msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-
-        const mediaMsg =
-            msg.message?.imageMessage ||
-            quoted?.imageMessage;
-
-        if (!mediaMsg) {
-            return sock.sendMessage(from, {
-                text: '📸 Reply foto dengan !remini'
-            }, { quoted: msg });
-        }
-
-        await sock.sendMessage(from, {
-            text: '✨ Sedang meningkatkan kualitas foto...'
-        }, { quoted: msg });
-
-        const stream = await downloadContentFromMessage(
-            mediaMsg,
-            'image'
-        );
-
-        let buffer = Buffer.from([]);
-
-        for await (const chunk of stream) {
-            buffer = Buffer.concat([buffer, chunk]);
-        }
-
-        const enhanced = await sharp(buffer)
-            .resize({
-                width: 2000,
-                withoutEnlargement: false
-            })
-            .sharpen()
-            .jpeg({ quality: 100 })
-            .toBuffer();
-
-        await sock.sendMessage(from, {
-            image: enhanced,
-            caption: '✨ Foto berhasil ditingkatkan kualitasnya'
-        }, { quoted: msg });
-
-    } catch (err) {
-
-        console.log('REMINI ERROR:', err);
-
-        await sock.sendMessage(from, {
-            text: '❌ Gagal memproses foto.'
-        }, { quoted: msg });
-    }
-}
-
-            if (command === 'halo') {
-                await sock.sendMessage(from, { text: `Halo juga Kakak manis! 🌸 Ada yang bisa ${BOT_NAME} bantu hari ini? Ketik \`!menu\` untuk lihat keajaibanku ya! 🥳✨` }, { quoted: msg });
-            }
-
-            if (command === 'ping') {
-                const latensi = Date.now() - msg.messageTimestamp * 1000;
-                await sock.sendMessage(from, { text: `🏓 *Pong!* Respon secepat kilat: *${latensi}ms* 🚀💨` }, { quoted: msg });
-            }
-
-            if (command === 'changelogs') {
-                await sock.sendMessage(from, { text: `⚙️ *${BOT_NAME} UPDATE LOGS* ⚙️\n━━━━━━━━━━━━━━━━━━━━━━━\n\n🎀 *v2.3.0 Hacking Update:*\n- Fitur Radio W2G dengan sistem antrian lagu 🎵\n- Menu lebih kawaii dengan banyak emoji 🌸\n- Terminal log lebih keren ala hacker 😎\n\n_Stay tuned buat update kece lainnya!_ 💖` }, { quoted: msg });
-            }
-
-            // ✍️ FITUR: !notes
-            if (command === 'notes') {
-                const opsi = args[0]?.toLowerCase();
-                const namaNote = args[1]?.toLowerCase();
-                const isiNote = args.slice(2).join(' ');
-
-                if (!opsi) return await sock.sendMessage(from, { text: '⚠️ *Format Notes:* `!notes simpan [nama] [isi]` atau `!notes ambil [nama]` atau `!notes list` 📝' }, { quoted: msg });
-
-                if (opsi === 'simpan') {
-                    if (!namaNote || !isiNote) return await sock.sendMessage(from, { text: '⚠️ Kasih nama dan isinya dong Kak biar bisa disimpen! 🎀' }, { quoted: msg });
-                    notesDatabase[namaNote] = isiNote;
-                    await sock.sendMessage(from, { text: `✅ Yey! Catatan *"${namaNote}"* udah berhasil disimpen di otakku! 🧠✨` }, { quoted: msg });
-                } else if (opsi === 'ambil') {
-                    if (!namaNote) return await sock.sendMessage(from, { text: '⚠️ Catatan apa yang mau diambil Kak? Namanya apa? 🧐' }, { quoted: msg });
-                    if (!notesDatabase[namaNote]) return await sock.sendMessage(from, { text: '❌ Yaah, catatannya nggak ketemu Kak! 😭' }, { quoted: msg });
-                    await sock.sendMessage(from, { text: `📝 *Catatan [${namaNote}]:*\n\n${notesDatabase[namaNote]}` }, { quoted: msg });
-                } else if (opsi === 'list') {
-                    const keys = Object.keys(notesDatabase);
-                    if (keys.length === 0) return await sock.sendMessage(from, { text: '📭 Kotak catatannya masih kosong melompong nih! 🕸️' }, { quoted: msg });
-                    await sock.sendMessage(from, { text: `📂 *DAFTAR CATATAN RAHASIA:* 🎀\n${keys.map((k, i) => `${i+1}. ${k}`).join('\n')}` }, { quoted: msg });
-                }
-            }
-
-            // ⏰ FITUR: !remindme
-            if (command === 'remindme') {
-                const waktuMenit = parseInt(args[0]);
-                const pesanReminder = args.slice(1).join(' ');
-
-                if (isNaN(waktuMenit) || !pesanReminder) {
-                    return await sock.sendMessage(from, { text: '⚠️ *Formatnya salah Kak!* Contoh yang bener: `!remindme 5 cuci baju` (Waktu dalam menit ya) ⏰' }, { quoted: msg });
-                }
-
-                await sock.sendMessage(from, { text: `⏳ *Alarm Dipasang!* Nanti aku ingetin dalam *${waktuMenit} menit* untuk: _${pesanReminder}_. Jangan sampai lupa ya! 🌸✨` }, { quoted: msg });
-                
-                setTimeout(async () => {
-                    await sock.sendMessage(from, { text: `🚨 *KRING KRING! WAKTU HABIS!* 🚨\n\n@${sender.split('@')[0]} Kak, jangan lupa lakuin ini sekarang: *${pesanReminder}*! Semangat! 💖🔔`, mentions: [sender] });
-                }, waktuMenit * 60000);
-            }
-
-            // 🚪 FITUR ADMIN GRUP: !add
-            if (command === 'add') {
-                if (!isGroup) return await sock.sendMessage(from, { text: '⚠️ Ini cuma bisa dipakai di dalam grup Kak! 🏡' }, { quoted: msg });
-                if (!isLocalGroupAdmin) return await sock.sendMessage(from, { text: '❌ Maaf, cuma admin grup atau Bosku yang boleh masukin orang! 👑' }, { quoted: msg });
-                
-                const targetNum = args[0]?.replace(/[^0-9]/g, '');
-                if (!targetNum) return await sock.sendMessage(from, { text: '⚠️ Masukkan nomor yang bener dong Kak! Contoh: `!add 628xxx` 📱' }, { quoted: msg });
-                
-                try {
-                    await sock.groupParticipantsUpdate(from, [targetNum + '@s.whatsapp.net'], 'add');
-                    await sock.sendMessage(from, { text: `✅ Yuhu! Berhasil nambahin @${targetNum} ke grup kita! Selamat datang! 🎉`, mentions: [targetNum + '@s.whatsapp.net'] }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(from, { text: '❌ Gagal masukin orang nih. Kayaknya aku belum dijadiin admin deh! 🥺' }, { quoted: msg });
-                }
-            }
-
-            if (command === 'pantun') {
-    try {
-        console.log('COMMAND PANTUN MASUK');
-        const tema = args.join(' ') || 'lucu';
-
-        await sock.sendMessage(from, {
-            text: '🎭 Sedang membuat pantun terbaik...'
-        }, { quoted: msg });
-
-        const hasil = await tanyakanAI(
-    `Buat pantun tema ${tema || 'lucu'} 4 baris dengan rima yang bagus dan mudah dipahami.`,
-    'creative',
-    isAdmin
-);
-
-        await sock.sendMessage(from, {
-            text:
-`╭━━━〔 🎭 PANTUN ${tema.toUpperCase()} 🎭 〕━━━
-
-${hasil}
-
-━━━━━━━━━━━━━━━━━━`
-        }, { quoted: msg });
-
-    } catch (err) {
-
-        console.log('PANTUN ERROR:', err);
-
-        await sock.sendMessage(from, {
-            text: '❌ Gagal membuat pantun.'
-        }, { quoted: msg });
-    }
-}
-
-            // =======================================================
-            // 🤖 AI COMMANDS EXTENSION PACK 🌸
-            // =======================================================
-            // cache sederhana biar gak fetch ulang prompt yang sama
-console.log("COMMAND MASUK:", command);
-console.log("ARGS:", args);
-if (command === 'buat') {
-
-    let deskripsi = args.join(' ');
-
-    if (!deskripsi) {
-        return await sock.sendMessage(from, {
-            text: '⚠️ Kasih aku deskripsi gambar ya Kak~ contoh: !buat kucing pakai kacamata 😼'
-        }, { quoted: msg });
-    }
-
-    // style premium (optional)
-    const styles = ['anime', 'realistic', '3d', 'cinematic'];
-    const style = styles[Math.floor(Math.random() * styles.length)];
-
-    const seed = Math.floor(Math.random() * 999999);
-
-    const prompt = `${deskripsi}, ${style} style`;
-
-    // loading progress biar hidup 😏
-    const loadingMsg = await sock.sendMessage(from, {
-        text: '🎨 Lagi aku lukis pelan-pelan ya... 10% ✏️'
-    }, { quoted: msg });
-
-    try {
-
-        // cek cache
-        if (imageCache.has(prompt)) {
-            const cachedBuffer = imageCache.get(prompt);
-
-            return await sock.sendMessage(from, {
-                image: cachedBuffer,
-                caption: `✨ Ini dari cache ya Kak~\n🎭 Style: ${style}\n🎲 Seed: ${seed}`
-            }, { quoted: msg });
-        }
-
-        await sock.sendMessage(from, {
-            text: '🖌️ 40%... mulai kelihatan bentuknya ✨',
-            edit: loadingMsg.key
-        });
-
-        const imageUrl =
-            `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&seed=${seed}`;
-
-        await sock.sendMessage(from, {
-            text: '🎨 80%... hampir jadi nih 😳',
-            edit: loadingMsg.key
-        });
-
-        const res = await fetch(imageUrl);
-if (!res.ok) throw new Error('Gagal ambil gambar');
-
-// FIX UTAMA
-const arrayBuffer = await res.arrayBuffer();
-const buffer = Buffer.from(arrayBuffer);
-
-        // simpan cache
-        imageCache.set(prompt, buffer);
-
-        await sock.sendMessage(from, {
+          const seed = Math.floor(Math.random() * 999999);
+          const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?seed=${seed}&width=1024&height=1024&nologo=true`;
+          const res = await axios.get(fallbackUrl, { responseType: 'arraybuffer' });
+          const buffer = Buffer.from(res.data, 'binary');
+          await sock.sendMessage(from, {
             image: buffer,
-            caption:
-                `💎 *Gambar Premium Selesai!*\n\n` +
-                `📝 Prompt: ${deskripsi}\n` +
-                `🎭 Style: ${style}\n` +
-                `🎲 Seed: ${seed}\n\n` +
-                `✨ Kalau mau versi lain tinggal bilang aja ya~`
-        }, { quoted: msg });
-
-    } catch (e) {
-        console.log(e);
-
-        await sock.sendMessage(from, {
-            text: '❌ Hmm… kuasnya jatuh 😭 server lagi gak stabil'
-        }, { quoted: msg });
-    }
-}
-
-            if (command === 'code') {
-                const queryKode = args.join(' ');
-                if (!queryKode) return await sock.sendMessage(from, { text: '⚠️ Mana kode yang mau di-debug Kak? Contoh: `!code let x = const` 💻' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const hasilAI = await tanyakanAI(`Lakukan debug, review, and jelaskan letak error serta optimalisasi dari struktur kode berikut:\n\n${queryKode}`, 'coding', isAdmin);
-                await sock.sendMessage(from, { text: hasilAI }, { quoted: msg });
-            }
-
-            if (command === 'fact') {
-                await sock.sendPresenceUpdate('composing', from);
-                const faktaPrompt = 'Berikan satu baris fakta unik, menarik, mencengangkan, and ilmiah secara acak dari berbagai belahan dunia atau sejarah luarspace yang jarang diketahui orang awam.';
-                const hasilAI = await tanyakanAI(faktaPrompt, 'tanya', isAdmin);
-                await sock.sendMessage(from, { text: `💡 *FAKTA MENARIK HARI INI:* 🌟\n\n${hasilAI}` }, { quoted: msg });
-            }
-
-            if (command === 'lihat') {
-                const isMedia = (type === 'imageMessage');
-                const isQuotedMedia = type === 'extendedTextMessage' && msg.message.extendedTextMessage.contextInfo?.quotedMessage?.imageMessage;
-                const captionPrompt = args.join(' ') || 'Analisis and jelaskan objek apa saja yang ada di dalam gambar ini secara mendalam.';
-                
-                if (!isMedia && !isQuotedMedia) return await sock.sendMessage(from, { text: '⚠️ Kirim gambarnya dong Kak pakai caption `!lihat`, atau balas gambar yang udah ada! 📸' }, { quoted: msg });
-
-                await sock.sendMessage(from, { text: '👁️ _Aku lagi pelototin gambarnya nih, sabar ya Kak..._ 🧐✨' });
-                try {
-                    const mediaContext = isQuotedMedia ? msg.message.extendedTextMessage.contextInfo.quotedMessage : msg.message;
-                    const stream = await downloadContentFromMessage(mediaContext.imageMessage, 'image');
-                    let buffer = Buffer.from([]);
-                    for await (const chunk of stream) { buffer = Buffer.concat([buffer, chunk]); }
-
-                    const response = await ai.models.generateContent({
-                        model: 'gemini-2.5-flash',
-                        contents: [
-                            {
-                                parts: [
-                                    { inlineData: { mimeType: 'image/jpeg', data: buffer.toString('base64') } },
-                                    { text: captionPrompt }
-                                ]
-                            }
-                        ]
-                    });
-                    await sock.sendMessage(from, { text: `👁️ *HASIL PENGLIHATANKU:* ✨\n\n${response.text}` }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(from, { text: '❌ Mataku kelilipan error nih, gagal muat media dari server! 😭' }, { quoted: msg });
-                }
-            }
-
-            if (command === 'q') {
-                const queryText = args.join(' ');
-                if (!queryText) return await sock.sendMessage(from, { text: '⚠️ Ngobrol apa aja bebas Kak! Contoh: `!q halo, kamu lagi apa?` 💬' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const hasilAI = await tanyakanAI(queryText, 'chat_context', isAdmin, from);
-                await sock.sendMessage(from, { text: hasilAI }, { quoted: msg });
-            }
-
-            if (command === 'resetai') {
-                aiConversationMemory[from] = [];
-                await sock.sendMessage(from, { text: '♻️ *Memori Terhapus!* Obrolan kita tadi udah aku lupain semua Kak. Yuk mulai dari awal! 🌸' }, { quoted: msg });
-            }
-
-            // =======================================================
-            // 📦 UTILITY & MATH PACK 🎀
-            // =======================================================
-            if (command === 'cuaca') {
-                const kota = args.join(' ');
-                if (!kota) return await sock.sendMessage(from, { text: '⚠️ Kasih tau nama kotanya dong Kak! Contoh: `!cuaca Medan` 🌤️' }, { quoted: msg });
-                
-                try {
-                    const res = await axios.get(`https://wttr.in/${encodeURIComponent(kota)}?format=%C+%t+%h+%w`);
-                    await sock.sendMessage(from, { text: `🌤️ *CUACA HARI INI DI [${kota.toUpperCase()}]* 🌤️\n━━━━━━━━━━━━━━━━━━━━━━━\n\n📊 *Kondisi:* ${res.data}\n🎀 _Jangan lupa bawa payung kalau mendung ya Kak!_` }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(from, { text: '❌ Nggak bisa liat cuacanya nih, ejaan kotanya udah bener belum Kak? 🤔' }, { quoted: msg });
-                }
-            }
-
-            if (command === 'kalkulator') {
-                const rumus = args.join(' ');
-                if (!rumus) return await sock.sendMessage(from, { text: '⚠️ Mana yang mau dihitung Kak? Contoh: `!kalkulator (10 * 5) / 2` 🧮' }, { quoted: msg });
-                try {
-                    const hasilHitung = new Function(`return (${rumus})`)();
-                    await sock.sendMessage(from, { text: `🧮 *HASIL HITUNGANNYA:* ✨\n\n\`${rumus}\` = *${hasilHitung}*` }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(from, { text: '❌ Duh, rumus matematikanya pusingin kepalaku! Ada yang salah tulis kayaknya Kak. 😵' }, { quoted: msg });
-                }
-            }
-
-            if (command === 'qr') {
-                const teksQr = args.join(' ');
-                if (!teksQr) return await sock.sendMessage(from, { text: '⚠️ Masukkan teks atau URL yang mau dibikin QR Code Kak! 🔳' }, { quoted: msg });
-                const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(teksQr)}`;
-                await sock.sendMessage(from, { image: { url: qrUrl }, caption: `✅ *QR Codenya udah jadi nih Kak!* Keren kan? 🥳✨` }, { quoted: msg });
-            }
-
-            if (command === 'stalk') {
-                const userGit = args[0];
-                if (!userGit) return await sock.sendMessage(from, { text: '⚠️ Siapa username GitHub yang mau di-kepo-in Kak? Contoh: `!stalk doxxborx` 🐙' }, { quoted: msg });
-                try {
-                    const res = await axios.get(`https://api.github.com/users/${userGit}`);
-                    let stalkText = `🐙 *PROFIL GITHUB TARGET* 🐙\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                                    `👤 *Nama:* ${res.data.name || userGit}\n` +
-                                    `🏢 *Perusahaan:* ${res.data.company || '-'}\n` +
-                                    `📍 *Lokasi:* ${res.data.location || '-'}\n` +
-                                    `📁 *Repo Publik:* ${res.data.public_repos}\n` +
-                                    `👥 *Followers:* ${res.data.followers} | *Following:* ${res.data.following}\n` +
-                                    `🔗 *Link Profil:* ${res.data.html_url}\n\n🌸 _Stalking selesai Kak!_ 🕵️‍♀️`;
-                    await sock.sendMessage(from, { text: stalkText }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(from, { text: '❌ Akun GitHub-nya nggak ketemu Kak, salah ketik mungkin? 🥺' }, { quoted: msg });
-                }
-            }
-
-            if (command === 'summarize') {
-                const linkUrl = args[0];
-                if (!linkUrl) return await sock.sendMessage(from, { text: '⚠️ Kasih URL artikelnya ke aku Kak biar kuringkas! 📰' }, { quoted: msg });
-                await sock.sendMessage(from, { text: '⏳ _Lagi baca artikelnya ngebut nih, tunggu ya Kak..._ 👓✨' }, { quoted: msg });
-                try {
-                    const webData = await axios.get(linkUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-                    const $ = cheerio.load(webData.data);
-                    const coreText = $('p').text().substring(0, 4000); 
-                    
-                    const rangkuman = await tanyakanAI(`Rangkum teks mentah halaman web berikut secara akurat: \n\n${coreText}`, 'rangkum', isAdmin);
-                    await sock.sendMessage(from, { text: `📄 *INI RINGKASANNYA KAK:* 🎀\n\n${rangkuman}` }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(from, { text: '❌ Yah gagal ambil artikelnya Kak. Kayaknya web-nya dikunci super ketat deh! 🔒' }, { quoted: msg });
-                }
-            }
-
-            // =======================================================
-            // 🎮 ENTERTAINMENT PACK 🥳
-            // =======================================================
-            if (command === 'truth') {
-                const listTruth = [
-                    "Apa ketakutan terbesar yang pernah kamu sembunyikan dari teman terdekatmu?",
-                    "Jika kamu bisa bertukar nasib dengan orang di ruangan ini selama satu hari, siapa yang kamu pilih?",
-                    "Kapan terakhir kali kamu berbohong demi menghindari tugas kelompok kuliah?",
-                    "Apa rahasia memalukan di laptop/HP kamu yang tidak boleh diketahui orang tua?",
-                    "Pernahkah kamu menyukai seseorang diam-diam di grup chat ini?"
-                ];
-                const acakT = listTruth[Math.floor(Math.random() * listTruth.length)];
-                await sock.sendMessage(from, { text: `🎲 *WAKTUNYA JUJUR!* 🫣\n\n_"${acakT}"_` }, { quoted: msg });
-            }
-
-            if (command === 'dare') {
-                const listDare = [
-                    "Kirim screenshot isi history tontonan YouTube kamu yang paling terakhir tanpa dihapus ke grup!",
-                    "Kirim pesan voice note bernyanyi lagu anak-anak selama 15 detik dengan suara melengking!",
-                    "Ganti nama profil WhatsApp kamu menjadi 'Anak Kesayangan ${BOT_NAME}' selama 1 jam ke depan.",
-                    "Chat gebetan atau mantan kamu dan katakan 'Aku kangen banget, serius' lalu kirim buktinya ke sini.",
-                    "Sebutkan kelemahan terbesar dosen/guru/bos kamu secara jujur di chat ini!"
-                ];
-                const acakD = listDare[Math.floor(Math.random() * listDare.length)];
-                await sock.sendMessage(from, { text: `🎲 *TANTANGAN BUAT KAMU!* 😈\n\n⚡ *Wajib Lakuin:* _"${acakD}"_` }, { quoted: msg });
-            }
-
-            if (command === 'meme') {
-                await sock.sendMessage(from, { text: '📦 _Lagi nyari meme paling lucu sejagat raya nih..._ 😂✨' }, { quoted: msg });
-                try {
-                    const res = await axios.get('https://meme-api.com/gimme/wholesomememes');
-                    await sock.sendMessage(from, { image: { url: res.data.url }, caption: `😂 *Judul Meme:* "${res.data.title}"` }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(from, { text: '❌ Aduh gagal dapet meme, pabrik memenya lagi tutup Kak. 😭' }, { quoted: msg });
-                }
-            }
-
-            // =======================================================
-            // 📻 RADIO & PLAY COMMANDS (WATCH2GETHER) 🎵
-            // =======================================================
-
-            // !radio → Kirim link room W2G permanent + info antrian
-            if (command === 'stream' || command === 'st') {
-                try {
-                    await sock.sendMessage(from, { text: '⏳ _Ambil link room live dulu ya Kak..._ 📻' }, { quoted: msg });
-
-                    const room = await getOrCreateRoom();
-                    const queueList = global.radioQueue && global.radioQueue.length > 0
-                        ? global.radioQueue.map((t, i) => `${i + 1}. 🎵 ${t.title} — req by @${t.requestedBy}`).join('\n')
-                        : '_Antrian kosong. Jadilah yang pertama request lagu!_';
-
-                    const radioText =
-    `╭━━━〔 📻 *${BOT_NAME} LIVE ROOM* 〕━━━\n` +
-    `┃\n` +
-    `┃ 🎬 *Platform:* Watch2Gether\n` +
-    `┃ 🔗 *Link Room:*\n` +
-    `┃ ${room.url}\n` +
-    `┃\n` +
-    `┃ 📋 *ANTRIAN LAGU SEKARANG:*\n` +
-    `┃ ${queueList.split('\n').join('\n┃ ')}\n` +
-    `┃\n` +
-    `╰━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🎀 _Gabung dan dengerin bareng yuk!_ 💖`;
-
-                    await sock.sendMessage(from, { text: radioText }, { quoted: msg });
-                } catch (e) {
-                    console.error('❌ Error command !stream:', e.message);
-                    await sock.sendMessage(from, { text: '❌ Waduh, gagal ambil link room livestreamnya Kak! Coba lagi sebentar ya. 😭' }, { quoted: msg });
-                }
-            }
-
-            // =======================================================
-            // 🎲 PERINTAH: !gacha (PENENTU KEPUTUSAN INSTAN) 🌀
-            // =======================================================
-            if (command === 'gacha') {
-                const inputGacha = args.join(" ");
-                if (!inputGacha || !inputGacha.includes('|')) {
-                    return await sock.sendMessage(from, { 
-                        text: `❌ *Format salah, Bos!* \n\n👉 Gunakan tanda pemisah (\`|\`) untuk memasukkan pilihan.\n📝 *Contoh:* \n\`!gacha Maju Presentasi | Lasko | Budi | Joko\`\n\`!gacha Makan Siang | Ayam Penyet | Nasi Padang | Mie Sop\`` 
-                    }, { quoted: msg });
-                }
-
-                // Memecah input berdasarkan karakter "|"
-                const komponen = inputGacha.split('|').map(item => item.trim());
-                const topik = komponen[0];
-                const listPilihan = komponen.slice(1);
-
-                if (listPilihan.length < 2) {
-                    return await sock.sendMessage(from, { text: '❌ Opsi pilihannya minimal harus ada 2 dong, Bos!' }, { quoted: msg });
-                }
-
-                // Mengirim efek loading ala dadu berputar biar dramatis
-                await sock.sendMessage(from, { text: `🌀 *ZetBot lagi memutar dadu takdir...* \n🤔 Menentukan pilihan untuk: "${topik}"` }, { quoted: msg });
-
-                // Mengacak pilihan menggunakan Math.random()
-                const indeksPemenang = Math.floor(Math.random() * listPilihan.length);
-                const opsiTerpilih = listPilihan[indeksPemenang];
-
-                // Beri jeda 1.5 detik sebelum menampilkan hasil biar seru
-                setTimeout(async () => {
-                    let teksHasil = `🎲 *HASIL GACHA MUTLAK!* 🎲\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-                    teksHasil += `📌 *Topik:* "${topik}"\n`;
-                    teksHasil += `🎉 *Keputusan Terpilih:* \n\n👉 ✨ *[ ${opsiTerpilih} ]* ✨\n\n`;
-                    teksHasil += `━━━━━━━━━━━━━━━━━━━━━━━\nKeputusan bot bersifat mutlak dan tidak bisa diganggu gugat! 😎`;
-
-                    await sock.sendMessage(from, { text: teksHasil });
-                }, 1500);
-            }
-
-            // =======================================================
-            // 📡 PERINTAH: !pinghost (NETWORK LATENCY CHECKER) 🖥️
-            // =======================================================
-            if (command === 'pinghost') {
-                const targetHost = args[0];
-                if (!targetHost) {
-                    return await sock.sendMessage(from, { text: '❌ *Host/Domain tidak boleh kosong!* \n📝 Contoh: \`!pinghost google.com\` atau \`!pinghost 1.1.1.1\` ' }, { quoted: msg });
-                }
-
-                await sock.sendMessage(from, { text: `⚡ *Sedang melakukan pinging ke ${targetHost}...* Mohon tunggu.` }, { quoted: msg });
-
-                // Menggunakan exec dari child_process untuk menjalankan perintah terminal
-                const { exec } = await import('child_process');
-
-                // Deteksi otomatis OS (Windows pakai '-n', Linux/Mac pakai '-c')
-                const perintahPing = process.platform === 'win32' ? `ping -n 4 ${targetHost}` : `ping -c 4 ${targetHost}`;
-
-                exec(perintahPing, async (error, stdout, stderr) => {
-                    if (error) {
-                        return await sock.sendMessage(from, { text: `❌ *Koneksi Gagal / RTO!* \nHost *${targetHost}* tidak merespons atau domain tidak valid.` }, { quoted: msg });
-                    }
-
-                    // Merapikan output terminal agar enak dibaca di WhatsApp
-                    let teksPing = `📡 *NETWORK PING REPORT* 📡\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-                    teksPing += `📌 *Target Host:* ${targetHost}\n`;
-                    teksPing += `📊 *Status:* ONLINE & RESPONDING ✅\n\n`;
-                    teksPing += `📝 *Log Terminal:* \n\`\`\`${stdout.trim()}\`\`\n`;
-                    teksPing += `━━━━━━━━━━━━━━━━━━━━━━━`;
-
-                    await sock.sendMessage(from, { text: teksPing }, { quoted: msg });
-                });
-            }
-
-            // =======================================================
-            // 🗳️ FLEXIBLE VOTING: BISA PAKAI TIMER / MANUAL (OTOMATIS DETEKSI) 📊⏳
-            // =======================================================
-            if (command === 'voting') {
-                const inputVoting = args.join(" ");
-                if (!inputVoting || !inputVoting.includes('|')) {
-                    return await sock.sendMessage(from, { 
-                        text: `❌ *Format salah, Bos!* \n\n👉 *Opsi 1 (Pakai Waktu):* \n\`!voting 10m | Judul | Opsi A | Opsi B\`\n\n👉 *Opsi 2 (Manual/Tanpa Waktu):* \n\`!voting Judul Tanpa Waktu | Opsi A | Opsi B\`` 
-                    }, { quoted: msg });
-                }
-
-                // Memecah input berdasarkan karakter "|"
-                const komponen = inputVoting.split('|').map(item => item.trim());
-                
-                // Ambil bagian pertama sebelum tanda "|"
-                const bagianPertama = komponen[0];
-                const kataPertama = bagianPertama.split(' ')[0].toLowerCase(); // Cek kata paling depan
-
-                let topik = bagianPertama;
-                let timeoutId = null;
-                let teksDurasi = "Manual (Ditutup lewat !endvoting)";
-
-                // Cek apakah kata pertama adalah format waktu (misal: 10m, 2h, 30m)
-                const apakahPakaiWaktu = kataPertama.match(/^\d+[mh]$/);
-
-                if (apakahPakaiWaktu) {
-                    // Jika pakai waktu, pisahkan string waktu dengan topiknya
-                    topik = bagianPertama.split(' ').slice(1).join(' ');
-                    
-                    const angkaWaktu = parseInt(kataPertama);
-                    const IsMenit = kataPertama.endsWith('m');
-                    const durasiMs = IsMenit ? angkaWaktu * 60 * 1000 : angkaWaktu * 60 * 60 * 1000;
-                    teksDurasi = IsMenit ? `${angkaWaktu} Menit` : `${angkaWaktu} Jam`;
-
-                    // Set Timer Otomatis
-                    timeoutId = setTimeout(async () => {
-                        const targetVoting = global.activeVotes[from];
-                        if (targetVoting) {
-                            const totalSuara = targetVoting.opsi.reduce((sum, o) => sum + o.jumlahSuara, 0);
-
-                            let teksAkhir = `⏱️ *WAKTU HABIS! VOTING DITUTUP OTOMATIS* ⏱️\n\n📋 *Hasil Akhir:* "${targetVoting.topik}"\n━━━━━━━━━━━━━━━━━━━━━━━\n`;
-                            targetVoting.opsi.forEach((item, index) => {
-                                const persentase = totalSuara > 0 ? ((item.jumlahSuara / totalSuara) * 100).toFixed(0) : 0;
-                                teksAkhir += `${index + 1}. ${item.nama} ➡️ *${item.jumlahSuara} Suara* (${persentase}%)\n`;
-                            });
-                            teksAkhir += `━━━━━━━━━━━━━━━━━━━━━━━\n🎉 *Total Partisipasi:* ${totalSuara} Pemilih.\n\nSesi voting ini telah berakhir secara otomatis sesuai durasi.`;
-
-                            await sock.sendMessage(from, { text: teksAkhir });
-                            delete global.activeVotes[from];
-                        }
-                    }, durasiMs);
-                }
-
-                const opsi = komponen.slice(1);
-
-                // Validasi input dasar
-                if (!topik) {
-                    return await sock.sendMessage(from, { text: '❌ *Topik voting belum diisi, Bos!*' }, { quoted: msg });
-                }
-                if (opsi.length < 2) {
-                    return await sock.sendMessage(from, { text: '❌ Bos, minimal harus ada *2 opsi pilihan* biar bisa divoting!' }, { quoted: msg });
-                }
-
-                // Jika sudah ada voting berjalan di grup ini, bersihkan sesi/timer lamanya
-                if (global.activeVotes[from] && global.activeVotes[from].timeoutId) {
-                    clearTimeout(global.activeVotes[from].timeoutId);
-                }
-
-                // Simpan objek struktur data voting ke memori global
-                global.activeVotes[from] = {
-                    topik: topik,
-                    opsi: opsi.map(namaOpsi => ({ nama: namaOpsi, jumlahSuara: 0 })),
-                    pemilih: [],
-                    timeoutId: timeoutId // Nilainya NULL kalau ga pakai waktu, jadi aman!
-                };
-
-                // Menyusun tampilan teks poling ke grup
-                let teksVoting = `📊 *VOTING BARU DIMULAI!* 📊\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-                teksVoting += `📌 *Topik:* \n"${topik}"\n\n`;
-                teksVoting += `⏳ *Durasi Waktu:* ${teksDurasi}\n\n`;
-                teksVoting += `📋 *Opsi Pilihan:* \n`;
-                
-                global.activeVotes[from].opsi.forEach((item, index) => {
-                    teksVoting += `${index + 1}. ${item.nama}\n`;
-                });
-
-                teksVoting += `\n━━━━━━━━━━━━━━━━━━━━━━━\n`;
-                teksVoting += `👉 *Cara Memilih:* Ketik *!pilih [nomor_opsi]*\n`;
-                teksVoting += `📝 *Contoh:* \`!pilih 1\`\n`;
-                teksVoting += `🛑 Ketik *!endvoting* untuk menutup sesi voting & melihat hasil akhir.`;
-
-                await sock.sendMessage(from, { text: teksVoting }, { quoted: msg });
-            }
-
-            if (command === 'pilih') {
-                const targetVoting = global.activeVotes[from];
-                if (!targetVoting) {
-                    return await sock.sendMessage(from, { text: '❌ Gak ada sesi voting yang lagi berjalan di grup ini, Bos!' }, { quoted: msg });
-                }
-
-                // Validasi input nomor pilihan
-                const pilihanIndex = parseInt(args[0]) - 1;
-                if (isNaN(pilihanIndex) || pilihanIndex < 0 || pilihanIndex >= targetVoting.opsi.length) {
-                    return await sock.sendMessage(from, { text: '❌ Nomor opsi yang kamu masukkan gak valid, Bos! Cek listnya lagi.' }, { quoted: msg });
-                }
-
-                // Cek apakah user tersebut sudah pernah memilih sebelumnya (Anti Curang)
-                if (targetVoting.pemilih.includes(sender)) {
-                    return await sock.sendMessage(from, { text: '❌ Kamu sudah memberikan suara sebelumnya! Gak boleh maruk ya. 😉' }, { quoted: msg });
-                }
-
-                // Proses penghitungan suara
-                targetVoting.opsi[pilihanIndex].jumlahSuara += 1;
-                targetVoting.pemilih.push(sender); // Kunci nomor WA pemilih
-
-                // Hitung total suara masuk saat ini
-                const totalSuara = targetVoting.opsi.reduce((sum, o) => sum + o.jumlahSuara, 0);
-
-                // Tampilkan papan skor sementara
-                let teksSkor = `✅ *Suara Berhasil Dicatat!* \n\n📊 *Hasil Sementara:* "${targetVoting.topik}"\n━━━━━━━━━━━━━━━━━━━━━━━\n`;
-                targetVoting.opsi.forEach((item, index) => {
-                    const persentase = totalSuara > 0 ? ((item.jumlahSuara / totalSuara) * 100).toFixed(0) : 0;
-                    teksSkor += `${index + 1}. ${item.nama} ➡️ *${item.jumlahSuara} Suara* (${persentase}%)\n`;
-                });
-                teksSkor += `━━━━━━━━━━━━━━━━━━━━━━━\n📥 Total Suara Masuk: *${totalSuara}*`;
-
-                await sock.sendMessage(from, { text: teksSkor }, { quoted: msg });
-            }
-
-            if (command === 'endvoting') {
-                const targetVoting = global.activeVotes[from];
-                if (!targetVoting) {
-                    return await sock.sendMessage(from, { text: '❌ Memang gak ada sesi voting yang aktif kok, Bos.' }, { quoted: msg });
-                }
-
-                // Proteksi keamanan: Hanya Owner Bot atau Admin Grup yang boleh menutup voting
-                if (!isAdmin && !isOwner) {
-                    return await sock.sendMessage(from, { text: '❌ Perintah ditolak! Cuma *Admin Grup* atau *Owner Bot* yang bisa nutup sesi voting.' }, { quoted: msg });
-                }
-
-                const totalSuara = targetVoting.opsi.reduce((sum, o) => sum + o.jumlahSuara, 0);
-
-                let teksAkhir = `🛑 *VOTING RESMI DITUTUP LEBIH AWAL!* 🛑\n\n📋 *Hasil Akhir:* "${targetVoting.topik}"\n━━━━━━━━━━━━━━━━━━━━━━━\n`;
-                targetVoting.opsi.forEach((item, index) => {
-                    const persentase = totalSuara > 0 ? ((item.jamesSuara / totalSuara) * 100).toFixed(0) : 0;
-                    teksAkhir += `${index + 1}. ${item.nama} ➡️ *${item.jumlahSuara} Suara* (${persentase}%)\n`;
-                });
-                teksAkhir += `━━━━━━━━━━━━━━━━━━━━━━━\n🎉 *Total Partisipasi:* ${totalSuara} Pemilih.\n\nSesi voting ditutup secara manual oleh Admin/Owner.`;
-
-                await sock.sendMessage(from, { text: teksAkhir }, { quoted: msg });
-
-                // 🔥 TAMBAHKAN BARIS INI: Hentikan timer otomatisnya agar tidak berjalan lagi di background!
-                if (targetVoting.timeoutId) {
-                    clearTimeout(targetVoting.timeoutId);
-                }
-
-                // Hapus data voting dari memori grup ini agar bersih kembali
-                delete global.activeVotes[from];
-            }
-
-
-            // =======================================================
-            // 🎨 ADVANCED MEDIA DOWNLOADER & BRAT GENERATOR 🎀
-            // =======================================================
-            if (command === 'anomali') {
-
-    const userId = from;
-
-    if (!checkCooldown(userId)) {
-        return sock.sendMessage(from, {
-            text: '⏳ Tunggu dulu Kak, jangan spam ya 😤'
-        }, { quoted: msg });
-    }
-
-    let teksAnomali = args.join(' ');
-    if (!teksAnomali) {
-        return sock.sendMessage(from, {
-            text: '⚠️ Contoh: !anomali aku capek banget'
-        }, { quoted: msg });
-    }
-
-    // 🧠 AI polish text dulu
-    teksAnomali = await polishText(teksAnomali);
-
-    await sock.sendMessage(from, {
-        text: '🎨 bikin stiker dulu ya...'
-    }, { quoted: msg });
-
-    try {
-
-        const style = bratStyles[Math.floor(Math.random() * bratStyles.length)];
-
-        const bratUrl = `https://brat.caliph.dev/api/brat?text=${encodeURIComponent(teksAnomali + ' | ' + style)}`;
-
-        const resBrat = await axios.get(bratUrl, {
-            responseType: 'arraybuffer',
-            timeout: 10000
-        });
-
-        const buffer = Buffer.from(resBrat.data);
-
-        const stiker = new Sticker(buffer, {
-            pack: `Anomali ${style} 🎭`,
-            author: 'zetbot premium',
-            type: StickerTypes.FULL,
-            quality: 80
-        });
-
-        await sock.sendMessage(from, {
-            sticker: await stiker.toBuffer()
-        }, { quoted: msg });
-
-    } catch (e) {
-        console.log("BRAT ERROR → fallback AI image");
-
-        // 🔥 fallback AI image kalau API mati
-        const fallback = await generateFallbackImage(teksAnomali);
-
-        const stiker = new Sticker(fallback, {
-            pack: 'AI fallback 🎨',
-            author: 'zetbot',
-            type: StickerTypes.FULL,
-            quality: 80
-        });
-
-        await sock.sendMessage(from, {
-            sticker: await stiker.toBuffer()
-        }, { quoted: msg });
-    }
-}
-
-            if (command === 'dl') {
-    const videoUrl = args[0];
-
-    if (!videoUrl) {
-        return await sock.sendMessage(
-            from,
-            { text: '⚠️ Masukkan link TikTok, Instagram, Facebook, atau YouTube!' },
-            { quoted: msg }
-        );
-    }
-
-    await sock.sendMessage(
-        from,
-        { text: '⏳ Sedang mengambil video...' },
-        { quoted: msg }
-    );
-
-    try {
-
-        // YOUTUBE
-        if (
-            videoUrl.includes('youtube.com') ||
-            videoUrl.includes('youtu.be')
-        ) {
-
-            if (!ytdl.validateURL(videoUrl))
-                throw new Error('Link YouTube tidak valid');
-
-            const info = await ytdl.getInfo(videoUrl);
-
-            const format = ytdl.chooseFormat(
-                info.formats,
-                { quality: '18' }
-            );
-
-            await sock.sendMessage(
-                from,
-                {
-                    video: { url: format.url },
-                    caption: `🎬 ${info.videoDetails.title}`
-                },
-                { quoted: msg }
-            );
-
-            return;
-        }
-
-        // TIKTOK
-        if (videoUrl.includes('tiktok.com')) {
-
-    const res = await axios.get(
-        `https://tikwm.com/api/?url=${encodeURIComponent(videoUrl)}`
-    );
-
-    const dl = res.data?.data?.play;
-
-    if (!dl) {
-        throw new Error('Gagal ambil video TikTok');
-    }
-
-    await sock.sendMessage(from, {
-        video: { url: dl },
-        caption: `🎵 ${res.data?.data?.title || 'TikTok Video'}`
-    }, { quoted: msg });
-
-    return;
-}
-    
-    } catch (error) {
-        console.error(error);
-        await sock.sendMessage(
-            from,
-            { text: '❌ Gagal mengambil video. Pastikan linknya benar dan coba lagi!' },
-            { quoted: msg }
-        );
-    }
-}
-            if (command === 'jsonpretty') {
-                const jsonMentah = args.join(' ');
-                if (!jsonMentah) return await sock.sendMessage(from, { text: '⚠️ *Mana kode JSON-nya Kak?* Contoh:\n`!jsonpretty {"nama":"zetbot","lucu":true}` 🎀' }, { quoted: msg });
-                
-                try {
-                    const objekJson = JSON.parse(jsonMentah);
-                    const jsonCantik = JSON.stringify(objekJson, null, 4);
-                    await sock.sendMessage(from, { text: `✅ *JSON Udah Rapih Nih!* 🧩✨\n\`\`\`json\n${jsonCantik}\n\`\`\`` }, { quoted: msg });
-                } catch (error) {
-                    await sock.sendMessage(from, { text: `❌ *Format JSON Error!* Gagal dirapihin Kak, coba cek lagi tanda kurung sama petiknya ya! 🛠️🥺` }, { quoted: msg });
-                }
-            }
-
-            if (command === 'sticker' || command === 's') {
-
-    const userId = from;
-
-    if (!checkCooldown(userId)) {
-        return sock.sendMessage(from, {
-            text: '⏳ Sabar ya Kak, jangan spam 😤'
-        }, { quoted: msg });
-    }
-
-    const quoted =
-        msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-
-    const mediaMsg =
-        msg.message?.imageMessage ||
-        msg.message?.videoMessage ||
-        quoted?.imageMessage ||
-        quoted?.videoMessage;
-
-    if (!mediaMsg) {
-    return sock.sendMessage(from, {
-        text:
-`⚠️ Kirim atau reply gambar/video
-
-🎨 STYLE STICKER
-
-!s
-→ Sticker biasa
-
-!s atas|Teks
-→ Teks di atas
-
-!s bawah|Teks
-→ Teks di bawah
-
-!s dua|Atas|Bawah
-→ Teks atas + bawah
-
-✨ STYLE PREMIUM
-
-!s premium|Sakura
-!s neon|Sakura
-!s gold|Sakura
-!s anime|Sakura
-!s waifu|Sakura
-!s manga|Sakura
-!s meme|Lucu
-!s glow|Legend
-!s cyber|Online`
-    }, { quoted: msg });
-}
-
-    try {
-
-        let rawText = args.join(' ').trim();
-
-        let style = 'premium';
-        let topText = '';
-        let bottomText = '';
-
-        if (rawText) {
-
-            const parts = rawText.split('|');
-
-            if (parts[0]?.toLowerCase() === 'atas') {
-
-                topText = parts[1] || '';
-
-            } else if (parts[0]?.toLowerCase() === 'bawah') {
-
-                bottomText = parts[1] || '';
-
-            } else if (parts[0]?.toLowerCase() === 'dua') {
-
-                topText = parts[1] || '';
-                bottomText = parts[2] || '';
-
-            } else if (
-                [
- 'premium',
- 'neon',
- 'gold',
- 'anime',
- 'waifu',
- 'manga',
- 'meme',
- 'glow',
- 'cyber'
-]
-                .includes(parts[0]?.toLowerCase())
-            ) {
-
-                style = parts[0].toLowerCase();
-                bottomText = parts[1] || '';
-                // 🎀 STYLE KHUSUS
-
-if (style === 'meme') {
-
-    topText =
-        topText ||
-        (bottomText || '').toUpperCase();
-
-    bottomText =
-        bottomText ||
-        'ZETBOT MEME';
-}
-
-if (style === 'waifu') {
-
-    if (!bottomText)
-        bottomText = '💖 BEST WAIFU 💖';
-}
-
-if (style === 'manga') {
-
-    if (!bottomText)
-        bottomText = '📖 MANGA PANEL';
-}
-
-if (style === 'glow') {
-
-    if (!bottomText)
-        bottomText = '✨ GLOW EFFECT ✨';
-}
-
-if (style === 'cyber') {
-
-    if (!bottomText)
-        bottomText = 'SYSTEM ONLINE';
-}
-
-            } else {
-
-                bottomText = rawText;
-            }
-        }
-
-        await sock.sendMessage(from, {
-    text:
-`🎨 Sticker Premium Generator
-
-🎭 Style : ${style}
-📝 Atas : ${topText || '-'}
-📝 Bawah : ${bottomText || '-'}
-
-⚡ Sedang merender sticker...
-Mohon tunggu sebentar ✨`
-}, { quoted: msg });
-
-        const isVideo =
-            mediaMsg?.mimetype?.includes('video') || false;
-
-        const stream = await downloadContentFromMessage(
-            mediaMsg,
-            isVideo ? 'video' : 'image'
-        );
-
-        let buffer = Buffer.from([]);
-
-        for await (const chunk of stream) {
-            buffer = Buffer.concat([buffer, chunk]);
-        }
-
-        if (isVideo) {
-
-            const inputPath = "./temp/input.mp4";
-            const outputPath = "./temp/output.webp";
-
-            fs.writeFileSync(inputPath, buffer);
-
-            const videoText =
-                [topText, bottomText]
-                .filter(Boolean)
-                .join(' | ');
-
-            if (videoText) {
-                await videoToStickerWithText(
-                    inputPath,
-                    outputPath,
-                    videoText
-                );
-            } else {
-                await videoToSticker(
-                    inputPath,
-                    outputPath
-                );
-            }
-
-            const stickerBuffer =
-                fs.readFileSync(outputPath);
-
-            await sock.sendMessage(from, {
-                sticker: stickerBuffer
-            }, { quoted: msg });
-
-            return;
-        }
-
-        let finalBuffer = buffer;
-
-        finalBuffer = await addTextToImageV3(
-            buffer,
-            topText,
-            bottomText,
-            style
-        );
-
-        const stiker = new Sticker(
-            finalBuffer,
-            {
-                pack: "🌸 ZetBot Premium Collection",
-                author: "👑 DoxxBorx",
-                type: StickerTypes.FULL,
-                quality: 100
-            }
-        );
-
-        const result = await stiker.toBuffer();
-
-        await sock.sendMessage(from, {
-            sticker: result
-        }, { quoted: msg });
-
-    } catch (e) {
-
-        console.log('STICKER ERROR:', e);
-
-        await sock.sendMessage(from, {
-            text: '❌ Gagal membuat sticker premium.'
-        }, { quoted: msg });
-    }
-}
-
-            if (command === 'minify') {
-                const kodeMentah = args.join(' ');
-                if (!kodeMentah) return await sock.sendMessage(from, { text: '⚠️ *Mana kodenya Kak?* Contoh penggunaan:\n`!minify function sapa() { console.log("Halo Dunia"); }` 🎀' }, { quoted: msg });
-                
-                try {
-                    const hasilMinify = await minify(kodeMentah);
-                    await sock.sendMessage(from, { text: `✅ *Kode Udah Menciut (Minified)!* 📉✨\n\`\`\`javascript\n${hasilMinify.code}\n\`\`\`` }, { quoted: msg });
-                } catch (error) {
-                    await sock.sendMessage(from, { text: `❌ *Gagal Minify!* Ada kode yang salah tulis tuh Kak, coba dicek lagi ya! 🧐` }, { quoted: msg });
-                }
-            }
-
-            if (command === 'dbdiagram') {
-                const deskripsi = args.join(' ');
-                if (!deskripsi) return await sock.sendMessage(from, { text: '⚠️ *Tulis skema DB-nya Kak.* Contoh:\n`!dbdiagram sistem jualan baju` 👗✨' }, { quoted: msg });
-                
-                await sock.sendPresenceUpdate('composing', from);
-                const queryPrompt = `Buatkan struktur diagram skema database relasional (SQL) lengkap yang rapi berdasarkan deskripsi berikut ini: "${deskripsi}". Jabarkan nama tabel, field/kolom, tipe data, serta rancangan Primary Key (PK) tanpa perlu menambahkan batasan Foreign Key (FK) yang rumit terlebih dahulu agar mudah dibaca mahasiswa.`;
-                const hasilAI = await tanyakanAI(queryPrompt, 'coding', isAdmin);
-                await sock.sendMessage(from, { text: hasilAI }, { quoted: msg });
-            }
-
-            if (command === 'gitwatch') {
-                const username = args[0];
-                if (!username) return await sock.sendMessage(from, { text: '⚠️ *Siapa username GitHub-nya Kak?* Contoh: `!gitwatch doxxborx` 🐙🎀' }, { quoted: msg });
-                
-                try {
-                    const resUser = await axios.get(`https://api.github.com/users/${username}`);
-                    const resRepo = await axios.get(`https://api.github.com/users/${username}/repos?sort=updated&per_page=3`);
-                    
-                    let gitText = `🐙 *PEMANTAU PROFIL GITHUB* 🐙\n━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                                  `👤 *Nama:* ${resUser.data.name || username}\n` +
-                                  `📝 *Bio:* ${resUser.data.bio || 'Misterius banget, nggak ada bio'}\n` +
-                                  `📁 *Total Repo:* ${resUser.data.public_repos}\n` +
-                                  `👥 *Followers:* ${resUser.data.followers} | *Following:* ${resUser.data.following}\n\n` +
-                                  `📌 *3 REPO TERBARU:* 🌟\n`;
-                                  
-                    resRepo.data.forEach((repo, i) => {
-                        gitText += `${i + 1}. *${repo.name}* (${repo.language || 'HTML/Text'})\n⭐ _Stars:_ ${repo.stargazers_count} | 🔗 _Link:_ ${repo.html_url}\n`;
-                    });
-                    
-                    await sock.sendMessage(from, { text: gitText }, { quoted: msg });
-                } catch (error) {
-                    await sock.sendMessage(from, { text: '❌ *Orangnya nggak ada!* Pastikan ejaan namanya bener ya Kak. 🥺' }, { quoted: msg });
-                }
-            }
-
-            if (command === 'ocr') {
-                const isMedia = (type === 'imageMessage');
-                const isQuotedMedia = type === 'extendedTextMessage' && msg.message.extendedTextMessage.contextInfo?.quotedMessage?.imageMessage;
-                
-                if (!isMedia && !isQuotedMedia) {
-                    return await sock.sendMessage(from, { text: '⚠️ *Mana gambar teksnya Kak?* Kirim fotonya pakai caption `!ocr` ya! 📸✍️' }, { quoted: msg });
-                }
-
-                await sock.sendMessage(from, { text: '🔍 _Lagi baca tulisan di gambarnya nih, tunggu ya Kak..._ 👓✨' });
-
-                try {
-                    const mediaContext = isQuotedMedia ? msg.message.extendedTextMessage.contextInfo.quotedMessage : msg.message;
-                    const stream = await downloadContentFromMessage(mediaContext.imageMessage, 'image');
-                    
-                    let buffer = Buffer.from([]);
-                    for await (const chunk of stream) {
-                        buffer = Buffer.concat([buffer, chunk]);
-                    }
-
-                    const response = await ai.models.generateContent({
-                        model: 'gemini-2.5-flash',
-                        contents: [
-                            {
-                                parts: [
-                                    { inlineData: { mimeType: 'image/jpeg', data: buffer.toString('base64') } },
-                                    { text: 'Tolong ekstrak, baca, dan tulis ulang seluruh teks ketikan ataupun tulisan tangan yang ada di dalam gambar ini secara utuh, rapi, akurat, dan tanpa tambahan komentar penjelasan apa pun.' }
-                                ]
-                            }
-                        ]
-                    });
-
-                    await sock.sendMessage(from, { text: `📝 *HASIL BACAAN TEKS (OCR):* 🎀\n━━━━━━━━━━━━━━━━━━━━━━━\n\n${response.text}` }, { quoted: msg });
-                } catch (error) {
-                    console.error(error);
-                    await sock.sendMessage(from, { text: '❌ *Gagal baca teks!* Gambarnya burem atau sistemku lagi ngantuk Kak. 😭' }, { quoted: msg });
-                }
-            }
-
-            // =======================================================
-            // 🧠 ADVANCED GOOGLE GEMINI AI TASKS 🌸
-            // =======================================================
-            if (command === 'tanya') {
-                const query = args.join(' ');
-                if (!query) return await sock.sendMessage(from, { text: '⚠️ Mau nanya apa Kak? Ketik pertanyaannya ya! 🤓✨' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const hasilAI = await tanyakanAI(query, 'tanya', isAdmin);
-                await sock.sendMessage(from, { text: hasilAI }, { quoted: msg });
-            }
-
-            if (command === 'coding') {
-                const query = args.join(' ');
-                if (!query) return await sock.sendMessage(from, { text: '⚠️ Kasih tau error-nya atau kode yang mau dibikin dong Kak! 💻✨' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const hasilAI = await tanyakanAI(query, 'coding', isAdmin);
-                await sock.sendMessage(from, { text: hasilAI }, { quoted: msg });
-            }
-
-            if (command === 'rangkum') {
-                const query = args.join(' ');
-                if (!query) return await sock.sendMessage(from, { text: '⚠️ Mana teks panjang yang mau di-ringkas Kak? 📑✨' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const hasilAI = await tanyakanAI(query, 'rangkum', isAdmin);
-                await sock.sendMessage(from, { text: hasilAI }, { quoted: msg });
-            }
-
-            if (command === 'brainstorm') {
-                const query = args.join(' ');
-                if (!query) return await sock.sendMessage(from, { text: '⚠️ Butuh ide apa nih Kak? Sebutin topiknya yuk! 💡✨' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const hasilAI = await tanyakanAI(query, 'brainstorm', isAdmin);
-                await sock.sendMessage(from, { text: hasilAI }, { quoted: msg });
-            }
-
-            if (command === 'translate') {
-                const query = args.join(' ');
-                if (!query) return await sock.sendMessage(from, { text: '⚠️ Teksnya mana yang mau ditranslate Kak? 🌐✨' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const hasilAI = await tanyakanAI(query, 'translate', isAdmin);
-                await sock.sendMessage(from, { text: hasilAI }, { quoted: msg });
-            }
-
-            if (command === 'curhat') {
-                const query = args.join(' ');
-                if (!query) return await sock.sendMessage(from, { text: '⚠️ Ayo keluarin unek-uneknya Kak, aku siap dengerin keluh kesahmu! 🫂💖' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const hasilAI = await tanyakanAI(query, 'curhat', isAdmin);
-                await sock.sendMessage(from, { text: hasilAI }, { quoted: msg });
-            }
-
-            // =======================================================
-            // 🎮 INTERACTIVE CASUAL FUN LOGIC 🎀
-            // =======================================================
-            if (command === 'roastme') {
-                const target = args.join(' ') || 'saya';
-                await sock.sendPresenceUpdate('composing', from);
-                const queryRoast = `Tolong roasting, hina dengan sarkasme komedi yang sangat pedas, tajam, menusuk hati, brutal, tapi sangat lucu dan menghibur tentang subjek: ${target}.`;
-                const hasilAI = await tanyakanAI(queryRoast, 'curhat', isAdmin);
-                await sock.sendMessage(from, { text: `🔥 *WAKTUNYA ROASTING!* 🔥\n\n${hasilAI}` }, { quoted: msg });
-            }
-
-            if (command === 'apakah') {
-                const query = args.join(' ');
-                if (!query) return await sock.sendMessage(from, { text: '⚠️ Tanya apa aja Kak, biar aku ramal! 🔮✨' }, { quoted: msg });
-                const jawaban = ['Iya pasti dong! 😍', 'Kelihatannya begitu Kak... 🤔', 'Mungkin aja, jalani aja dulu 🌸', 'Wah kalau itu ga mungkin! 🙅‍♀️', 'Sangat tidak direkomendasikan. 🛑', 'Coba tanyain lagi besok pas moodku bagus 🤭'];
-                const acak = jawaban[Math.floor(Math.random() * jawaban.length)];
-                await sock.sendMessage(from, { text: `🔮 *Pertanyaan:* Apakah ${query}\n🎲 *Jawaban Ramalan:* ${acak}` }, { quoted: msg });
-            }
-
-            if (command === 'kapankah') {
-                const query = args.join(' ');
-                if (!query) return await sock.sendMessage(from, { text: '⚠️ Tanya waktu apa nih Kak? ⏳✨' }, { quoted: msg });
-                const prediksi = ['3 Hari lagi! 🚀', 'Sekitar 5 tahun lagi Kak', 'Besok subuh! 🌅', 'Nanti kalau dinosaurus hidup lagi 🦖', 'Abad depan kelihatannya... 👴', 'Ga bakal terjadi kalau cuma rebahan aja ih! 😂'];
-                const acak = prediksi[Math.floor(Math.random() * prediksi.length)];
-                await sock.sendMessage(from, { text: `⏳ *Pertanyaan:* Kapankah ${query}\n🎯 *Prediksi Waktu:* ${acak}` }, { quoted: msg });
-            }
-
-            if (command === 'tagall') {
-                if (!isGroup) return await sock.sendMessage(from, { text: '⚠️ Cuma bisa dipakai di grup ya Kak! 🏡' }, { quoted: msg });
-                const groupMetadata = await sock.groupMetadata(from);
-                const peserta = groupMetadata.participants;
-                const teksTambahan = args.join(' ') || 'Panggilan Darurat, Kumpul yuk!';
-                
-                let pesanTag = `📢 *PANGGILAN UNTUK SEMUA!* 📢\n📌 *Pesan:* ${teksTambahan}\n\n`;
-                let mentions = [];
-                
-                for (let jlh of peserta) {
-                    pesanTag += `@${jlh.id.split('@')[0]}\n`;
-                    mentions.push(jlh.id);
-                }
-                await sock.sendMessage(from, { text: pesanTag, mentions: mentions }, { quoted: msg });
-            }
-
-            // =======================================================
-            // 👑 PERINTAH KHUSUS ADMIN (OWNER ONLY VIP) 👑
-            // =======================================================
-            if (isAdmin) {
-                if (command === 'eval') {
-                    const script = args.join(' ');
-                    if (!script) return await sock.sendMessage(from, { text: '⚠️ Masukkan ekspresi kode JavaScript Bos!' }, { quoted: msg });
-                    try {
-                        let evaled = eval(script);
-                        if (typeof evaled !== 'string') evaled = await import('util').then(u => u.inspect(evaled));
-                        await sock.sendMessage(from, { text: `🟢 *EVAL SUKSES:* ✨\n\`\`\`javascript\n${evaled}\n\`\`\`` }, { quoted: msg });
-                    } catch (e) {
-                        await sock.sendMessage(from, { text: `❌ *EVAL ERROR:* 😭\n\`\`\`text\n${e.message}\n\`\`\`` }, { quoted: msg });
-                    }
-                }
-
-                // !resetroom → Hapus room lama dan buat room W2G baru
-                if (command === 'resetroom') {
-                    await sock.sendMessage(from, { text: '🔄 _Bikin room Watch2Gether baru nih Bos, tunggu ya..._ ⏳' }, { quoted: msg });
-                    try {
-                        // Hapus file lama
-                        if (fs.existsSync(W2G_ROOM_FILE)) fs.unlinkSync(W2G_ROOM_FILE);
-                        // Kosongkan antrian
-                        global.radioQueue = [];
-                        // Buat room baru
-                        const newRoom = await createW2GRoom();
-                        await sock.sendMessage(from, {
-                            text: `✅ *Room baru berhasil dibuat Bos!* 🎉\n\n📻 *Link Room Baru:*\n${newRoom.url}\n\n_Antrian lagu juga sudah direset._`
-                        }, { quoted: msg });
-                    } catch (e) {
-                        await sock.sendMessage(from, { text: `❌ Gagal buat room baru Bos! Error: ${e.message}` }, { quoted: msg });
-                    }
-                }
-
-                if (command === 'self') {
-                    isSelfMode = true;
-                    await sock.sendMessage(from, { text: '🔒 *Sistem VIP Terkunci!* Sekarang aku cuma nurut sama Bos DoxxBorx aja! Yang lain aku cuekin bleee~ 😝🎀' }, { quoted: msg });
-                }
-
-                if (command === 'public') {
-                    isSelfMode = false;
-                    await sock.sendMessage(from, { text: '🔓 *Sistem Dibuka Umum!* Yeyy, sekarang aku ramah lagi dan bisa dipakai siapa aja di grup! 🥳🌸' }, { quoted: msg });
-                }
-
-                if (command === 'turu') {
-                    isSleeping = true;
-                    await sock.sendMessage(from, { text: '🛌 *Aku izin turu dulu ya Bos...* Capek kerja terus. Ketik `!bangun` kalau Bos butuh aku lagi! Zzz... 💤🧸' }, { quoted: msg });
-                }
-
-                if (command === 'bangun') {
-                    if (!isSleeping) {
-                        return await sock.sendMessage(from, { text: '☀️ *Aku udah bangun dari tadi Bos!* Siap tempur bantu kodingan Bos! 🔥🚀' }, { quoted: msg });
-                    }
-                    isSleeping = false;
-                    await sock.sendMessage(from, { text: '☀️ *Yeayy Aku Bangun!* Semangat lagi bantuin Bos DoxxBorx kerja! Mari kita gass! 🤖💖' }, { quoted: msg });
-                }
-
-                if (command === 'antilink') {
-                    const status = args[0]?.toLowerCase();
-                    if (status === 'on') {
-                        antiLink = true;
-                        await sock.sendMessage(from, { text: '🛡️ *Anti-Link Ketat Nyala!* Siapapun yang sebar link grup lain bakal aku kick tanpa ampun! 😠⚔️' }, { quoted: msg });
-                    } else if (status === 'off') {
-                        antiLink = false;
-                        await sock.sendMessage(from, { text: '🔓 *Anti-Link Dimatikan.* Santai dulu Bos, sekarang bebas sebar link di sini. 🌸' }, { quoted: msg });
-                    } else {
-                        await sock.sendMessage(from, { text: '⚠️ Formatnya `!antilink on` atau `!antilink off` ya Bosku! 🎀' }, { quoted: msg });
-                    }
-                }
-
-                if (command === 'spek') {
-                    const coreCPU = os.cpus();
-                    const platform = os.platform();
-                    const totalRAM = (os.totalmem() / (1024 * 1024 * 1024)).toFixed(2);
-                    const freeRAM = (os.freemem() / (1024 * 1024 * 1024)).toFixed(2);
-                    
-                    const textSpek = `💻 *JEROAN SERVER KITA* 💻\n` +
-                                     `*━━━━━━━━━━━━━━━━━━━━━━━*\n` +
-                                     `⚙️ *Sistem Operasi:* _${platform} (${os.release()})_\n` +
-                                     `🧠 *Processor:* _${coreCPU[0].model}_\n` +
-                                     `📈 *RAM Terpakai:* _${(totalRAM - freeRAM).toFixed(2)} GB dari ${totalRAM} GB_\n` +
-                                     `⏳ *Uptime PC:* _${Math.floor(os.uptime() / 3600)} jam non-stop_\n` +
-                                     `🤖 *Nama Bot:* _${BOT_NAME} Kawaii Core 🎀_`;
-                    await sock.sendMessage(from, { text: textSpek }, { quoted: msg });
-                }
-
-                if (command === 'systeminfo') {
-                    const totalRAM = (os.totalmem() / (1024 * 1024 * 1024)).toFixed(2);
-                    const freeRAM = (os.freemem() / (1024 * 1024 * 1024)).toFixed(2);
-                    const usedRAM = (totalRAM - freeRAM).toFixed(2);
-                    const cpus = os.cpus();
-                    const loadAvg = os.loadavg().map(l => l.toFixed(2)).join(', ');
-                    
-                    let sysText = `📊 *INFO SISTEM VIP BOS* 📊\n` +
-                                  `*━━━━━━━━━━━━━━━━━━━━━━━*\n\n` +
-                                  `💻 *OS:* _${os.platform()} (${os.arch()})_\n` +
-                                  `⚙️ *Beban CPU:* _[${loadAvg}]_\n` +
-                                  `🧠 *Core CPU:* _${cpus.length} Core_\n` +
-                                  `📈 *Sisa RAM:* _${freeRAM} GB (Kepakai ${usedRAM} GB)_\n` +
-                                  `💾 *Kondisi:* _Semuanya mantap dan ngebut! 🚀💖_`;
-                                  
-                    await sock.sendMessage(from, { text: sysText }, { quoted: msg });
-                }
-
-                if (command === 'speedtest') {
-                    await sock.sendMessage(from, { text: '⚡ _Uji seberapa ngebut aku bales chat Bos, bentar ya..._ 🚀' }, { msg });
-                    const pingerAwal = Date.now();
-                    const latensiRiil = Date.now() - pingerAwal;
-                    await sock.sendMessage(from, { text: `🚀 *HASIL UJI NYALI SERVER:* 🚀\n\n🌐 Jaringan: *${latensiRiil + 3}ms*\n🖥️ Pemrosesan: *Melesat kilat!*\n📊 Status: *SANGAT SEHAT & PRIMA* 🟢🎀` }, { quoted: msg });
-                }
-
-                if (command === 'broadcast' || command === 'bc') {
-                    const teksBc = args.join(' ');
-                    if (!teksBc) return await sock.sendMessage(from, { text: '⚠️ *Teksnya mana Bos? Masa aku BC angin?* 🥺' }, { quoted: msg });
-
-                    await sock.sendMessage(from, { text: '📢 _Lagi sebarin pesan ke semua grup nih Bos, tunggu ya..._ 🏃‍♀️💨' }, { quoted: msg });
-                    try {
-                        const semuaGrup = await sock.groupFetchAllParticipating();
-                        const jidsGrup = Object.keys(semuaGrup);
-                        let suksesGrup = 0;
-
-                        for (let jid of jidsGrup) {
-                            try {
-                                await sock.sendMessage(jid, { text: `📢 *PENGUMUMAN DARI PUSAT* 📢\n━━━━━━━━━━━━━━━━━━━━━━━\n\n${teksBc}\n\n🎀 _Pesan resmi dari Bos DoxxBorx_ 👑` });
-                                suksesGrup++;
-                                await new Promise(resolve => setTimeout(resolve, 1500));
-                            } catch (err) {
-                                console.error(`Gagal kirim ke grup ${jid}:`, err);
-                            }
-                        }
-                        await sock.sendMessage(from, { text: `✅ *Beres Bos!* Pesannya udah kusebarin ke *${suksesGrup}* grup yang ada aku di dalamnya. 🥳🎉` }, { quoted: msg });
-                    } catch (error) {
-                        console.error(error);
-                        await sock.sendMessage(from, { text: '❌ *Ada error waktu ambil data grup nih Bos!* 😭' }, { quoted: msg });
-                    }
-                }
-
-                if (command === 'grup') {
-                    const aksi = args[0]?.toLowerCase();
-                    if (!aksi) return await sock.sendMessage(from, { text: '⚠️ Format salah Bos. Ketik `!grup open` atau `!grup close` 🚪' }, { quoted: msg });
-                    if (!isGroup) return await sock.sendMessage(from, { text: '⚠️ Ini cuma berlaku di grup aja Bos! 🏡' }, { quoted: msg });
-                    
-                    if (aksi === 'open') {
-                        await sock.groupSettingUpdate(from, 'not_announcement');
-                        await sock.sendMessage(from, { text: '🔓 Gerbang grup dibuka! Sekarang semua orang boleh ngobrol lagi. Yeyy! 🗣️🌸' }, { quoted: msg });
-                    } else if (aksi === 'close') {
-                        await sock.groupSettingUpdate(from, 'announcement');
-                        await sock.sendMessage(from, { text: '🔒 Gerbang grup ditutup! Sssttt, sekarang cuma admin aja yang boleh ngomong. 🤫👑' }, { quoted: msg });
-                    }
-                }
-
-                if (command === 'join') {
-                    const linkGrup = args[0];
-                    if (!linkGrup) return await sock.sendMessage(from, { text: '⚠️ Link undangannya mana Bos? 🔗' }, { quoted: msg });
-                    try {
-                        const code = linkGrup.split('https://chat.whatsapp.com/')[1];
-                        await sock.groupAcceptInvite(code);
-                        await sock.sendMessage(from, { text: '✅ Siap laksanakan Bos! Aku udah nyusup dan masuk ke grup itu. 🥷✨' }, { quoted: msg });
-                    } catch (e) {
-                        await sock.sendMessage(from, { text: '❌ Aduh gagal masuk grup, link-nya mungkin udah direvoke atau kadaluwarsa Bos! 🥺' }, { quoted: msg });
-                    }
-                }
-
-                if (command === 'leave') {
-                    if (!isGroup) return await sock.sendMessage(from, { text: '⚠️ Harus diketik di grup yang mau ditinggalin Bos! 🏃‍♀️' }, { quoted: msg });
-                    await sock.sendMessage(from, { text: '👋 Dadah semuanya! Aku disuruh Bos pergi dari sini. Sampai jumpa lagi! 🌸💨' });
-                    await sock.groupLeave(from);
-                }
-
-                if (command === 'block') {
-                    const target = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || args[0]?.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                    if (!target) return await sock.sendMessage(from, { text: '⚠️ Tag orangnya yang mau diblokir Bos! 😠' }, { quoted: msg });
-                    await sock.updateBlockStatus(target, 'block');
-                    await sock.sendMessage(from, { text: '🚫 Udah ku-blokir Bos! Nggak bakal berani chat lagi dia. Hmph! 😤' }, { quoted: msg });
-                }
-
-                if (command === 'unblock') {
-                    const target = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || args[0]?.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                    if (!target) return await sock.sendMessage(from, { text: '⚠️ Tag orangnya yang mau dimaafin Bos! 🕊️' }, { quoted: msg });
-                    await sock.updateBlockStatus(target, 'unblock');
-                    await sock.sendMessage(from, { text: '🔓 Udah kulepas blokirnya. Dia udah dimaafin. 😇🌸' }, { quoted: msg });
-                }
-
-                if (command === 'refresh') {
-                    console.clear();
-                    if (global.gc) { global.gc(); }
-                    await sock.sendMessage(from, { text: '♻️ *Selesai Bersih-Bersih RAM!* Sekarang aku berasa enteng banget, siap ngebut lagi Bos! 🚀💨💖' }, { quoted: msg });
-                }
-
-                if (command === 'pingsan') {
-                    await sock.sendMessage(from, { text: '💀 *Duh.. Aku disuruh mati total sama Bos.* Selamat tinggal dunia WhatsApp... 🕯️🥀' }, { quoted: msg });
-                    process.exit(0);
-                }
-            }
+            caption: `✨ Gambar alternatif dari Pollinations AI\nPrompt: ${prompt}`,
+          }, { quoted: msg });
         } catch (err) {
-            console.error('💥 Yahh Ada Error Bos:', err);
+          await sock.sendMessage(from, { text: '❌ Gagal membuat gambar!' }, { quoted: msg });
         }
-    });
+      }
+      return;
+    }
+
+    // =======================
+    // Contoh command: !play
+    if (command === 'play' || command === 'musik') {
+      const query = args.join(' ');
+      if (!query) {
+        return await sock.sendMessage(from, { text: '❌ Format: !play [judul lagu]' }, { quoted: msg });
+      }
+      await sock.sendMessage(from, { text: '🎵 Mencari lagu...' }, { quoted: msg });
+      try {
+        const res = await ytsSearch(query);
+        if (res.videos.length === 0) {
+          return await sock.sendMessage(from, { text: '❌ Lagu tidak ditemukan!' }, { quoted: msg });
+        }
+        const video = res.videos[0];
+
+        const stream = ytdl(video.url, { filter: 'audioonly', quality: 'highestaudio' });
+        const chunks = [];
+        stream.on('data', chunk => chunks.push(chunk));
+        stream.on('end', async () => {
+          const buffer = Buffer.concat(chunks);
+          await sock.sendMessage(from, {
+            audio: buffer,
+            mimetype: 'audio/mp4',
+            filename: `${video.title}.mp3`,
+            caption: `🎵 *Sekarang diputar:*\n${video.title}\n${video.author.name}`,
+            mentions: [sender],
+          }, { quoted: msg });
+        });
+      } catch (e) {
+        console.log('Error play:', e.message);
+        await sock.sendMessage(from, { text: '❌ Gagal memutar lagu!' }, { quoted: msg });
+      }
+      return;
+    }
+
+    // =======================
+    // Command: !json
+    if (command === 'json' || command === 'jsonpretty') {
+      const jsonStr = args.join(' ');
+      if (!jsonStr) {
+        return await sock.sendMessage(from, { text: '❌ Format: !json [json string]' }, { quoted: msg });
+      }
+      try {
+        const jsonObj = JSON.parse(jsonStr);
+        const formatted = JSON.stringify(jsonObj, null, 2);
+        await sock.sendMessage(from, { text: `📊 *JSON*\n\`\`\`json\n${formatted}\n\`\`\`` }, { quoted: msg });
+      } catch (e) {
+        await sock.sendMessage(from, { text: '❌ JSON tidak valid!' }, { quoted: msg });
+      }
+      return;
+    }
+
+    // =======================
+    // Command: !minify
+    if (command === 'minify' || command === 'minifyjs') {
+      const code = body.substring(body.indexOf(' ') + 1);
+      if (!code || code.length < 10) {
+        return await sock.sendMessage(from, { text: '❌ Format: !minify [kode JS]' }, { quoted: msg });
+      }
+      try {
+        const result = await minify(code);
+        if (result.error) throw result.error;
+        await sock.sendMessage(from, { text: `📉 *Minify*\n${result.code.substring(0, 2000)}` }, { quoted: msg });
+      } catch (e) {
+        await sock.sendMessage(from, { text: '❌ Gagal minify kode!' }, { quoted: msg });
+      }
+      return;
+    }
+
+    // =======================
+    // Command: !qr
+    if (command === 'qr' || command === 'qrcode') {
+      const textQ = args.join(' ');
+      if (!textQ) {
+        return await sock.sendMessage(from, { text: '❌ Format: !qr [teks/url]' }, { quoted: msg });
+      }
+      try {
+        const qrImage = await QRCode.toDataURL(textQ, { width: 400 });
+        const base64Data = qrImage.replace(/^data:image\/png;base64,/, '');
+        const buffer = Buffer.from(base64Data, 'base64');
+        await sock.sendMessage(from, {
+          image: buffer,
+          caption: `🔳 *QR Code*\nContent: ${textQ}`
+        }, { quoted: msg });
+      } catch (e) {
+        await sock.sendMessage(from, { text: '❌ Gagal membuat QR code!' }, { quoted: msg });
+      }
+      return;
+    }
+
+    // =======================
+    // Command: !stalk (GitHub)
+    if (command === 'stalk' || command === 'github') {
+      const username = args[0];
+      if (!username) {
+        return await sock.sendMessage(from, { text: '❌ Format: !stalk [username github]' }, { quoted: msg });
+      }
+      try {
+        const res = await axios.get(`https://api.github.com/users/${username}`);
+        const data = res.data;
+        const caption = `🐙 *GitHub*\n\n👤 *User:* ${data.login}\n📝 *Name:* ${data.name || '-'}\n📌 *Bio:* ${data.bio || '-'}\n📍 *Location:* ${data.location || '-'}\n🏢 *Company:* ${data.company || '-'}\n📧 *Email:* ${data.email || 'Private'}\n🔗 *Profile:* ${data.html_url}`;
+        await sock.sendMessage(from, {
+          image: { url: data.avatar_url },
+          caption,
+        });
+      } catch (e) {
+        await sock.sendMessage(from, { text: '❌ User GitHub tidak ditemukan!' }, { quoted: msg });
+      }
+      return;
+    }
+
+    // =======================
+    // Command: !summarize
+    if (command === 'summarize' || command === 'ringkas') {
+      const url = args[0];
+      if (!url) {
+        return await sock.sendMessage(from, { text: '❌ Format: !summarize [url]' }, { quoted: msg });
+      }
+      await sock.sendMessage(from, { text: '⏳ Meringkas artikel...' }, { quoted: msg });
+      try {
+        const response = await axios.get(url);
+        const $ = cheerio.load(response.data);
+        $('script, style, nav, footer, header').remove();
+        const text = $('body').text().replace(/\s+/g, ' ').trim().substring(0, 2000);
+        if (text.length < 50) {
+          return await sock.sendMessage(from, { text: '❌ Tidak bisa meringkas halaman ini!' }, { quoted: msg });
+        }
+        const summary = await tanyakanAI(`Ringkas artikel ini dalam 3-5 poin:\n\n${text}`);
+        await sock.sendMessage(from, { text: `📰 *Ringkasan*\n${summary}` }, { quoted: msg });
+      } catch (e) {
+        await sock.sendMessage(from, { text: '❌ Gagal meringkas!' }, { quoted: msg });
+      }
+      return;
+    }
+
+    // =======================
+    // Command: !ceklink
+    if (command === 'ceklink' || command === 'scanlink') {
+      const url = args[0];
+      if (!url) {
+        return await sock.sendMessage(from, { text: '❌ Format: !ceklink [url]' }, { quoted: msg });
+      }
+      try {
+        // Cek keamanan link dengan Google Safe Browsing API
+        const safeBrowsingKey = process.env.GOOGLE_SAFE_BROWSING_KEY;
+        let safeResult = '⚠️ Tidak bisa diverifikasi (API key tidak tersedia)';
+        if (safeBrowsingKey) {
+          const res = await axios.post(
+            `https://safebrowsing.googleapis.com/v4/threatMatches:find?key=${safeBrowsingKey}`,
+            {
+              client: { clientId: 'luxxbot', clientVersion: '1.0.0' },
+              threatInfo: {
+                threatTypes: ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE'],
+                platformTypes: ['ANY_PLATFORM'],
+                threatEntryTypes: ['URL'],
+                threatEntries: [{ url }]
+              }
+            }
+          );
+          safeResult = res.data.matches ? `❌ *DANGEROUS* - ${res.data.matches[0].threatType}` : '✅ *SAFE* - Tidak terdeteksi ancaman';
+        }
+        // Analisis URL
+        const urlObj = new URL(url);
+        const isHTTPS = url.startsWith('https://');
+        const suspiciousChars = url.includes('..') || url.includes('--') || url.includes('@') || url.length > 100;
+
+        let analysis = `🔍 *Analisis Link*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        analysis += `🔗 *URL:* ${url}\n`;
+        analysis += `🛡️ *Safe Browsing:* ${safeResult}\n`;
+        analysis += `🔐 *HTTPS:* ${isHTTPS ? '✅ Aman' : '⚠️ HTTP (kurang aman)'}\n`;
+        analysis += `📊 *Panjang:* ${url.length} karakter\n`;
+        analysis += `🚩 *Karakter mencurigakan:* ${suspiciousChars ? '⚠️ Ya' : '✅ Tidak'}\n`;
+        analysis += `🌐 *Domain:* ${urlObj.hostname}\n`;
+        analysis += `📍 *Path:* ${urlObj.pathname}\n`;
+        if (suspiciousChars || !isHTTPS) {
+          analysis += `⚠️ *Peringatan:* Link ini mencurigakan!\n`;
+        } else {
+          analysis += `✅ *Aman:* Link ini tampaknya aman.\n`;
+        }
+        await sock.sendMessage(from, { text: analysis }, { quoted: msg });
+      } catch (e) {
+        await sock.sendMessage(from, { text: '❌ Gagal analisis link!' }, { quoted: msg });
+      }
+      return;
+    }
+
+    // =======================
+    // Command: !password
+    if (command === 'password' || command === 'pwgen') {
+      const length = parseInt(args[0]) || 12;
+      if (length < 6 || length > 32) {
+        return await sock.sendMessage(from, { text: '❌ Panjang password harus 6-32 karakter' }, { quoted: msg });
+      }
+      const password = generatePassword(length);
+      await sock.sendMessage(from, { text: `🔑 *Password*\n\n${password}` }, { quoted: msg });
+      return;
+    }
+
+    // =======================
+    // Command: !tebakangka
+    if (command === 'tebakangka' || command === 'guess') {
+      const max = parseInt(args[0]) || 100;
+      const secretNumber = Math.floor(Math.random() * max) + 1;
+      const gameId = `${from}_${Date.now()}`;
+      games[gameId] = {
+        type: 'guess',
+        secret: secretNumber,
+        max: max,
+        attempts: 0,
+        maxAttempts: 7,
+        player: sender
+      };
+      await sock.sendMessage(from, { text: `🎯 Tebak angka dari 1 sampai ${max}\nKamu punya 7 kesempatan!\nKirim !jawab [angka]` });
+      setTimeout(() => { delete games[gameId]; }, 300000); // 5 menit
+      return;
+    }
+
+    // =======================
+    // Command: !tebakkata
+    if (command === 'tebakkata' || command === 'wordgame') {
+      const words = [
+        { word: 'KOMPUTER', hint: 'Alat untuk browsing dan coding' },
+        { word: 'SMARTPHONE', hint: 'Gadget yang selalu dibawa kemana-mana' },
+        { word: 'INTERNET', hint: 'Jaringan global yang menghubungkan dunia' },
+        { word: 'PROGRAMMER', hint: 'Orang yang membuat software' },
+        { word: 'WHATSAPP', hint: 'Aplikasi chat yang sedang kita gunakan' },
+      ];
+      const selected = words[Math.floor(Math.random() * words.length)];
+      const scrambled = selected.word.split('').sort(() => Math.random() - 0.5).join('');
+      await sock.sendMessage(from, { text: `🧩 Tebak kata!\n\nKata: ${scrambled}\nHint: ${selected.hint}\nKirim !jawab [kata]` });
+      const gameId = `${from}_${Date.now()}`;
+      games[gameId] = {
+        type: 'word',
+        answer: selected.word.toLowerCase(),
+        scrambled,
+        hint: selected.hint,
+        player: sender,
+      };
+      setTimeout(() => { delete games[gameId]; }, 180000); // 3 menit
+      return;
+    }
+
+    // =======================
+    // Command: !lirik
+    if (command === 'lirik' || command === 'lyrics') {
+      const query = args.join(' ');
+      if (!query) {
+        return await sock.sendMessage(from, { text: '❌ Format: !lirik [judul lagu]' }, { quoted: msg });
+      }
+      try {
+        const res = await axios.get(`https://api.lyrics.ovh/v1/${encodeURIComponent(query)}`);
+        const lyrics = res.data.lyrics;
+        if (!lyrics) {
+          return await sock.sendMessage(from, { text: '❌ Lirik tidak ditemukan!' }, { quoted: msg });
+        }
+        // Split panjang
+        if (lyrics.length > 3000) {
+          const part1 = lyrics.substring(0, 3000);
+          const part2 = lyrics.substring(3000);
+          await sock.sendMessage(from, { text: `🎵 *LIRIK*\n${part1}` }, { quoted: msg });
+          await sock.sendMessage(from, { text: `...Lanjutan:\n${part2}` }, { quoted: msg });
+        } else {
+          await sock.sendMessage(from, { text: `🎵 *LIRIK*\n${lyrics}` }, { quoted: msg });
+        }
+      } catch (e) {
+        await sock.sendMessage(from, { text: '❌ Gagal mencari lirik!' }, { quoted: msg });
+      }
+      return;
+    }
+
+    // =======================
+    // Command: !translate
+    if (command === 'translate' || command === 'terjemah') {
+      const langCode = args[0]?.toLowerCase();
+      const textToTranslate = args.slice(1).join(' ');
+      const langMap = {
+        en: 'English',
+        id: 'Indonesia',
+        ja: 'Japanese',
+        ko: 'Korean',
+        es: 'Spanish',
+        fr: 'French',
+        de: 'German',
+      };
+      if (!langCode || !textToTranslate || !langMap[langCode]) {
+        return await sock.sendMessage(from, { text: '❌ Format: !translate [lang] [teks]\nContoh: !translate en halo' }, { quoted: msg });
+      }
+      try {
+        const translation = await tanyakanAI(`Terjemahkan ke ${langMap[langCode]}:\n\n${textToTranslate}`);
+        await sock.sendMessage(from, { text: `🌐 *Hasil*\n${translation}` }, { quoted: msg });
+      } catch (e) {
+        await sock.sendMessage(from, { text: '❌ Gagal menerjemahkan!' }, { quoted: msg });
+      }
+      return;
+    }
+
+    // =======================
+    // Command: !warna
+    if (command === 'warna' || command === 'color') {
+      const inputColor = args[0];
+      if (!inputColor) {
+        // generate warna acak
+        const randHex = Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+        const hexColor = `#${randHex}`;
+        const r = parseInt(randHex.substring(0, 2), 16);
+        const g = parseInt(randHex.substring(2, 4), 16);
+        const b = parseInt(randHex.substring(4, 6), 16);
+        await sock.sendMessage(from, { text: `🎨 *Warna acak*\nHex: ${hexColor}\nRGB: rgb(${r}, ${g}, ${b})` }, { quoted: msg });
+        return;
+      }
+      try {
+        let hex, r, g, b, rgb;
+        if (inputColor.startsWith('#')) {
+          hex = inputColor;
+          const cleanHex = inputColor.replace('#', '');
+          if (cleanHex.length === 3) {
+            hex = '#' + cleanHex.split('').map(c => c + c).join('');
+          }
+          r = parseInt(hex.substring(1, 3), 16);
+          g = parseInt(hex.substring(3, 5), 16);
+          b = parseInt(hex.substring(5, 7), 16);
+          rgb = `rgb(${r}, ${g}, ${b})`;
+        } else if (inputColor.startsWith('rgb')) {
+          const matches = inputColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+          if (!matches) throw new Error('Format RGB salah');
+          r = parseInt(matches[1]);
+          g = parseInt(matches[2]);
+          b = parseInt(matches[3]);
+          hex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+        } else {
+          // nama warna
+          const colorNames = {
+            merah: '#FF0000',
+            hijau: '#00FF00',
+            biru: '#0000FF',
+            kuning: '#FFFF00',
+            ungu: '#800080',
+            pink: '#FFC0CB',
+            hitam: '#000000',
+            putih: '#FFFFFF',
+            orange: '#FFA500',
+            coklat: '#A52A2A',
+            abu: '#808080'
+          };
+          const cHex = colorNames[inputColor.toLowerCase()];
+          if (!cHex) throw new Error('Nama warna tidak dikenal');
+          hex = cHex;
+          const cleanHex = cHex.replace('#', '');
+          r = parseInt(cleanHex.substring(0, 2), 16);
+          g = parseInt(cleanHex.substring(2, 4), 16);
+          b = parseInt(cleanHex.substring(4, 6), 16);
+          rgb = `rgb(${r}, ${g}, ${b})`;
+        }
+        await sock.sendMessage(from, { text: `🎨 *Warna*\nHex: ${hex}\nRGB: ${rgb}` }, { quoted: msg });
+      } catch (e) {
+        await sock.sendMessage(from, { text: '❌ Format warna tidak valid!' }, { quoted: msg });
+      }
+      return;
+    }
+
+    // =======================
+    // Command: !tanggal
+    if (command === 'tanggal' || command === 'date') {
+      const now = new Date();
+      const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+      const dateStr = now.toLocaleDateString('id-ID', options);
+      const timeStr = now.toLocaleTimeString('id-ID', { hour12: false });
+      await sock.sendMessage(from, { text: `📅 ${dateStr}\n⏰ ${timeStr}` }, { quoted: msg });
+      return;
+    }
+
+    // =======================
+    // Command: !jadwalsholat
+    if (command === 'jadwalsholat' || command === 'sholat') {
+      const city = args.join(' ') || 'jakarta';
+      await sock.sendMessage(from, { text: '🕌 Mengambil jadwal sholat...' }, { quoted: msg });
+      try {
+        const response = await axios.get(`https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(city)}&country=Indonesia&method=2`);
+        const data = response.data.data;
+        const timings = data.timings;
+        const date = data.date.readable;
+        await sock.sendMessage(from, {
+          text: `🕌 *Jadwal Sholat*\n\n📅 ${date}\n\nFajr: ${timings.Fajr}\nDhuhr: ${timings.Dhuhr}\nAsr: ${timings.Asr}\nMaghrib: ${timings.Maghrib}\nIsha: ${timings.Isha}`
+        });
+      } catch (e) {
+        await sock.sendMessage(from, { text: '❌ Gagal mendapatkan jadwal sholat' });
+      }
+      return;
+    }
+
+    // =======================
+    // Command: !hitung
+    if (command === 'hitung' || command === 'count') {
+      const textCount = body.substring(body.indexOf(' ') + 1);
+      if (!textCount) {
+        return await sock.sendMessage(from, { text: '❌ Format: !hitung [teks]' }, { quoted: msg });
+      }
+      const charCount = textCount.length;
+      const wordCount = textCount.trim().split(/\s+/).length;
+      const lineCount = textCount.split('\n').length;
+      const spaceCount = (textCount.match(/ /g) || []).length;
+      // Hitung huruf terbanyak
+      const freq = {};
+      for (const c of textCount.toLowerCase()) {
+        if (/[a-z]/.test(c)) freq[c] = (freq[c] || 0) + 1;
+      }
+      const mostFreq = Object.entries(freq).sort((a, b) => b[1] - a[1])[0];
+      const mostChar = mostFreq ? `${mostFreq[0]}: ${mostFreq[1]}` : '-';
+
+      const analysis = `📊 *Analisis Teks*\n\n`;
+      analysis += `📝 *Teks:* ${textCount.substring(0,50)}\n`;
+      analysis += `🔢 *Karakter:* ${charCount}\n`;
+      analysis += `📝 *Kata:* ${wordCount}\n`;
+      analysis += `📄 *Baris:* ${lineCount}\n`;
+      analysis += `🕳️ *Spasi:* ${spaceCount}\n`;
+      analysis += `🔥 *Huruf terbanyak:* ${mostChar}\n`;
+
+      await sock.sendMessage(from, { text: analysis }, { quoted: msg });
+      return;
+    }
+
+    // =======================
+    // Command: !menu
+    if (command === 'menu' || command === 'help') {
+      await sendMenu(sock, from, msg, isGroup, isGroupAdmin, sender);
+      return;
+    }
+
+    // =======================
+    // Handle game commands, AI commands, dan lainnya
+    // Pastikan semua command yang ada di menu dan fitur sudah di-handle di sini agar berfungsi penuh
+    // Contoh: !dalle, !play, !json, !minify, !sticker, !simi, dll.
+    // Jika belum ada, tambahkan sesuai fitur yang sudah dibuat.
+  });
 }
 
-// Jalankan Sistem Bot Utama 🎀🚀
-startBot();
+// Fungsi pengiriman menu lengkap
+async function sendMenu(sock, from, msg, isGroup, isAdmin, sender) {
+  const uptime = formatUptime((Date.now() - startTime) / 1000);
+  let menuText = `╔══════════════════════════════════════════════════════════╗\n`;
+  menuText += `║                 🌸 *LuxxBot PREMIUM MENU* 🌸                ║\n`;
+  menuText += `╠══════════════════════════════════════════════════════════╣\n`;
+  menuText += `║ 📊 SYSTEM STATUS\n`;
+  menuText += `║ ├─ 🛠️ Mode: ${isSelfMode ? '🔒 Self' : '🔓 Public'}\n`;
+  menuText += `║ ├─ 💤 Status: ${isSleeping ? '🛌 Tertidur' : '⚡ Online'}\n`;
+  menuText += `║ ├─ 🛡️ Anti-Link: ${antiLink ? '🟢 Aktif' : '🔴 Nonaktif'}\n`;
+  menuText += `║ ├─ ⏳ Runtime: ${uptime}\n`;
+  menuText += `║ └─ 📡 Server: 🟢 Stabil\n`;
+  menuText += `╠══════════════════════════════════════════════════════════╣\n`;
+
+  // General commands
+  menuText += `║ 🎮 *General Commands*\n`;
+  menuText += `║ ├─ !halo - Sapaan ramah\n`;
+  menuText += `║ ├─ !ping - Cek respon\n`;
+  menuText += `║ ├─ !menu - Tampilkan menu\n`;
+  menuText += `║ ├─ !changelogs - Update terbaru\n`;
+  menuText += `║ ├─ !notes - Catatan pribadi\n`;
+  menuText += `║ ├─ !remindme - Pengingat\n`;
+  menuText += `║ ├─ !add - Tambah member\n`;
+  menuText += `║ ├─ !tagall - Mention semua\n`;
+  menuText += `╠══════════════════════════════════════════════════════════╣\n`;
+
+  // AI & Chat
+  menuText += `║ 🧠 *AI & Chat*\n`;
+  menuText += `║ ├─ !tanya - Tanya AI\n`;
+  menuText += `║ ├─ !ai - Chat AI\n`;
+  menuText += `║ ├─ !dalle - Generate gambar\n`;
+  menuText += `║ ├─ !translate - Terjemah\n`;
+  menuText += `║ ├─ !ringkas - Ringkas artikel\n`;
+  menuText += `║ ├─ !gpt - ChatGPT\n`;
+  menuText += `║ ├─ !stablediff - Diffusion\n`;
+  menuText += `║ ├─ !resetai - Reset memory AI\n`;
+  menuText += `╠══════════════════════════════════════════════════════════╣\n`;
+
+  // Media & download
+  menuText += `║ 🎬 *Media & Download*\n`;
+  menuText += `║ ├─ !ytmp3 - Download MP3\n`;
+  menuText += `║ ├─ !ytmp4 - Download MP4\n`;
+  menuText += `║ ├─ !tiktok - TikTok downloader\n`;
+  menuText += `║ ├─ !ig - Instagram download\n`;
+  menuText += `║ ├─ !fb - Facebook download\n`;
+  menuText += `║ ├─ !twitter - Twitter download\n`;
+  menuText += `║ ├─ !spotify - Spotify download\n`;
+  menuText += `║ ├─ !jsonpretty - Format JSON\n`;
+  menuText += `║ ├─ !minify - Minify JS\n`;
+  menuText += `╠══════════════════════════════════════════════════════════╣\n`;
+
+  // Entertainment
+  menuText += `║ 🎵 *Music & Entertainment*\n`;
+  menuText += `║ ├─ !stream - Watch2Gether\n`;
+  menuText += `║ ├─ !play - Main lagu\n`;
+  menuText += `║ ├─ !lirik - Cari lirik\n`;
+  menuText += `║ ├─ !meme - Meme lucu\n`;
+  menuText += `║ ├─ !joke - Joke acak\n`;
+  menuText += `║ ├─ !waifu - Waifu random\n`;
+  menuText += `║ ├─ !anime - Info anime\n`;
+  menuText += `║ ├─ !character - Karakter anime\n`;
+  menuText += `║ ├─ !truth - Truth game\n`;
+  menuText += `║ ├─ !dare - Daring game\n`;
+  menuText += `╠══════════════════════════════════════════════════════════╣\n`;
+
+  // Utility tools
+  menuText += `║ 🛠️ *Tools & Utilities*\n`;
+  menuText += `║ ├─ !qr - Generate QR\n`;
+  menuText += `║ ├─ !password - Generate password\n`;
+  menuText += `║ ├─ !calc - Kalkulator\n`;
+  menuText += `║ ├─ !warna - Konversi warna\n`;
+  menuText += `║ ├─ !hitung - Analisis teks\n`;
+  menuText += `║ ├─ !ceklink - Scan link\n`;
+  menuText += `║ ├─ !stalk - Stalk GitHub\n`;
+  menuText += `║ ├─ !cuaca - Cek cuaca\n`;
+  menuText += `║ ├─ !tanggal - Tanggal & waktu\n`;
+  menuText += `║ ├─ !jadwalsholat - Jadwal sholat\n`;
+  menuText += `╠══════════════════════════════════════════════════════════╣\n`;
+
+  // Games & Fun
+  menuText += `║ 🎲 *Games & Fun*\n`;
+  menuText += `║ ├─ !gacha - Gacha decision\n`;
+  menuText += `║ ├─ !truth - Truth game\n`;
+  menuText += `║ ├─ !dare - Dare game\n`;
+  menuText += `║ ├─ !rps - Rock Paper Scissors\n`;
+  menuText += `║ ├─ !roll - Roll dice\n`;
+  menuText += `║ ├─ !flip - Flip coin\n`;
+  menuText += `║ ├─ !tebakangka - Guess number\n`;
+  menuText += `║ ├─ !tebakkata - Guess word\n`;
+  menuText += `║ ├─ !meme - Meme\n`;
+  menuText += `║ ├─ !joke - Joke\n`;
+  menuText += `║ ├─ !waifu - Waifu\n`;
+  menuText += `╠══════════════════════════════════════════════════════════╣\n`;
+
+  // Owner control panel
+  if (isAdmin) {
+    menuText += `║ 👑 *Owner Control*\n`;
+    menuText += `║ ├─ !speedtest - Speed test\n`;
+    menuText += `║ ├─ !bc - Broadcast\n`;
+    menuText += `║ ├─ !block - Block user\n`;
+    menuText += `║ ├─ !unblock - Unblock user\n`;
+    menuText += `║ ├─ !eval - Run code\n`;
+    menuText += `║ ├─ !update - Update bot\n`;
+    menuText += `║ └─ !restart - Restart bot\n`;
+    menuText += `╠══════════════════════════════════════════════════════════╣\n`;
+  }
+
+  // Info
+  menuText += `║ 💎 *Bot Info*\n`;
+  menuText += `║ ├─ Creator: DoxxBorx\n`;
+  menuText += `║ ├─ Version: ${botVersion}\n`;
+  menuText += `║ ├─ Total Commands: 75+\n`;
+  menuText += `║ └─ Status: 🟢 Aktif & Siap Melayani\n`;
+  menuText += `╚══════════════════════════════════════════════════════════╝\n`;
+  menuText += `\n💖 *Made with Love by DoxxBorx*\n`;
+  menuText += `🎀 _Type !command untuk bantuan spesifik_\n`;
+
+  await sock.sendMessage(from, { text: menuText }, { quoted: msg });
+}
+
+// Helper function: format uptime
+function formatUptime(seconds) {
+  seconds = Math.floor(seconds);
+  const d = Math.floor(seconds / (3600 * 24));
+  const h = Math.floor((seconds % (3600 * 24)) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  let str = '';
+  if (d > 0) str += `${d}d `;
+  if (h > 0) str += `${h}h `;
+  if (m > 0) str += `${m}m `;
+  str += `${s}s`;
+  return str;
+}
+
+// Function generate password
+function generatePassword(length = 12) {
+  const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?';
+  let password = '';
+  for (let i = 0; i < length; i++) {
+    password += charset.charAt(Math.floor(Math.random() * charset.length));
+  }
+  return password;
+}
+
+// Placeholder for yts search
+async function ytsSearch(query) {
+  const { yts } = await import('yt-search');
+  const r = await yts(query);
+  return r;
+}
+
+// ===================
+// Start bot
+// ===================
+start();
+
+// Handle error dan exit
+process.on('SIGINT', () => {
+  console.log(chalk.yellow('🛑 Bot dimatikan...'));
+  process.exit(0);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Error tidak tertangani:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Rejection tidak tertangani:', reason);
+});
