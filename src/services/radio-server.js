@@ -345,6 +345,10 @@ export function startRadioServer() {
 
     mountAdminApi(app);
 
+    app.get('/', (req, res) => {
+        res.redirect(302, '/admin');
+    });
+
     app.get('/health', (req, res) => {
         res.json({
             ok: true,
