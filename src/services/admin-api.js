@@ -4,7 +4,14 @@ import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import os from 'os';
 import express from 'express';
-import { radio, skipRadioTrack, clearRadioQueue, getRadioListenUrl } from './radio-server.js';
+import {
+    radio,
+    skipRadioTrack,
+    clearRadioQueue,
+    getRadioListenUrl,
+    getRadioPlayback,
+    getRadioStreamEpoch
+} from './radio-server.js';
 import { getDiscordDiagnostics } from './discord-radio.js';
 import { BOT_NAME, PM2_APP_NAME, startTime } from '../config.js';
 import { state } from '../state.js';
@@ -80,7 +87,10 @@ function buildStatusPayload() {
             queue: radio.queue,
             queueLength: radio.queue.length,
             isPreparing: radio.isPreparing,
-            listenUrl: getRadioListenUrl()
+            listenUrl: getRadioListenUrl(),
+            streamPath: '/radio/live.mp3',
+            playback: getRadioPlayback(),
+            streamEpoch: getRadioStreamEpoch()
         },
         discord: {
             guildCount: discord.guildCount,
@@ -119,7 +129,7 @@ export function mountAdminApi(app) {
 
     app.post('/admin/api/clear', (req, res) => {
         clearRadioQueue();
-        res.json({ ok: true, message: 'Antrian dikosongkan.' });
+        res.json({ ok: true, message: 'Antrian dikosongkan.', streamEpoch: getRadioStreamEpoch() });
     });
 
     app.post('/admin/api/restart', (req, res) => {
