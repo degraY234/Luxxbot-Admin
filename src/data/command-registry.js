@@ -45,13 +45,13 @@ export const COMMAND_HELP = {
     aboutlux: {
         title: 'About LuxxBot',
         usage: '!aboutlux',
-        desc: 'Kartu profil bot & pembuat DoxxBorx.',
+        desc: 'Profil lengkap LuxxBot, semua fitur, & info pembuat DoxxBorx.',
         example: '!aboutlux'
     },
     cuaca: {
         title: 'Cuaca',
         usage: '!cuaca <kota>',
-        desc: 'Info cuaca lengkap (multi pesan).',
+        desc: 'Laporan cuaca lengkap: realtime, per jam, 7 hari, UV, dan tips praktis.',
         example: '!cuaca Makassar'
     },
     changelogs: {
@@ -113,6 +113,12 @@ export const COMMAND_HELP = {
         usage: '!buat <prompt>',
         desc: 'Generate gambar dari teks.',
         example: '!buat kucing astronaut lucu'
+    },
+    db: {
+        title: 'Generator Database',
+        usage: '!db <deskripsi proyek>',
+        desc: 'Skema database lengkap: tabel, SQL, relasi, contoh API & penjelasan setup.',
+        example: '!db perpustakaan lengkap dengan peminjaman buku'
     }
 };
 

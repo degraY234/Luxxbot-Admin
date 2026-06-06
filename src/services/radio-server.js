@@ -5,6 +5,8 @@ import ffmpeg from 'fluent-ffmpeg';
 import { downloadYoutubeToMp3 } from '../utils/ytdlp-download.js';
 import { enrichTrackMeta, formatDurationSec } from '../utils/youtube-meta.js';
 import { mountAdminApi } from './admin-api.js';
+import { mountWatchServer } from './watch-server.js';
+import { mountPortfolioServer } from './portfolio-server.js';
 
 const RADIO_PORT = Number(process.env.RADIO_PORT || 3920);
 const RADIO_DIR = './temp/radio';
@@ -344,6 +346,8 @@ export function startRadioServer() {
     app.use(express.json());
 
     mountAdminApi(app);
+    mountWatchServer(app);
+    mountPortfolioServer(app);
 
     app.get('/', (req, res) => {
         res.redirect(302, '/admin');

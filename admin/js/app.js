@@ -208,6 +208,23 @@ function renderStatus(d) {
     Slash: ${disc.slashReady ? '✅' : '⏳'}
     ${disc.inviteUrl ? `<br><a href="${disc.inviteUrl}" target="_blank" rel="noopener" style="color:var(--pink3)">Invite →</a>` : ''}`;
 
+  const w = d.watch || {};
+  const watchBase = cfg().base || '';
+  const watchUrl = w.watchUrl || `${watchBase}/watch`;
+  $('#watch-open-link').href = watchUrl;
+  const pb = w.playback || {};
+  const elapsed = typeof pb.now === 'number'
+    ? pb.now
+    : (pb.position || 0) + (pb.playing ? (Date.now() - (pb.updatedAt || Date.now())) / 1000 : 0);
+  const mins = Math.floor(elapsed / 60);
+  const secs = Math.floor(elapsed % 60).toString().padStart(2, '0');
+  $('#watch-box').innerHTML = `
+    Penonton: <strong>${w.viewerCount || 0}</strong><br>
+    Film: ${w.film ? `<strong>${w.film.title}</strong>` : '—'}<br>
+    Playback: ${w.film ? `${pb.playing ? '▶' : '⏸'} ${mins}:${secs}${pb.by ? ` · ${pb.by}` : ''}` : '—'}<br>
+    Antrian: ${(w.queue || []).length} film<br>
+    <span class="muted">User pakai !watch → login username saja</span>`;
+
   const r = d.radio || {};
   renderPlayer(r, cfg().base);
 
@@ -310,6 +327,29 @@ $('#btn-restart').addEventListener('click', async () => {
   if (!confirm('Restart bot?')) return;
   try { await api('/restart', 'POST'); showToast('Restart diminta'); }
   catch (e) { showToast(e.message); }
+});
+$('#btn-watch-skip').addEventListener('click', async () => {
+  try {
+    const r = await api('/watch/skip', 'POST');
+    showToast(r.ok ? 'Skip watch OK' : (r.error || 'Gagal'));
+    await refresh();
+  } catch (e) { showToast(e.message); }
+});
+$('#btn-watch-stop').addEventListener('click', async () => {
+  if (!confirm('Hentikan film yang sedang diputar?')) return;
+  try {
+    await api('/watch/stop', 'POST');
+    showToast('Pemutaran dihentikan');
+    await refresh();
+  } catch (e) { showToast(e.message); }
+});
+$('#btn-watch-clear-q').addEventListener('click', async () => {
+  if (!confirm('Kosongkan antrian watch?')) return;
+  try {
+    await api('/watch/clear-queue', 'POST');
+    showToast('Antrian watch dikosongkan');
+    await refresh();
+  } catch (e) { showToast(e.message); }
 });
 
 const savedBase = localStorage.getItem('luxx_api_base');

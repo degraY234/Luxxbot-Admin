@@ -86,7 +86,7 @@ async function fetchFromSportsDb() {
     if (!merged.length) throw new Error('TheSportsDB kosong');
 
     let text = '⚽ *JADWAL SEPAK BOLA*\n';
-    text += `_Hari ini & besok (WIB) · sumber TheSportsDB_\n\n`;
+    text += `_Hari ini & besok (WIB)_\n\n`;
 
     const todayList = merged.filter((e) => e.dateEvent === today).slice(0, 8);
     const tomorrowList = merged.filter((e) => e.dateEvent === tomorrow).slice(0, 6);
@@ -174,7 +174,7 @@ async function fetchFromFootballData(apiKey) {
     if (!matches.length) throw new Error('football-data kosong');
 
     let text = '⚽ *JADWAL SEPAK BOLA*\n';
-    text += `_Sumber football-data.org_\n\n`;
+    text += '\n';
 
     matches.forEach((match) => {
         const date = formatMatchTime(match.utcDate);
@@ -217,6 +217,6 @@ export async function fetchFootballSchedule(query = '') {
         return { text: await fetchFromSportsDb(), source: 'TheSportsDB' };
     } catch (e) {
         console.log('TheSportsDB football skip:', e.message);
-        throw new Error('Semua sumber jadwal bola gagal. Coba lagi beberapa menit.');
+        throw new Error('Gagal ambil jadwal bola. Coba lagi beberapa menit.');
     }
 }

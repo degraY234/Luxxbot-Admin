@@ -1,12 +1,27 @@
 import axios from 'axios';
-import { ai, openai, BOT_NAME, getGroqApiKey } from '../config.js';
+import { ai, openai, BOT_NAME, getGroqApiKey, GEMINI_TEXT_MODELS } from '../config.js';
 import { aiQueue, state } from '../state.js';
 import { getUserContext, addToContext } from '../utils/cooldown.js';
 import { askGrok, grokChat } from './xai.js';
+import { ABOUT_META } from '../commands/aboutlux.js';
+import { buildPersonaSystem, getAITemperature } from './ai-persona.js';
+import { wrapQueryWithMeta } from './ai-context.js';
 
-export function runAIQueue(text, type, isAdmin, fromId) {
+const CREATOR_REPLY =
+    `👑 *${ABOUT_META.creator}* — ${ABOUT_META.education.toLowerCase()}, arsitek di balik ${BOT_NAME}.\n\n` +
+    `Satu orang, banyak fitur. Detail lengkap? \`!aboutlux\` 🌸`;
+
+const CREATOR_QUESTION_RE =
+    /siapa\s+(yang\s+)?(buat|membuat|bikin|develop|menciptakan|punya|own)|pembuat(nya)?|creator|developer|owner\s+bot|who\s+(made|created|built|owns)|doxxborx|luxxbot\s+dibuat|bot\s+ini\s+(buat|dibuat)/i;
+
+export function tryCreatorReply(query) {
+    if (!query || !CREATOR_QUESTION_RE.test(query)) return null;
+    return CREATOR_REPLY;
+}
+
+export function runAIQueue(text, type, isAdmin, fromId, meta = null) {
     return new Promise((resolve, reject) => {
-        aiQueue.push({ text, type, isAdmin, fromId, resolve, reject });
+        aiQueue.push({ text, type, isAdmin, fromId, meta, resolve, reject });
         processQueue();
     });
 }
@@ -17,9 +32,9 @@ async function processQueue() {
     while (aiQueue.length > 0) {
         const job = aiQueue.shift();
         try {
-            const res = await tanyakanAI(job.text, job.type, job.isAdmin, job.fromId);
+            const res = await tanyakanAI(job.text, job.type, job.isAdmin, job.fromId, job.meta);
             job.resolve(res);
-            await new Promise(r => setTimeout(r, 2000));
+            await new Promise((r) => setTimeout(r, 2000));
         } catch (e) {
             job.reject(e);
         }
@@ -27,7 +42,7 @@ async function processQueue() {
     state.isProcessingQueue = false;
 }
 
-async function askGroqCom(prompt, system) {
+async function askGroqCom(prompt, system, temperature = 0.85) {
     const apiKey = getGroqApiKey();
     if (!apiKey) return null;
 
@@ -40,8 +55,8 @@ async function askGroqCom(prompt, system) {
                     { role: 'system', content: system },
                     { role: 'user', content: prompt }
                 ],
-                temperature: 0.9,
-                max_tokens: 1000
+                temperature,
+                max_tokens: 1200
             },
             {
                 headers: {
@@ -61,64 +76,107 @@ async function askGroqCom(prompt, system) {
 export async function groqAI(prompt) {
     const grok = await grokChat(prompt);
     if (grok) return grok;
-    return await askGroqCom(prompt, `Kamu asisten ${BOT_NAME}. Jawab Bahasa Indonesia.`);
+    return await askGroqCom(prompt, `Kamu ${BOT_NAME}, asisten santai Bahasa Indonesia.`);
 }
 
-async function askOpenAI(text, system) {
-    const res = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: text }
-        ]
-    });
-    return res.choices[0].message.content;
+async function askOpenAI(text, system, temperature = 0.85) {
+    if (!process.env.OPENAI_API_KEY) return null;
+    try {
+        const res = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: [
+                { role: 'system', content: system },
+                { role: 'user', content: text }
+            ],
+            temperature,
+            max_tokens: 1200
+        });
+        return res.choices[0].message.content;
+    } catch (err) {
+        console.log('OpenAI skip:', err?.status || err?.message || err);
+        return null;
+    }
 }
 
-export async function tanyakanAI(query, type = 'tanya', isAdmin = false, fromId = 'global') {
+function geminiErrorStatus(err) {
+    return err?.status || err?.error?.code || err?.cause?.status;
+}
+
+async function askGemini(contentsPayload, systemInstruction, temperature, models = GEMINI_TEXT_MODELS) {
+    for (const model of models) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                const res = await ai.models.generateContent({
+                    model,
+                    contents: contentsPayload,
+                    config: { systemInstruction, temperature }
+                });
+                const text = res?.text?.trim();
+                if (text) return text;
+            } catch (e) {
+                const status = geminiErrorStatus(e);
+                console.log(`Gemini ${model} skip:`, status || e?.message || e);
+                if (status === 401 || status === 403) return null;
+                if (status === 429 && attempt === 0) {
+                    await new Promise((r) => setTimeout(r, 3500));
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+    return null;
+}
+
+export async function tanyakanAI(query, type = 'tanya', isAdmin = false, fromId = 'global', meta = null) {
+    const creatorReply = tryCreatorReply(query);
+    if (creatorReply) return creatorReply;
+
+    const wrappedQuery = wrapQueryWithMeta(query, meta);
     const context = getUserContext(fromId);
-    let contentsPayload = query;
+    let contentsPayload = wrappedQuery;
+    const temperature = getAITemperature(type);
+    const systemInstruction = buildPersonaSystem(type, meta);
 
     if (type === 'chat_context') {
-        context.push({ role: 'user', text: query });
-        contentsPayload = context.map(c => ({
+        context.push({ role: 'user', text: wrappedQuery });
+        contentsPayload = context.map((c) => ({
             role: c.role === 'user' ? 'user' : 'model',
             parts: [{ text: c.text }]
         }));
     }
 
-    const models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
-    const systemInstruction = `Anda adalah AI santai, lucu, tapi pintar bernama ${BOT_NAME}. Jawab dalam Bahasa Indonesia.`;
+    const geminiText = await askGemini(contentsPayload, systemInstruction, temperature);
+    if (geminiText) {
+        addToContext(fromId, 'user', wrappedQuery);
+        addToContext(fromId, 'model', geminiText);
+        return geminiText;
+    }
 
-    for (const model of models) {
-        try {
-            const res = await ai.models.generateContent({
-                model,
-                contents: contentsPayload,
-                config: { systemInstruction, temperature: 0.7 }
-            });
-            addToContext(fromId, 'user', query);
-            addToContext(fromId, 'model', res.text);
-            return res.text;
-        } catch (e) {
-            if (e.status === 429 || e.status === 503) break;
-        }
+    const groqFirst = await askGroqCom(wrappedQuery, systemInstruction, temperature);
+    if (groqFirst?.trim()) {
+        addToContext(fromId, 'user', wrappedQuery);
+        addToContext(fromId, 'model', groqFirst);
+        return groqFirst;
     }
 
     try {
-        const grok = await askGrok(query, systemInstruction);
-        addToContext(fromId, 'user', query);
-        addToContext(fromId, 'model', grok);
-        return grok;
+        const grok = await askGrok(wrappedQuery, systemInstruction, { temperature });
+        if (grok?.trim()) {
+            addToContext(fromId, 'user', wrappedQuery);
+            addToContext(fromId, 'model', grok);
+            return grok;
+        }
     } catch (e1) {
         console.log('Grok fallback skip:', e1?.message || e1);
     }
 
-    try {
-        return await askOpenAI(query, systemInstruction);
-    } catch (e2) {
-        const groq = await askGroqCom(query, systemInstruction);
-        if (groq) return groq;
-        return '❌ Semua AI lagi tumbang, coba lagi nanti.\n_Tip: cek kredit Grok di console.x.ai atau API key Gemini/OpenAI._';
+    const oai = await askOpenAI(wrappedQuery, systemInstruction, temperature);
+    if (oai?.trim()) {
+        addToContext(fromId, 'user', wrappedQuery);
+        addToContext(fromId, 'model', oai);
+        return oai;
     }
+
+    return '❌ AI lagi penuh / limit habis. Coba lagi nanti atau hubungi owner buat isi ulang kuota.';
 }

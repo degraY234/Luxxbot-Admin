@@ -1,4 +1,6 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+
+dotenv.config({ override: true });
 import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
 import ffmpeg from 'fluent-ffmpeg';
@@ -12,8 +14,17 @@ export const OWNER_NUMBER = ['6282384961407', '36326967632006'];
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 export const W2G_API_KEY = process.env.STREAM_TOKEN;
 export const W2G_ROOM_FILE = './w2g_room.json';
-export const MAX_MEMORY = 12;
+export const MAX_MEMORY = 18;
 export const bratStyles = ['cute', 'dark', 'neon', 'anime', 'glitch', 'minimal'];
+
+/** Model teks — urutan prioritas (lite dulu, kuota free tier masih ada) */
+export const GEMINI_TEXT_MODELS = [
+    'gemini-2.5-flash-lite',
+    'gemini-2.0-flash-lite'
+];
+
+/** Model vision (OCR, !lihat) — sama lite biar hemat kuota */
+export const GEMINI_VISION_MODEL = 'gemini-2.5-flash-lite';
 
 export const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 export const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });

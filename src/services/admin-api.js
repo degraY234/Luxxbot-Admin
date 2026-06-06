@@ -12,6 +12,12 @@ import {
     getRadioPlayback,
     getRadioStreamEpoch
 } from './radio-server.js';
+import {
+    getWatchRoomState,
+    adminWatchSkip,
+    adminWatchStop,
+    adminWatchClearQueue
+} from './watch-server.js';
 import { getDiscordDiagnostics } from './discord-radio.js';
 import { BOT_NAME, PM2_APP_NAME, startTime } from '../config.js';
 import { state } from '../state.js';
@@ -98,7 +104,8 @@ function buildStatusPayload() {
             voiceChannel: discord.voiceChannel,
             slashReady: discord.slashReady,
             inviteUrl: discord.inviteUrl
-        }
+        },
+        watch: getWatchRoomState()
     };
 }
 
@@ -130,6 +137,21 @@ export function mountAdminApi(app) {
     app.post('/admin/api/clear', (req, res) => {
         clearRadioQueue();
         res.json({ ok: true, message: 'Antrian dikosongkan.', streamEpoch: getRadioStreamEpoch() });
+    });
+
+    app.post('/admin/api/watch/skip', async (req, res) => {
+        const result = await adminWatchSkip();
+        res.json({ ...result, room: getWatchRoomState() });
+    });
+
+    app.post('/admin/api/watch/stop', (req, res) => {
+        const result = adminWatchStop();
+        res.json({ ...result, room: getWatchRoomState() });
+    });
+
+    app.post('/admin/api/watch/clear-queue', (req, res) => {
+        const result = adminWatchClearQueue();
+        res.json({ ...result, room: getWatchRoomState() });
     });
 
     app.post('/admin/api/restart', (req, res) => {

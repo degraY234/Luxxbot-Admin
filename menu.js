@@ -80,6 +80,7 @@ function buildMenuText(isSelfMode, isSleeping, antiLink, isAdmin, botUptime) {
     m += section('🧠 *AI & CHAT*');
     m += item('!tanya', 'Tanya AI', '🤖');
     m += item('!coding', 'Bantuan coding', '💻');
+    m += item('!db', 'Generator database + SQL + API', '🗄️');
     m += item('!code', 'Review kode', '🔍');
     m += item('!rangkum', 'Ringkas teks', '📑');
     m += item('!brainstorm', 'Ide kreatif', '💡');
@@ -98,7 +99,7 @@ function buildMenuText(isSelfMode, isSleeping, antiLink, isAdmin, botUptime) {
     m += item('!queue', 'Antrian lagu', '📋');
     m += item('!skip', 'Lagu berikutnya', '⏭️');
     m += item('!lirik', 'Lirik lagu', '📝');
-    m += lastItem('!stream', 'Nonton bareng W2G', '🎬');
+    m += lastItem('!watch', 'Nonton bareng (Luxx TV)', '📺');
 
     m += section('🎌 *HIBURAN*');
     m += item('!simi', 'Chat Simi', '🤖');

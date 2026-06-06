@@ -1,39 +1,11 @@
-name: Deploy Admin to GitHub Pages
+# Diganti oleh deploy-github-pages.yml (portfolio + admin)
+name: Deploy Admin (deprecated)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'admin/**'
-      - '.github/workflows/deploy-admin-pages.yml'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
-
 jobs:
-  deploy:
+  notice:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload admin panel
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: admin
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - run: echo "Deploy sekarang via .github/workflows/deploy-github-pages.yml"

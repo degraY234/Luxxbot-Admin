@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#080810" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <script>
+    (function () {
+      var base = '/watch/';
+      var el = document.createElement('base');
+      el.href = base;
+      document.head.appendChild(el);
+    })();
+  </script>
+  <title>Luxx Watch — Nonton Bareng</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="bg-layer">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <div id="login-screen" class="screen login-screen">
+    <div class="card login-card">
+      <div class="login-logo">📺</div>
+      <h1 class="login-title">L U X X W A T C H</h1>
+      <p class="login-sub">Ruang Nonton Bareng</p>
+      <p class="muted login-desc">Masuk pakai username — nonton film LK21 bareng</p>
+
+      <div class="field">
+        <label for="username">Username / Nick</label>
+        <input id="username" type="text" maxlength="20" placeholder="Contoh: DoxxBorx" autocomplete="username" />
+        <span class="field-hint">Min. 2 karakter. Dipakai untuk chat & daftar penonton.</span>
+      </div>
+
+      <button id="btn-join" class="btn primary" type="button">Masuk Ruang TV</button>
+
+      <div class="login-features">
+        <p class="features-title">Yang bisa kamu lakukan:</p>
+        <ul>
+          <li>🎬 Katalog LK21 lengkap — terbaru sampai terlama</li>
+          <li>💬 Chat live bareng penonton</li>
+          <li>🎙️ Voice chat browser</li>
+          <li>🎧 Masuk server Discord DoxxBorx</li>
+        </ul>
+      </div>
+
+      <p id="login-error" class="login-error hidden"></p>
+    </div>
+  </div>
+
+  <div id="app-screen" class="screen hidden">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <span class="topbar-icon">📺</span>
+        <div>
+          <strong>Luxx Watch</strong>
+          <small class="muted" id="user-pill">—</small>
+        </div>
+        <span id="conn-badge" class="badge online">live</span>
+      </div>
+      <div class="top-actions">
+        <span id="viewer-badge" class="pill">👥 0</span>
+        <button id="btn-voice" class="btn ghost" type="button" aria-label="Voice">🎙️</button>
+        <a id="btn-discord" class="btn discord-btn" href="#" target="_blank" rel="noopener noreferrer">Discord</a>
+        <button id="btn-leave" class="btn ghost" type="button">Keluar</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="card player-card">
+        <div class="player-head">
+          <h2>Live Player</h2>
+          <div class="player-tools">
+            <button id="btn-fullscreen" class="btn ghost" type="button" title="Layar penuh">⛶</button>
+            <button id="btn-skip" class="btn ghost" type="button">⏭️ Skip</button>
+          </div>
+        </div>
+        <div id="player-shell" class="player-frame">
+          <iframe id="player" class="hidden" title="Player" allowfullscreen referrerpolicy="no-referrer-when-downgrade" allow="autoplay; encrypted-media; picture-in-picture; fullscreen"></iframe>
+          <video id="player-video" class="hidden" controls playsinline webkit-playsinline></video>
+          <div id="player-empty" class="player-empty">
+            <span>🍿</span>
+            <p>Belum ada film diputar</p>
+            <small class="muted">Pilih film terbaru atau cari di bawah</small>
+          </div>
+        </div>
+        <div class="now-bar">
+          <img id="now-poster" class="now-poster hidden" alt="" />
+          <div class="now-info">
+            <p id="now-title" class="now-title">Belum ada film</p>
+            <p id="now-meta" class="muted">—</p>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-panel">
+        <section class="card chat-card">
+          <div class="chat-header">
+            <div>
+              <h2>💬 Chat Live</h2>
+              <p class="chat-sub muted">Obrolan penonton di ruang ini</p>
+            </div>
+            <span id="chat-count" class="mini-badge">0 pesan</span>
+          </div>
+          <div class="chat-panel">
+            <div id="chat-list" class="chat-feed">
+              <div class="chat-empty">
+                <span class="chat-empty-icon">💬</span>
+                <p>Belum ada pesan</p>
+                <small class="muted">Sapa penonton lain di bawah!</small>
+              </div>
+            </div>
+          </div>
+          <div class="chat-compose">
+            <label class="sr-only" for="chat-input">Pesan chat</label>
+            <input id="chat-input" type="text" maxlength="500" placeholder="Tulis pesan kamu..." enterkeyhint="send" />
+            <button id="btn-chat" class="btn primary chat-send" type="button" aria-label="Kirim pesan">➤</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>👥 Penonton</h2>
+          <ul id="viewers-list" class="viewers-list">
+            <li class="muted">Memuat...</li>
+          </ul>
+        </section>
+
+        <section class="card">
+          <h2>📋 Antrian</h2>
+          <ul id="queue-list" class="queue-list">
+            <li class="muted">Belum ada antrian</li>
+          </ul>
+        </section>
+      </aside>
+
+      <section class="card span-full catalog-card">
+        <div class="section-head">
+          <h2>🎬 Katalog LK21</h2>
+          <button id="btn-latest" class="btn ghost" type="button">🔥 Terbaru</button>
+        </div>
+        <div class="search-row">
+          <input id="search-input" type="search" placeholder="Cari judul film..." enterkeyhint="search" />
+          <button id="btn-search" class="btn" type="button">Cari</button>
+        </div>
+        <div class="genre-wrap">
+          <p class="genre-label">Genre LK21</p>
+          <div id="genre-chips" class="genre-chips">
+            <button type="button" class="genre-chip active" data-genre="">🔥 Terbaru</button>
+          </div>
+        </div>
+        <div class="catalog-toolbar">
+          <p id="catalog-label" class="catalog-label muted">Film terbaru</p>
+          <div class="catalog-controls">
+            <div class="sort-toggle" role="group" aria-label="Urutan film">
+              <button type="button" id="btn-sort-newest" class="sort-btn active">🔥 Terbaru</button>
+              <button type="button" id="btn-sort-oldest" class="sort-btn">📼 Terlama</button>
+            </div>
+            <div class="page-nav">
+              <button type="button" id="btn-prev-page" class="btn ghost" disabled>◀</button>
+              <span id="page-indicator" class="page-indicator">Hal 1</span>
+              <button type="button" id="btn-next-page" class="btn ghost">▶</button>
+            </div>
+          </div>
+        </div>
+        <div id="catalog" class="catalog">
+          <p class="muted catalog-empty">Memuat film terbaru...</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer muted">Luxx Watch · Nonton bareng LuxxBot · Made by DoxxBorx</footer>
+  </div>
+
+  <div id="voice-panel" class="voice-panel hidden">
+    <div class="voice-inner card">
+      <div class="section-head">
+        <h3>🎙️ Voice Room</h3>
+        <button id="btn-voice-close" class="btn ghost" type="button">✕</button>
+      </div>
+      <p class="muted">Izinkan mikrofon untuk ngobrol bareng. Bisa dengar tanpa mic juga.</p>
+      <ul id="voice-users" class="voice-users">
+        <li class="muted">Belum ada yang pakai voice</li>
+      </ul>
+      <div class="voice-actions">
+        <button id="btn-mic-on" class="btn primary" type="button">🎤 Nyalakan Mic</button>
+        <button id="btn-mic-off" class="btn hidden" type="button">🔇 Matikan Mic</button>
+      </div>
+      <p id="voice-status" class="voice-status muted">Voice belum aktif</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="js/app.js"></script>
+</body>
+</html>

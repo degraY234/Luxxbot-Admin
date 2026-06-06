@@ -253,7 +253,7 @@ export async function polishText(text, timeoutMs = 4000) {
     try {
         const result = await Promise.race([
             ai.models.generateContent({
-                model: 'gemini-1.5-flash',
+                model: 'gemini-2.5-flash-lite',
                 contents: `Perbaiki teks ini jadi aesthetic, pendek, keren untuk sticker (max 40 karakter):\n"${text}"`
             }),
             new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs))

@@ -7,22 +7,22 @@ import * as cheerio from 'cheerio';
 import { minify } from 'terser';
 import { Sticker, StickerTypes } from 'wa-sticker-formatter';
 import { buildMenuText } from '../../menu.js';
-import { BOT_NAME, OWNER_NUMBER, PM2_APP_NAME, ai, GEMINI_API_KEY, startTime, W2G_ROOM_FILE, bratStyles } from '../config.js';
-import { state, aiConversationMemory } from '../state.js';
+import { BOT_NAME, OWNER_NUMBER, PM2_APP_NAME, ai, GEMINI_API_KEY, GEMINI_VISION_MODEL, startTime, W2G_ROOM_FILE, bratStyles } from '../config.js';
+import { state, aiConversationMemory, userAIContext } from '../state.js';
 import { checkCooldown } from '../utils/cooldown.js';
 import { runtime } from '../utils/runtime.js';
 import { getOrCreateRoom, createW2GRoom } from '../services/w2g.js';
 import { addTrackToRadio } from '../services/radio-server.js';
 import { getWeatherMessages } from '../services/weather.js';
 import { buildChangelogText } from '../services/changelog.js';
-import { runAIQueue, groqAI, tanyakanAI } from '../services/ai.js';
+import { groqAI, tanyakanAI, tryCreatorReply } from '../services/ai.js';
+import { askLuxxAI } from '../services/ai-context.js';
 import { generateFallbackImage, polishText } from '../services/media.js';
 import { generateBuatImage } from '../services/buat-image.js';
 import { fetchFootballSchedule } from '../services/football.js';
 import {
     handlePlayCommand,
     handleRadioCommand,
-    handleStreamCommand,
     handleQueueCommand,
     handleSkipCommand,
     handleStopCommand,
@@ -39,6 +39,9 @@ import { handleQuotesAnimeCommand } from '../commands/quotes-anime.js';
 import { handleDarkJokesCommand } from '../commands/darkjokes.js';
 import { handleAboutLuxCommand } from '../commands/aboutlux.js';
 import { handleNowPlayingCommand, handleDiscordCommand } from '../commands/discord-cmd.js';
+import { handleWatchCommand } from '../commands/watch.js';
+import { handleJoinCommand } from '../commands/join.js';
+import { handleDbCommand } from '../commands/db.js';
 
 export function registerMessageHandler(sock) {
     sock.ev.on('messages.upsert', async (chatUpdate) => {
@@ -69,14 +72,16 @@ export function registerMessageHandler(sock) {
                 args = parts.slice(1);
             }
 
-            const playPickMatch = text.match(/^!?(\d{1,2})\s*\.?\s*$/);
-            const isPlayPick = Boolean(global.playSession?.[from] && playPickMatch);
+            const playPickMatch = text.match(/^(?:!)?(\d{1,2})(?:[.,)\s]|$)/);
+            const playSession = global.playSession?.[from];
+            const playSessionFresh = playSession && (Date.now() - (playSession.at || 0) < 5 * 60 * 1000);
+            const isPlayPick = Boolean(playSessionFresh && playPickMatch);
 
             // =======================================================
             // 📥 PILIHAN LAGU !play → antrian RADIO (tanpa tunggu download)
             // =======================================================
             if (isPlayPick) {
-                const session = global.playSession[from];
+                const session = playSession;
                 const selectedIndex = parseInt(playPickMatch[1], 10) - 1;
                 if (selectedIndex >= 0 && selectedIndex < session.tracks.length) {
                     const chosenTrack = session.tracks[selectedIndex];
@@ -106,6 +111,14 @@ export function registerMessageHandler(sock) {
                     }
                     return;
                 }
+                await sock.sendMessage(from, {
+                    text: `❌ Pilih angka 1–${session.tracks.length} dari daftar !play terakhir.`
+                }, { quoted: msg });
+                return;
+            }
+
+            if (playSession && !playSessionFresh) {
+                delete global.playSession[from];
             }
 
             // Global cooldown anti-spam (kecuali pilihan angka !play)
@@ -471,7 +484,7 @@ export function registerMessageHandler(sock) {
                     const level = Math.floor(Math.random() * 100) + 1;
                     await sock.sendMessage(from, {
                         image: { url: waifu.url },
-                        caption: `╭━━━〔 💖 WAIFU OF THE DAY 💖 〕━━━\n\n🌸 Status : Waifu berhasil ditemukan\n💕 Cute Level : ${level}%\n✨ Quality : Ultra HD\n🎀 Source : Nekos.best\n\n━━━━━━━━━━━━━━━━━━`
+                        caption: `╭━━━〔 💖 WAIFU OF THE DAY 💖 〕━━━\n\n🌸 Status : Waifu berhasil ditemukan\n💕 Cute Level : ${level}%\n✨ Quality : Ultra HD\n\n━━━━━━━━━━━━━━━━━━`
                     }, { quoted: msg });
                 } catch (err) {
                     await sock.sendMessage(from, { text: '❌ Gagal mengambil waifu.' }, { quoted: msg });
@@ -524,8 +537,8 @@ export function registerMessageHandler(sock) {
                 return await handleDiscordCommand({ sock, from, msg });
             }
 
-            if (command === 'stream' || command === 'st' || command === 'nonton') {
-                return await handleStreamCommand({ sock, from, msg, getOrCreateRoom });
+            if (command === 'watch' || command === 'stream' || command === 'st' || command === 'nonton') {
+                return await handleWatchCommand({ sock, from, msg });
             }
 
             if (command === 'queue') {
@@ -547,6 +560,15 @@ export function registerMessageHandler(sock) {
             if (command === 'simi') {
                 const simiText = args.join(' ');
                 if (!simiText) return await sock.sendMessage(from, { text: '⚠️ Format: `!simi pertanyaan_kamu`' }, { quoted: msg });
+                const simiCreator = tryCreatorReply(simiText);
+                if (simiCreator) {
+                    return await sock.sendMessage(from, { text: `🤖 *Simi:*\n\n${simiCreator}` }, { quoted: msg });
+                }
+                const simiDeep = /bot|wabot|luxx|banding|lebih bagus|fitur|menurutmu|menurut mu|siapa yang/i.test(simiText);
+                if (simiDeep) {
+                    const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, simiText, 'chat_context');
+                    return await sock.sendMessage(from, { text: `🤖 *LuxxBot:*\n\n${res}` }, { quoted: msg });
+                }
                 try {
                     const res = await axios.get(`https://api.simsimi.vn/requestapi`, {
                         params: { text: simiText, lc: 'id' }, timeout: 5000
@@ -670,7 +692,7 @@ export function registerMessageHandler(sock) {
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
                     const response = await ai.models.generateContent({
-                        model: 'gemini-2.5-flash',
+                        model: GEMINI_VISION_MODEL,
                         contents: [{ parts: [{ inlineData: { mimeType: 'image/jpeg', data: buffer.toString('base64') } }, { text: captionPrompt }] }]
                     });
                     await sock.sendMessage(from, { text: `👁️ *HASIL PENGLIHATANKU:* ✨\n\n${response.text}` }, { quoted: msg });
@@ -682,84 +704,84 @@ export function registerMessageHandler(sock) {
             if (command === 'tanya') {
                 const query = args.join(' ');
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Mau nanya apa? Ketik pertanyaannya! 🤓✨' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const res = await runAIQueue(query, 'tanya', isAdmin, from);
-                await sock.sendMessage(from, { text: res }, { quoted: msg });
+                try {
+                    const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'tanya');
+                    await sock.sendMessage(from, { text: res || '❌ AI tidak merespons. Coba lagi.' }, { quoted: msg });
+                } catch (e) {
+                    console.error('TANYA ERROR:', e?.message || e);
+                    await sock.sendMessage(from, { text: '❌ Gagal memproses pertanyaan. Coba lagi sebentar.' }, { quoted: msg });
+                }
+            }
+
+            if (command === 'db' || command === 'database') {
+                return handleDbCommand({ sock, from, sender, isGroup, isAdmin, msg, args });
             }
 
             if (command === 'coding') {
                 const query = args.join(' ');
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Kasih kode atau error-nya! 💻✨' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const res = await runAIQueue(query, 'coding', isAdmin, from);
+                const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'coding');
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
             }
 
             if (command === 'code') {
                 const queryKode = args.join(' ');
                 if (!queryKode) return await sock.sendMessage(from, { text: '⚠️ Mana kode yang mau di-debug? 💻' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const hasilAI = await runAIQueue(`Debug, review, dan jelaskan error serta optimalisasi kode berikut:\n\n${queryKode}`, 'coding', isAdmin, from);
+                const hasilAI = await askLuxxAI(sock, from, sender, isGroup, isAdmin, `Debug, review, dan jelaskan error serta optimalisasi kode berikut:\n\n${queryKode}`, 'coding');
                 await sock.sendMessage(from, { text: hasilAI }, { quoted: msg });
             }
 
             if (command === 'rangkum') {
                 const query = args.join(' ');
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Mana teks yang mau diringkas? 📑' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const res = await runAIQueue(query, 'rangkum', isAdmin, from);
+                const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'rangkum');
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
             }
 
             if (command === 'brainstorm') {
                 const query = args.join(' ');
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Butuh ide apa? Sebutin topiknya! 💡' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const res = await runAIQueue(query, 'brainstorm', isAdmin, from);
+                const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'brainstorm');
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
             }
 
             if (command === 'translate') {
                 const query = args.join(' ');
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Teksnya mana yang mau ditranslate? 🌐' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const res = await runAIQueue(query, 'translate', isAdmin, from);
+                const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'translate');
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
             }
 
             if (command === 'q') {
                 const queryText = args.join(' ');
                 if (!queryText) return await sock.sendMessage(from, { text: '⚠️ Ngobrol apa aja bebas! Contoh: `!q halo` 💬' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const res = await runAIQueue(queryText, 'chat_context', isAdmin, from);
+                const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, queryText, 'chat_context');
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
             }
 
-            // ✅ FIX: was using undeclared aiConversationMemory → now properly declared at top
             if (command === 'resetai') {
                 aiConversationMemory[from] = [];
-                userAIContext.delete(from);
+                for (const key of [...userAIContext.keys()]) {
+                    if (key === from || key.startsWith(`${from}|`)) userAIContext.delete(key);
+                }
                 await sock.sendMessage(from, { text: '♻️ *Memori Terhapus!* Obrolan kita udah aku lupain semua. Yuk mulai dari awal! 🌸' }, { quoted: msg });
             }
 
             if (command === 'fact') {
-                await sock.sendPresenceUpdate('composing', from);
-                const hasilAI = await runAIQueue('Berikan satu baris fakta unik, menarik, ilmiah secara acak dari berbagai penjuru dunia yang jarang diketahui.', 'tanya', isAdmin, from);
+                const hasilAI = await askLuxxAI(sock, from, sender, isGroup, isAdmin, 'Kasih satu fakta unik, menarik, dan jarang orang tahu — satu paragraf singkat.', 'fact');
                 await sock.sendMessage(from, { text: `💡 *FAKTA MENARIK HARI INI:* 🌟\n\n${hasilAI}` }, { quoted: msg });
             }
 
             if (command === 'curhat') {
                 const query = args.join(' ');
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Ayo cerita, aku siap dengerin! 🫂💖' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const res = await runAIQueue(query, 'curhat', isAdmin, from);
+                const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'curhat');
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
             }
 
             if (command === 'roastme') {
                 const target = args.join(' ') || 'saya';
-                await sock.sendPresenceUpdate('composing', from);
-                const hasilAI = await runAIQueue(`Roasting ${target} dengan sarkasme lucu dan menghibur, tapi sopan.`, 'curhat', isAdmin, from);
+                const hasilAI = await askLuxxAI(sock, from, sender, isGroup, isAdmin, `Roasting ${target} dengan sarkasme lucu dan menghibur, tapi sopan.`, 'curhat');
                 await sock.sendMessage(from, { text: `🔥 *WAKTUNYA ROASTING!* 🔥\n\n${hasilAI}` }, { quoted: msg });
             }
 
@@ -778,16 +800,18 @@ export function registerMessageHandler(sock) {
                     const messages = await getWeatherMessages(lokasi);
                     for (let i = 0; i < messages.length; i++) {
                         await sock.sendMessage(from, { text: messages[i] }, { quoted: i === 0 ? msg : undefined });
-                        if (i < messages.length - 1) await new Promise((r) => setTimeout(r, 500));
+                        if (i < messages.length - 1) await new Promise((r) => setTimeout(r, 700));
                     }
                 } catch (err) {
                     console.error('CUACA ERROR:', err.message);
                     await sock.sendMessage(from, {
                         text:
                             `❌ Gagal ambil cuaca untuk *${lokasi}*.\n\n` +
-                            `💡 Coba nama kota lebih spesifik.\n` +
-                            `Opsional: set \`WEATHER_API_KEY\` di .env untuk akurasi lebih baik.\n` +
-                            `_${(err.message || '').slice(0, 100)}_`
+                            `💡 Coba nama lebih spesifik:\n` +
+                            `• \`!cuaca Makassar\`\n` +
+                            `• \`!cuaca Jakarta Pusat\`\n` +
+                            `• \`!cuaca Surabaya, Jawa Timur\`\n\n` +
+                            `_${(err.message || '').slice(0, 120)}_`
                     }, { quoted: msg });
                 }
             }
@@ -833,7 +857,7 @@ export function registerMessageHandler(sock) {
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
                     const response = await ai.models.generateContent({
-                        model: 'gemini-2.5-flash',
+                        model: GEMINI_VISION_MODEL,
                         contents: [{ parts: [{ inlineData: { mimeType: 'image/jpeg', data: buffer.toString('base64') } }, { text: 'Tolong ekstrak dan tulis ulang seluruh teks yang ada di gambar ini secara utuh dan akurat.' }] }]
                     });
                     await sock.sendMessage(from, { text: `📝 *HASIL OCR:* 🎀\n━━━━━━━━━━━━━━━━━━━━━━━\n\n${response.text}` }, { quoted: msg });
@@ -1084,11 +1108,7 @@ export function registerMessageHandler(sock) {
             }
 
             if (command === 'dbdiagram') {
-                const deskripsi = args.join(' ');
-                if (!deskripsi) return await sock.sendMessage(from, { text: '⚠️ Contoh: `!dbdiagram sistem jualan baju` ✨' }, { quoted: msg });
-                await sock.sendPresenceUpdate('composing', from);
-                const res = await runAIQueue(`Buatkan struktur diagram skema database relasional (SQL) lengkap berdasarkan: "${deskripsi}". Jabarkan nama tabel, field/kolom, tipe data, dan Primary Key.`, 'tanya', isAdmin, from);
-                await sock.sendMessage(from, { text: res }, { quoted: msg });
+                return handleDbCommand({ sock, from, sender, isGroup, isAdmin, msg, args });
             }
 
             if (command === 'gitwatch') {
@@ -1244,15 +1264,7 @@ export function registerMessageHandler(sock) {
                 }
 
                 if (command === 'join') {
-                    const linkGrup = args[0];
-                    if (!linkGrup) return await sock.sendMessage(from, { text: '⚠️ Link undangannya mana Bos? 🔗' }, { quoted: msg });
-                    try {
-                        const code = linkGrup.split('https://chat.whatsapp.com/')[1];
-                        await sock.groupAcceptInvite(code);
-                        await sock.sendMessage(from, { text: '✅ Berhasil masuk ke grup! 🥷✨' }, { quoted: msg });
-                    } catch (e) {
-                        await sock.sendMessage(from, { text: '❌ Gagal masuk grup, link mungkin sudah direvoke! 🥺' }, { quoted: msg });
-                    }
+                    return handleJoinCommand({ sock, from, msg, args });
                 }
 
                 if (command === 'leave') {

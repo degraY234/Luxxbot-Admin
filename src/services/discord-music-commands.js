@@ -11,6 +11,7 @@ import {
     clearRadioQueue,
     getRadioListenUrl
 } from './radio-server.js';
+import { youtubeThumbnail } from '../utils/youtube-meta.js';
 import { fetchLyrics } from './lyrics.js';
 
 /** @type {Map<string, { tracks: object[], at: number }>} */
@@ -106,7 +107,15 @@ async function handleDiscordPlay(interaction) {
         if (videos.length === 1) {
             const v = videos[0];
             await addTrackToRadio(
-                { title: v.title, url: v.url, timestamp: v.timestamp, author: v.author },
+                {
+                    title: v.title,
+                    url: v.url,
+                    timestamp: v.timestamp,
+                    seconds: v.seconds,
+                    videoId: v.videoId,
+                    thumbnail: v.image || youtubeThumbnail(v.url, v.videoId),
+                    author: v.author
+                },
                 `discord:${interaction.user.username}`
             );
             await interaction.editReply(`✅ **${v.title}** masuk antrian radio!\nSinkron dengan WhatsApp \`!nowplaying\` / \`!queue\`.`);
@@ -117,6 +126,9 @@ async function handleDiscordPlay(interaction) {
             title: v.title,
             url: v.url,
             timestamp: v.timestamp,
+            seconds: v.seconds,
+            videoId: v.videoId,
+            thumbnail: v.image || youtubeThumbnail(v.url, v.videoId),
             author: v.author
         }));
         playSessions.set(interaction.user.id, { tracks, at: Date.now() });
@@ -154,6 +166,9 @@ async function handlePlaySelect(interaction) {
             title: chosen.title,
             url: chosen.url,
             timestamp: chosen.timestamp,
+            seconds: chosen.seconds,
+            videoId: chosen.videoId,
+            thumbnail: chosen.thumbnail,
             author: chosen.author
         },
         `discord:${interaction.user.username}`

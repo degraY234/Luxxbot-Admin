@@ -10,7 +10,9 @@
     "pm2:restart": "pm2 restart luxx --update-env",
     "pm2:save": "pm2 save",
     "pm2:status": "pm2 status luxx",
-    "oracle:checklist": "type scripts\\oracle-setup-checklist.txt"
+    "oracle:checklist": "type scripts\\oracle-setup-checklist.txt",
+    "build:pages": "node scripts/build-pages.mjs",
+    "export:portfolio": "node scripts/export-portfolio-repo.mjs"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",

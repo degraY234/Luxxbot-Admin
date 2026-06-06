@@ -9,7 +9,9 @@ export const ABOUT_META = {
     creator: 'DoxxBorx',
     age: 19,
     region: 'Indonesia 🇮🇩',
+    education: 'Mahasiswa Teknik Komputer',
     role: 'Developer & Owner LuxxBot',
+    tagline: 'Build · Code · Ship',
     support: '6282384961407',
     discord: 'discord.gg/QJQVDfvx'
 };
@@ -30,39 +32,62 @@ function getCreatorPhotoPath() {
     return null;
 }
 
-function buildCaption(meta, version) {
+function buildPhotoCaption(meta, version) {
+    return (
+        `🌸 *L U X X B O T* v${version}\n` +
+        `👑 *${meta.creator}*\n` +
+        `💻 ${meta.education}\n` +
+        `📍 ${meta.region} · ${meta.age} tahun\n` +
+        `${meta.tagline} ✨`
+    );
+}
+
+function buildFullText(meta, version) {
     return (
         `🌸 *L U X X B O T* 🌸\n` +
+        `*Premium WhatsApp Bot* · v${version}\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `👑 *Pembuat:* ${meta.creator}\n` +
-        `🎂 *Umur:* ${meta.age} tahun\n` +
-        `📍 *Wilayah:* ${meta.region}\n` +
-        `💼 *Peran:* ${meta.role}\n` +
-        `📦 *Versi:* v${version}\n\n` +
+        `👑 *PEMBUAT*\n` +
+        `├ Nama · *${meta.creator}*\n` +
+        `├ Profesi · ${meta.education}\n` +
+        `├ Umur · ${meta.age} tahun\n` +
+        `├ Base · ${meta.region}\n` +
+        `└ Role · ${meta.role}\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `🤖 WhatsApp · 📻 Radio · 🎮 Discord\n` +
-        `🧠 AI · 🎨 Sticker · 📥 Download\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `📦 *FITUR* _(75+ perintah)_\n\n` +
+        `🎮 *Umum*\n` +
+        `\`!halo\` \`!ping\` \`!status\` \`!help\` \`!menu\` \`!notes\` \`!reminder\` \`!welcome\` \`!tagall\` \`!tanggal\` \`!server\`\n\n` +
+        `🧠 *AI & Chat*\n` +
+        `\`!tanya\` \`!coding\` \`!db\` \`!code\` \`!rangkum\` \`!brainstorm\` \`!translate\` \`!buat\` \`!lihat\` \`!q\` \`!fact\` \`!resetai\`\n\n` +
+        `🎵 *Musik & Radio*\n` +
+        `\`!play\` \`!nowplaying\` \`!radio\` \`!discord\` \`!queue\` \`!skip\` \`!lirik\` \`!watch\`\n` +
+        `_Luxx Watch — nonton bareng via web_\n\n` +
+        `🎌 *Hiburan*\n` +
+        `\`!simi\` \`!anime\` \`!football\` \`!character\` \`!waifu\` \`!quotesanime\` \`!darkjokes\` \`!pantun\` \`!cerpen\` \`!meme\`\n\n` +
+        `🎨 *Media & Tools*\n` +
+        `\`!tts\` \`!quote\` \`!s\` \`!anomali\` \`!dl\` \`!ocr\` \`!qr\` \`!kalkulator\` \`!cuaca\` \`!stalk\`\n\n` +
+        `🎲 *Fun & Games*\n` +
+        `\`!apakah\` \`!gacha\` \`!voting\` \`!pilih\` \`!endvoting\`\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `🌐 *Platform*\n` +
+        `WhatsApp · Discord Voice · Web Radio · Luxx Watch · Admin Panel\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `📞 @${meta.support}\n` +
         `💬 ${meta.discord}\n\n` +
-        `_Dibuat dengan dedikasi oleh DoxxBorx 💖_\n` +
-        `_!menu · !changelogs · !status_`
+        `_Dibuat dengan kode & kopi oleh ${meta.creator} ☕💻_\n` +
+        `_Ketik \`!menu\` · \`!changelogs\` · \`!status\`_`
     );
 }
 
 export async function handleAboutLuxCommand({ sock, from, msg }) {
     const version = getVersion();
-    const meta = { ...ABOUT_META, version };
+    const meta = { ...ABOUT_META };
+    const fullText = buildFullText(meta, version);
     const photoPath = getCreatorPhotoPath();
 
     if (!photoPath) {
         return sock.sendMessage(from, {
-            text:
-                `🌸 *L U X X B O T*\n\n` +
-                `👑 Pembuat: *${meta.creator}* (${meta.age} th)\n` +
-                `📍 ${meta.region}\n` +
-                `📦 v${version}\n\n` +
-                `_Foto pembuat belum ada di assets/aboutlux-creator.jpg_`
+            text: fullText + `\n\n_📷 Foto pembuat: taruh di assets/aboutlux-creator.jpg_`
         }, { quoted: msg });
     }
 
@@ -70,12 +95,13 @@ export async function handleAboutLuxCommand({ sock, from, msg }) {
         const image = fs.readFileSync(photoPath);
         await sock.sendMessage(from, {
             image,
-            caption: buildCaption(meta, version)
+            caption: buildPhotoCaption(meta, version)
         }, { quoted: msg });
+        await sock.sendMessage(from, { text: fullText }, { quoted: msg });
     } catch (e) {
         console.error('ABOUTLUX ERROR:', e.message);
         await sock.sendMessage(from, {
-            text: buildCaption(meta, version) + `\n\n_⚠️ Gagal kirim foto: ${e.message?.slice(0, 80)}_`
+            text: fullText + `\n\n_⚠️ Gagal kirim foto: ${e.message?.slice(0, 80)}_`
         }, { quoted: msg });
     }
 }

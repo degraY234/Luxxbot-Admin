@@ -1,5 +1,7 @@
 import ytSearch from 'yt-search';
 import { fetchLyrics } from '../services/lyrics.js';
+import { extractYoutubeVideoId, youtubeThumbnail } from '../utils/youtube-meta.js';
+import { getYtDlpTitle } from '../utils/ytdlp-download.js';
 import {
     radio,
     addTrackToRadio,
@@ -12,6 +14,18 @@ import { getDiscordRadioStatus } from '../services/discord-radio.js';
 import { getOrCreateRoom } from '../services/w2g.js';
 import { sendWaRadioLink } from '../utils/wa-radio-link.js';
 
+function mapVideoToTrack(v) {
+    return {
+        title: v.title,
+        url: v.url,
+        timestamp: v.timestamp,
+        seconds: v.seconds,
+        videoId: v.videoId,
+        thumbnail: v.image || youtubeThumbnail(v.url, v.videoId),
+        author: v.author
+    };
+}
+
 // ============================================================
 // 🎵 !play — cari lagu, pilih angka → antrian RADIO (bukan W2G)
 // ============================================================
@@ -21,6 +35,32 @@ export async function handlePlayCommand({ sock, from, msg, args }) {
         return await sock.sendMessage(from, {
             text: '⚠️ Format: `!play judul_lagu`\nContoh: `!play multo`'
         }, { quoted: msg });
+    }
+
+    const directVideoId = extractYoutubeVideoId(musicQuery);
+    if (directVideoId) {
+        const requester = (msg.key.participant || from).split('@')[0];
+        const url = musicQuery.startsWith('http') ? musicQuery : `https://www.youtube.com/watch?v=${directVideoId}`;
+        await sock.sendMessage(from, { text: '⏳ Menambahkan link YouTube ke antrian radio...' }, { quoted: msg });
+        try {
+            const title = await getYtDlpTitle(url).catch(() => 'YouTube');
+            await addTrackToRadio({
+                title,
+                url,
+                videoId: directVideoId,
+                thumbnail: youtubeThumbnail(url, directVideoId)
+            }, requester);
+            await sendWaRadioLink(sock, from, {
+                statusText:
+                    `✅ *${title}* masuk antrian radio!\n\n` +
+                    `${getDiscordRadioStatus()}\n\n` +
+                    `📋 \`!queue\` · ⏭️ \`!skip\` · 📻 \`!radio\``,
+                quoted: msg
+            });
+        } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Gagal menambahkan lagu.\n_${(e.message || 'error').slice(0, 120)}_` }, { quoted: msg });
+        }
+        return;
     }
 
     await sock.sendMessage(from, { text: '🎵 Sedang mencari musik...' }, { quoted: msg });
@@ -43,12 +83,8 @@ export async function handlePlayCommand({ sock, from, msg, args }) {
         global.playSession = global.playSession || {};
         global.playSession[from] = {
             mode: 'radio',
-            tracks: videos.map(v => ({
-                title: v.title,
-                url: v.url,
-                timestamp: v.timestamp,
-                author: v.author
-            }))
+            at: Date.now(),
+            tracks: videos.map(mapVideoToTrack)
         };
 
         await sock.sendMessage(from, { text: listText }, { quoted: msg });

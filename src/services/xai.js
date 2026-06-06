@@ -36,7 +36,7 @@ export async function grokChat(prompt, options = {}) {
     try {
         return await askGrok(
             prompt,
-            options.system || `Kamu asisten ${BOT_NAME}. Jawab dalam Bahasa Indonesia, santai dan jelas.`,
+            options.system || `Kamu ${BOT_NAME} — bot WA santai & hidup. Bahasa Indonesia natural. Pembuat: DoxxBorx.`,
             { max_tokens: options.max_tokens ?? 1200, model: options.model }
         );
     } catch (err) {

@@ -284,6 +284,11 @@ h2 {
 
 .info-box { line-height: 1.55; font-size: 0.9rem; }
 
+.watch-card {
+  border-color: rgba(168, 85, 247, 0.28);
+  background: linear-gradient(145deg, rgba(168, 85, 247, 0.08), rgba(255, 105, 180, 0.05));
+}
+
 .player-card {
   border-color: var(--border2);
   background: linear-gradient(145deg, rgba(255, 105, 180, 0.08), rgba(124, 58, 237, 0.06));
