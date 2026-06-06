@@ -69,6 +69,85 @@ async function api(path, method = 'GET') {
   return data;
 }
 
+let lastTrackId = null;
+let lastThumbTrackId = null;
+
+function updatePlayerThumbnail(cur, thumb, fallback) {
+  if (!cur?.thumbnail) {
+    lastThumbTrackId = cur?.id ?? null;
+    thumb.classList.remove('visible');
+    thumb.removeAttribute('src');
+    fallback.style.display = 'flex';
+    return;
+  }
+
+  if (lastThumbTrackId === cur.id && thumb.classList.contains('visible')) return;
+
+  lastThumbTrackId = cur.id;
+  thumb.classList.remove('visible');
+  fallback.style.display = 'flex';
+  thumb.onload = () => {
+    thumb.classList.add('visible');
+    fallback.style.display = 'none';
+  };
+  thumb.onerror = () => {
+    thumb.classList.remove('visible');
+    thumb.removeAttribute('src');
+    fallback.style.display = 'flex';
+  };
+  thumb.src = `${cur.thumbnail}?v=${cur.id}`;
+}
+
+function renderPlayer(r = {}, base = '') {
+  const cur = r.current;
+  const badge = $('#player-badge');
+  const audio = $('#radio-audio');
+  const thumb = $('#player-thumb');
+  const fallback = $('#player-thumb-fallback');
+
+  if (r.isPreparing && !cur) {
+    badge.textContent = 'LOADING';
+    badge.className = 'player-badge load';
+    $('#player-title').textContent = 'Memuat lagu...';
+    $('#player-artist').textContent = 'Tunggu sebentar';
+    $('#player-requester').textContent = '🙋 —';
+    lastThumbTrackId = null;
+    thumb.classList.remove('visible');
+    thumb.removeAttribute('src');
+    fallback.style.display = 'flex';
+    return;
+  }
+
+  if (!cur) {
+    badge.textContent = 'IDLE';
+    badge.className = 'player-badge idle';
+    $('#player-title').textContent = 'Belum ada lagu';
+    $('#player-artist').textContent = '—';
+    $('#player-requester').textContent = '🙋 —';
+    thumb.classList.remove('visible');
+    thumb.removeAttribute('src');
+    fallback.style.display = 'flex';
+    audio.removeAttribute('src');
+    lastTrackId = null;
+    lastThumbTrackId = null;
+    return;
+  }
+
+  badge.textContent = 'LIVE';
+  badge.className = 'player-badge live';
+  $('#player-title').textContent = cur.title || 'Unknown';
+  $('#player-artist').textContent = cur.author || 'Unknown';
+  $('#player-requester').textContent = `🙋 ${cur.requestedBy || '-'}`;
+  updatePlayerThumbnail(cur, thumb, fallback);
+
+  const stream = `${base}${r.streamPath || '/radio/live.mp3'}`;
+  if (lastTrackId !== cur.id) {
+    lastTrackId = cur.id;
+    audio.src = `${stream}?t=${Date.now()}`;
+    audio.play().catch(() => {});
+  }
+}
+
 function renderStatus(d) {
   $('#conn-badge').textContent = 'online';
   $('#conn-badge').className = 'badge online';
@@ -97,13 +176,16 @@ function renderStatus(d) {
     ${disc.inviteUrl ? `<br><a href="${disc.inviteUrl}" target="_blank" rel="noopener" style="color:var(--pink3)">Invite →</a>` : ''}`;
 
   const r = d.radio || {};
-  $('#now-box').innerHTML = cur
-    ? `<strong>${cur.title}</strong><br>${cur.author || '-'}<br>🙋 ${cur.requestedBy || '-'}`
-    : (r.isPreparing ? '⏳ Memuat...' : '⏸ Tidak ada lagu');
+  renderPlayer(r, cfg().base);
 
   const q = r.queue || [];
   $('#queue-list').innerHTML = q.length
-    ? q.map((t, i) => `<li><strong>${i + 1}.</strong> ${t.title}<br><span class="muted">🙋 ${t.requestedBy}</span></li>`).join('')
+    ? q.map((t, i) => {
+        const thumb = t.thumbnail
+          ? `<img src="${t.thumbnail}" alt="" class="queue-thumb" onerror="this.style.display='none'"/>`
+          : '';
+        return `<li>${thumb}<div><strong>${i + 1}.</strong> ${t.title}<br><span class="muted">🙋 ${t.requestedBy}</span></div></li>`;
+      }).join('')
     : '<li class="muted">Antrian kosong</li>';
 }
 
@@ -144,7 +226,7 @@ async function doLogin() {
     loginScreen.classList.add('hidden');
     appScreen.classList.remove('hidden');
     refresh();
-    if (!window._poll) window._poll = setInterval(refresh, 12000);
+    if (!window._poll) window._poll = setInterval(refresh, 5000);
   } catch (e) {
     showLoginError(e.message);
   } finally {
@@ -169,6 +251,7 @@ $('#btn-logout').addEventListener('click', () => {
   loginScreen.classList.remove('hidden');
   clearInterval(window._poll);
   window._poll = null;
+
 });
 $('#btn-refresh').addEventListener('click', refresh);
 $('#btn-skip').addEventListener('click', async () => {
