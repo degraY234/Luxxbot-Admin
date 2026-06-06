@@ -71,6 +71,20 @@ async function api(path, method = 'GET') {
 
 let lastTrackId = null;
 let lastThumbTrackId = null;
+let lastStreamEpoch = null;
+
+function stopAudio(audio) {
+  if (!audio) return;
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
+}
+
+function resetPlayerState() {
+  lastTrackId = null;
+  lastThumbTrackId = null;
+  stopAudio($('#radio-audio'));
+}
 
 function updatePlayerThumbnail(cur, thumb, fallback) {
   if (!cur?.thumbnail) {
@@ -104,17 +118,26 @@ function renderPlayer(r = {}, base = '') {
   const audio = $('#radio-audio');
   const thumb = $('#player-thumb');
   const fallback = $('#player-thumb-fallback');
+  const epoch = r.streamEpoch ?? null;
+
+  if (epoch !== null && epoch !== lastStreamEpoch) {
+    lastStreamEpoch = epoch;
+    lastTrackId = null;
+    lastThumbTrackId = null;
+    stopAudio(audio);
+  }
 
   if (r.isPreparing && !cur) {
     badge.textContent = 'LOADING';
     badge.className = 'player-badge load';
     $('#player-title').textContent = 'Memuat lagu...';
-    $('#player-artist').textContent = 'Tunggu sebentar';
+    $('#player-artist').textContent = radioPreparingLabel(r);
     $('#player-requester').textContent = '🙋 —';
     lastThumbTrackId = null;
     thumb.classList.remove('visible');
     thumb.removeAttribute('src');
     fallback.style.display = 'flex';
+    stopAudio(audio);
     return;
   }
 
@@ -127,7 +150,7 @@ function renderPlayer(r = {}, base = '') {
     thumb.classList.remove('visible');
     thumb.removeAttribute('src');
     fallback.style.display = 'flex';
-    audio.removeAttribute('src');
+    stopAudio(audio);
     lastTrackId = null;
     lastThumbTrackId = null;
     return;
@@ -141,11 +164,18 @@ function renderPlayer(r = {}, base = '') {
   updatePlayerThumbnail(cur, thumb, fallback);
 
   const stream = `${base}${r.streamPath || '/radio/live.mp3'}`;
-  if (lastTrackId !== cur.id) {
-    lastTrackId = cur.id;
-    audio.src = `${stream}?t=${Date.now()}`;
+  const reloadKey = `${epoch ?? 0}:${cur.id}`;
+  if (lastTrackId !== reloadKey) {
+    lastTrackId = reloadKey;
+    stopAudio(audio);
+    audio.src = `${stream}?epoch=${epoch ?? 0}&id=${cur.id}&t=${Date.now()}`;
     audio.play().catch(() => {});
   }
+}
+
+function radioPreparingLabel(r) {
+  const next = r.queue?.[0];
+  return next ? `Berikutnya: ${next.title}` : 'Tunggu sebentar';
 }
 
 function renderStatus(d) {
@@ -255,13 +285,23 @@ $('#btn-logout').addEventListener('click', () => {
 });
 $('#btn-refresh').addEventListener('click', refresh);
 $('#btn-skip').addEventListener('click', async () => {
-  try { const r = await api('/skip', 'POST'); showToast(r.message || 'OK'); refresh(); }
-  catch (e) { showToast(e.message); }
+  resetPlayerState();
+  try {
+    const r = await api('/skip', 'POST');
+    if (r.streamEpoch != null) lastStreamEpoch = r.streamEpoch;
+    showToast(r.message || 'OK');
+    await refresh();
+  } catch (e) { showToast(e.message); }
 });
 $('#btn-clear').addEventListener('click', async () => {
   if (!confirm('Kosongkan antrian?')) return;
-  try { await api('/clear', 'POST'); showToast('Antrian dikosongkan'); refresh(); }
-  catch (e) { showToast(e.message); }
+  resetPlayerState();
+  try {
+    const r = await api('/clear', 'POST');
+    if (r.streamEpoch != null) lastStreamEpoch = r.streamEpoch;
+    showToast('Antrian dikosongkan');
+    await refresh();
+  } catch (e) { showToast(e.message); }
 });
 $('#btn-restart').addEventListener('click', async () => {
   if (!confirm('Restart bot?')) return;
