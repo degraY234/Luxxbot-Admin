@@ -1,7 +1,8 @@
 import fs from 'fs';
 import express from 'express';
-import { registerWaQrRoutes, getPairPageUrl } from './src/services/wa-qr.js';
+import { registerWaQrRoutes } from './src/services/wa-qr.js';
 import { startRadioServer } from './src/services/radio-server.js';
+import { printStartupBanner } from './src/utils/startup-banner.js';
 
 if (!fs.existsSync('./temp')) fs.mkdirSync('./temp', { recursive: true });
 
@@ -17,9 +18,8 @@ registerWaQrRoutes(app);
 startRadioServer(app);
 
 app.listen(PORT, HOST, () => {
-    console.log(`\x1b[35m🚀 LuxxBot HTTP :${PORT} (${HOST})\x1b[0m`);
-    console.log(`\x1b[32m📱 Pair WA     : ${getPairPageUrl()}\x1b[0m`);
-    console.log(`\x1b[36m💚 Health      : http://127.0.0.1:${PORT}/health\x1b[0m`);
+    console.log(`\x1b[35m🚀 LuxxBot HTTP listening on ${HOST}:${PORT}\x1b[0m`);
+    printStartupBanner('startup');
 });
 
 import('./src/bot.js')

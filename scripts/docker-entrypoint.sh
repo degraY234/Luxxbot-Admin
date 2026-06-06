@@ -28,5 +28,16 @@ if [ -n "$RAILWAY_PUBLIC_DOMAIN" ] && [ -z "$RADIO_PUBLIC_URL" ]; then
     export RADIO_PUBLIC_URL="https://${RAILWAY_PUBLIC_DOMAIN}"
 fi
 
-echo "LuxxBot starting | RADIO_PORT=${RADIO_PORT:-3920} | persist=${PERSIST}"
+echo "=============================================="
+echo "  LuxxBot Docker / Railway"
+echo "=============================================="
+echo "PORT=${RADIO_PORT:-3920} | persist=${PERSIST}"
+if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
+  echo "Public : https://${RAILWAY_PUBLIC_DOMAIN}"
+  echo "Pair   : https://${RAILWAY_PUBLIC_DOMAIN}/pair"
+fi
+if [ -n "${RADIO_PUBLIC_URL:-}" ]; then
+  echo "RADIO_PUBLIC_URL=${RADIO_PUBLIC_URL}"
+fi
+echo "=============================================="
 exec "$@"

@@ -52,7 +52,7 @@ if [[ ! -f "$APP_DIR/package.json" ]]; then
 fi
 
 cd "$APP_DIR"
-npm install --omit=dev
+npm ci --omit=dev 2>/dev/null || npm install --omit=dev
 
 # --- .env ---
 if [[ ! -f .env ]]; then
@@ -94,8 +94,11 @@ echo "  DEPLOY SELESAI"
 echo "=============================================="
 echo "Status : pm2 status"
 echo "Log    : pm2 logs luxx"
-echo "QR WA  : pm2 logs luxx (scan jika session baru)"
+echo "Pair WA: http://${PUBLIC_IP}:3920/pair  (buka di laptop, scan dari HP)"
+echo "Admin  : http://${PUBLIC_IP}:3920/admin"
 echo "Radio  : http://${PUBLIC_IP}:3920/radio"
+echo "Watch  : http://${PUBLIC_IP}:3920/watch"
+echo "Health : http://${PUBLIC_IP}:3920/health"
 echo ""
 echo "Kontrol dari Android (SSH):"
 echo "  cd $APP_DIR && ./scripts/luxx-ctl.sh status"
