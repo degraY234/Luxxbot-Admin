@@ -1,0 +1,90 @@
+═══════════════════════════════════════════════════════════
+  LUXXBOT — HOSTING RAILWAY (COBA GRATIS) + PINDAH KAPAN SAJA
+═══════════════════════════════════════════════════════════
+
+KENAPA BISA PINDAH NANTI?
+───────────────────────────────────────────────────────────
+Yang kamu simpan cuma 3 hal — tidak terkunci ke Railway:
+  1) Kode bot (GitHub / folder project)
+  2) File .env (API key & setting)
+  3) Folder persist/session (login WhatsApp)
+
+Pindah ke Oracle / VPS / hosting berbayar:
+  → clone repo + paste .env + copy session/ → jalan lagi.
+
+BAGIAN A — SIAPKAN REPO (sekali)
+───────────────────────────────────────────────────────────
+1. Push project ke GitHub (JANGAN push .env dan session/)
+2. File deploy sudah ada: Dockerfile, railway.toml, docker-entrypoint.sh
+
+BAGIAN B — BUAT PROJECT DI RAILWAY
+───────────────────────────────────────────────────────────
+1. Daftar: https://railway.app
+2. New Project → Deploy from GitHub repo
+3. Pilih repo LuxxBot
+4. Railway otomatis build Dockerfile
+
+BAGIAN C — VOLUME (WAJIB — biar session WA tidak hilang)
+───────────────────────────────────────────────────────────
+Di Railway dashboard → Service → Settings → Volumes:
+  Mount Path: /app/persist
+  Size: 1 GB (cukup)
+
+Tanpa volume = tiap redeploy harus scan QR lagi.
+
+BAGIAN D — ENVIRONMENT VARIABLES
+───────────────────────────────────────────────────────────
+Copy dari .env lokal ke Railway → Variables:
+
+Wajib:
+  GEMINI_API_KEY=...
+  GROK_API_KEY=...
+  DISCORD_BOT_TOKEN=...
+  DISCORD_GUILD_ID=...
+  (semua key yang kamu pakai)
+
+Railway (otomatis / set manual):
+  RADIO_BIND_HOST=0.0.0.0
+  RADIO_PUBLIC_URL=https://<domain-railway-kamu>.up.railway.app
+  PERSIST_DIR=/app/persist
+
+Railway biasanya inject PORT otomatis — entrypoint set RADIO_PORT=PORT.
+
+BAGIAN E — PUBLIC NETWORKING
+───────────────────────────────────────────────────────────
+Service → Settings → Networking → Generate Domain
+Contoh: luxxbot-production.up.railway.app
+
+Set di Variables:
+  RADIO_PUBLIC_URL=https://luxxbot-production.up.railway.app
+
+BAGIAN F — SCAN QR WHATSAPP
+───────────────────────────────────────────────────────────
+Deploy → View Logs → cari QR ASCII → scan di HP
+
+Atau upload session/ ke volume (advanced):
+  railway run bash → copy creds ke /app/persist/session
+
+BAGIAN G — TANPA TUNNEL
+───────────────────────────────────────────────────────────
+Di Railway TIDAK perlu luxx-tunnel (cloudflared).
+Domain Railway langsung dipakai untuk !radio dan !watch.
+
+BAGIAN H — BIAYA & BATAS
+───────────────────────────────────────────────────────────
+Hobby plan: ~$5 kredit gratis/bulan.
+Bot + ffmpeg + Discord bisa habiskan kredit — pantau Usage.
+
+Kalau kredit habis → pindah ke Oracle (gratis VPS) pakai
+scripts/oracle-setup-checklist.txt — session & .env sama.
+
+BAGIAN I — PINDAH KE HOSTING LAIN NANTI
+───────────────────────────────────────────────────────────
+1. Download /app/persist/session dari Railway volume
+2. Di VPS baru: oracle-deploy.sh atau docker run
+3. Paste .env yang sama
+4. pm2 start atau docker — selesai
+
+═══════════════════════════════════════════════════════════
+Cek: Railway Logs | !ping | !status | !radio
+═══════════════════════════════════════════════════════════

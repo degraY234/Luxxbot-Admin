@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import axios from 'axios';
 
-const RADIO_PORT = Number(process.env.RADIO_PORT || 3920);
+const RADIO_PORT = Number(process.env.RADIO_PORT || process.env.PORT || 3920);
 const TUNNEL_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/gi;
 
 let cache = { base: null, at: 0 };
@@ -43,8 +43,16 @@ async function probeBase(base) {
     return Boolean(data?.ok);
 }
 
+function getRailwayBaseUrl() {
+    const domain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
+    if (!domain) return '';
+    return `https://${domain}`.replace(/\/$/, '');
+}
+
 function getConfiguredBaseUrl() {
-    return process.env.RADIO_PUBLIC_URL?.trim().replace(/\/$/, '') || '';
+    const configured = process.env.RADIO_PUBLIC_URL?.trim().replace(/\/$/, '') || '';
+    if (configured && !/localhost|127\.0\.0\.1/i.test(configured)) return configured;
+    return getRailwayBaseUrl() || configured;
 }
 
 /** URL publik dari .env (tunnel/domain/VPS) — bukan localhost/LAN. */

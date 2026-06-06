@@ -7,8 +7,9 @@ import { enrichTrackMeta, formatDurationSec } from '../utils/youtube-meta.js';
 import { mountAdminApi } from './admin-api.js';
 import { mountWatchServer } from './watch-server.js';
 import { mountPortfolioServer } from './portfolio-server.js';
+import { getRadioPublicUrl as resolvePublicUrl } from '../utils/radio-url.js';
 
-const RADIO_PORT = Number(process.env.RADIO_PORT || 3920);
+const RADIO_PORT = Number(process.env.RADIO_PORT || process.env.PORT || 3920);
 const RADIO_DIR = './temp/radio';
 const CURRENT_MP3 = path.join(RADIO_DIR, 'current.mp3');
 
@@ -157,7 +158,7 @@ async function finishCurrentAndPlayNext() {
 }
 
 export function getRadioPublicUrl() {
-    return (process.env.RADIO_PUBLIC_URL || `http://localhost:${RADIO_PORT}`).replace(/\/$/, '');
+    return resolvePublicUrl();
 }
 
 export function getRadioListenUrl() {
@@ -343,7 +344,8 @@ export function startRadioServer() {
     ensureDirs();
 
     const app = express();
-    app.use(express.json());
+    app.set('trust proxy', true);
+    app.use(express.json({ limit: '1mb' }));
 
     mountAdminApi(app);
     mountWatchServer(app);
