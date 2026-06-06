@@ -21,8 +21,10 @@ BAGIAN B — BUAT PROJECT DI RAILWAY
 ───────────────────────────────────────────────────────────
 1. Daftar: https://railway.app
 2. New Project → Deploy from GitHub repo
-3. Pilih repo LuxxBot
+3. Pilih repo LuxxBot, branch: feature/railway-deploy
 4. Railway otomatis build Dockerfile
+5. PM2 di VS Code/PC LOKAL saja — di Railway tidak dipakai (langsung node index.js)
+6. Settings → Deploy → Healthcheck: OFF (atau kosongkan path)
 
 BAGIAN C — VOLUME (WAJIB — biar session WA tidak hilang)
 ───────────────────────────────────────────────────────────
@@ -60,7 +62,11 @@ Set di Variables:
 
 BAGIAN F — SCAN QR WHATSAPP
 ───────────────────────────────────────────────────────────
-Deploy → View Logs → cari QR ASCII → scan di HP
+CARA MUDAH (disarankan — QR pas di HP):
+  Buka di browser HP: https://<domain-railway-kamu>.up.railway.app/pair
+  Scan QR di halaman itu → WhatsApp → Perangkat tertaut
+
+Alternatif: Railway Logs → cari link 🔗 .../pair (jangan scan QR ASCII di log)
 
 Atau upload session/ ke volume (advanced):
   railway run bash → copy creds ke /app/persist/session

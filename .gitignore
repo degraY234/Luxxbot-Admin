@@ -13,6 +13,7 @@ w2g_room.json
 /*.json
 !package.json
 !package-lock.json
+!railway.json
 
 # Cloudflare tunnel (credentials + config lokal)
 config/cloudflared.yml

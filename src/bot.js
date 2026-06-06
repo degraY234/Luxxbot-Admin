@@ -12,17 +12,13 @@ import './globals.js';
 import { BOT_NAME } from './config.js';
 import { state } from './state.js';
 import { getOrCreateRoom } from './services/w2g.js';
-import { startRadioServer } from './services/radio-server.js';
 import { startDiscordRadio } from './services/discord-radio.js';
 import { registerMessageHandler } from './handlers/messages.js';
 import { registerGroupEventHandler } from './handlers/group-events.js';
 import { setDailyFactSocket, startDailyFactScheduler } from './services/daily-fact.js';
 
-if (!fs.existsSync('./temp')) fs.mkdirSync('./temp', { recursive: true });
-startRadioServer();
-startDiscordRadio();
-
 export async function startBot() {
+    startDiscordRadio();
     state.isSleeping = false;
     const { state: authState, saveCreds } = await useMultiFileAuthState('./session');
     const { version } = await fetchLatestBaileysVersion();
