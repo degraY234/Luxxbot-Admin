@@ -3,6 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script>
+    (function () {
+      var host = location.hostname;
+      var base = '/admin/';
+      if (host.includes('github.io')) {
+        var repo = location.pathname.split('/').filter(Boolean)[0];
+        if (repo) base = '/' + repo + '/';
+      }
+      var el = document.createElement('base');
+      el.href = base;
+      document.head.appendChild(el);
+    })();
+  </script>
   <title>LuxxBot Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
