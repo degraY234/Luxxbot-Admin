@@ -17,3 +17,8 @@ Thumbs.db
 .vscode
 .idea
 data/sounds
+scripts/probe-*
+scripts/test-*
+.worktrees
+*.worktree
+{try{const
