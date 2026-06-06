@@ -26,6 +26,7 @@ config/cloudflared-credentials.json
 .env.production.local
 
 # Runtime / local
+data/sounds/
 temp/
 terminals/
 backup/

@@ -24,6 +24,12 @@ export const COMMAND_HELP = {
         desc: 'Ubah teks jadi voice note (max ~200 karakter).',
         example: '!tts Halo semuanya'
     },
+    sp: {
+        title: 'Sound Pad',
+        usage: '!sp | !sp <kata> | !sp <nama-tersimpan>',
+        desc: 'Cari sound dari internet (MyInstants + opsional Pixabay/Freesound). Pencarian pintar: nama aneh tetap dapat pilihan sound yang ada kata serupa. Simpan otomatis ke library chat.',
+        example: '!sp kicau-mania'
+    },
     quote: {
         title: 'Kutipan Dunia Nyata',
         usage: '!quote | !quote <teks> | <penulis> | <asal>',
@@ -62,8 +68,8 @@ export const COMMAND_HELP = {
     },
     dl: {
         title: 'Download Media',
-        usage: '!dl <link> | !dl mp3 <link>',
-        desc: 'Video HD (IG/TikTok/YT) atau MP3 dari YouTube.',
+        usage: '!dl <link> | !dl mp4 <link> | !dl mp4hd <link> | !dl mp3 <link>',
+        desc: 'YouTube/IG/TikTok/FB. Video MP4 (720p/1080p, kompatibel HP) atau MP3 kualitas tinggi.',
         example: '!dl mp3 https://youtu.be/...'
     },
     s: {

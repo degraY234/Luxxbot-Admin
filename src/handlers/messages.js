@@ -41,6 +41,7 @@ import { handleDarkJokesCommand } from '../commands/darkjokes.js';
 import { handleAboutLuxCommand } from '../commands/aboutlux.js';
 import { handleNowPlayingCommand, handleDiscordCommand } from '../commands/discord-cmd.js';
 import { handleWatchCommand } from '../commands/watch.js';
+import { handleSpCommand, handleSpPick, getSpSession } from '../commands/sp.js';
 import { handleJoinCommand } from '../commands/join.js';
 import { handleDbCommand } from '../commands/db.js';
 
@@ -76,7 +77,18 @@ export function registerMessageHandler(sock) {
             const playPickMatch = text.match(/^(?:!)?(\d{1,2})(?:[.,)\s]|$)/);
             const playSession = global.playSession?.[from];
             const playSessionFresh = playSession && (Date.now() - (playSession.at || 0) < 5 * 60 * 1000);
-            const isPlayPick = Boolean(playSessionFresh && playPickMatch);
+            const spSession = getSpSession(from);
+            const isSpPick = Boolean(spSession && playPickMatch);
+            const isPlayPick = Boolean(playSessionFresh && playPickMatch && !isSpPick);
+
+            // =======================================================
+            // 🔊 PILIHAN SOUND !sp → kirim audio + simpan library
+            // =======================================================
+            if (isSpPick) {
+                const selectedIndex = parseInt(playPickMatch[1], 10) - 1;
+                const handled = await handleSpPick({ sock, from, msg, selectedIndex, sender });
+                if (handled) return;
+            }
 
             // =======================================================
             // 📥 PILIHAN LAGU !play → antrian RADIO (tanpa tunggu download)
@@ -220,6 +232,10 @@ export function registerMessageHandler(sock) {
 
             if (command === 'tts' || command === 'speak') {
                 return handleTtsCommand({ sock, from, msg, args });
+            }
+
+            if (command === 'sp' || command === 'sound' || command === 'soundpad') {
+                return handleSpCommand({ sock, from, msg, args, sender });
             }
 
             if (command === 'quote' || command === 'quotes') {

@@ -1,9 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { BOT_NAME } from '../config.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const DEFAULT_CREATOR_PHOTO = path.join(ROOT, 'assets', 'aboutlux-creator.jpg');
+
+export const PORTFOLIO_URL =
+    process.env.PORTFOLIO_URL?.trim() || 'https://degray234.github.io/PortoDoxxborx/';
 
 export const ABOUT_META = {
     creator: 'DoxxBorx',
@@ -13,7 +17,8 @@ export const ABOUT_META = {
     role: 'Developer & Owner LuxxBot',
     tagline: 'Build · Code · Ship',
     support: '6282384961407',
-    discord: 'discord.gg/QJQVDfvx'
+    discord: 'discord.gg/QJQVDfvx',
+    portfolio: PORTFOLIO_URL
 };
 
 function getVersion() {
@@ -38,7 +43,11 @@ function buildPhotoCaption(meta, version) {
         `👑 *${meta.creator}*\n` +
         `💻 ${meta.education}\n` +
         `📍 ${meta.region} · ${meta.age} tahun\n` +
-        `${meta.tagline} ✨`
+        `${meta.tagline} ✨\n\n` +
+        `☕ Satu cangkir kopi, ribuan baris kode — ` +
+        `itu cara ${meta.creator} ngebangun ${BOT_NAME} dari nol.\n` +
+        `Santai di depan layar, serius di balik fitur. Gass coding! 💻🔥\n\n` +
+        `🌐 *Portofolio:* ${meta.portfolio}`
     );
 }
 
@@ -65,12 +74,17 @@ function buildFullText(meta, version) {
         `🎌 *Hiburan*\n` +
         `\`!simi\` \`!anime\` \`!football\` \`!character\` \`!waifu\` \`!quotesanime\` \`!darkjokes\` \`!pantun\` \`!cerpen\` \`!meme\`\n\n` +
         `🎨 *Media & Tools*\n` +
-        `\`!tts\` \`!quote\` \`!s\` \`!anomali\` \`!dl\` \`!ocr\` \`!qr\` \`!kalkulator\` \`!cuaca\` \`!stalk\`\n\n` +
+        `\`!sp\` \`!tts\` \`!quote\` \`!s\` \`!anomali\` \`!dl\` \`!ocr\` \`!qr\` \`!kalkulator\` \`!cuaca\` \`!stalk\`\n\n` +
         `🎲 *Fun & Games*\n` +
         `\`!apakah\` \`!gacha\` \`!voting\` \`!pilih\` \`!endvoting\`\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `🌐 *Platform*\n` +
         `WhatsApp · Discord Voice · Web Radio · Luxx Watch · Admin Panel\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `🖥️ *PORTOFOLIO ${meta.creator.toUpperCase()}*\n` +
+        `Satu orang, satu laptop, satu gelas kopi — semua fitur di atas lahir dari situ. ☕💻\n` +
+        `Mau liat proyek, skill, & jejak coding-nya? Cuss mampir:\n` +
+        `🔗 ${meta.portfolio}\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `📞 @${meta.support}\n` +
         `💬 ${meta.discord}\n\n` +

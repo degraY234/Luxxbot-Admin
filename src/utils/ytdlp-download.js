@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import ffmpegPath from 'ffmpeg-static';
+import { ensureWaCompatibleMp4 } from './wa-video.js';
 
 const COOKIE_BROWSERS = (process.env.YTDLP_COOKIES_BROWSER || 'chrome,edge,firefox')
     .split(',')
@@ -98,9 +99,33 @@ export async function downloadAudioToMp3(url, outputPath) {
 }
 
 /**
- * Download video HD (max 1080p mp4) via yt-dlp
+ * Download video HD (max 1080p mp4) via yt-dlp — untuk IG/TikTok dll.
  */
 export async function downloadVideoHd(url, outputPath) {
+    return downloadVideoRaw(url, outputPath, 1080);
+}
+
+/**
+ * Download video YouTube/Facebook → H.264 MP4 yang kompatibel WhatsApp mobile.
+ */
+export async function downloadVideoForWhatsApp(url, outputPath, { maxHeight = 720 } = {}) {
+    const dir = path.dirname(outputPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const rawPath = outputPath.replace(/\.mp4$/i, '') + '.raw.mp4';
+
+    await downloadVideoRaw(url, rawPath, maxHeight);
+
+    try {
+        await ensureWaCompatibleMp4(rawPath, outputPath, { maxHeight });
+    } finally {
+        if (fs.existsSync(rawPath) && path.resolve(rawPath) !== path.resolve(outputPath)) {
+            try { fs.unlinkSync(rawPath); } catch (_) {}
+        }
+    }
+    return outputPath;
+}
+
+async function downloadVideoRaw(url, outputPath, maxHeight = 1080) {
     const dir = path.dirname(outputPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const ext = path.extname(outputPath) || '.mp4';
@@ -115,11 +140,17 @@ export async function downloadVideoHd(url, outputPath) {
 
     const format = isInstagramUrl(url)
         ? 'best[ext=mp4]/best'
-        : 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[ext=mp4]/best';
+        : [
+            `bestvideo[height<=${maxHeight}][vcodec^=avc][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]`,
+            `bestvideo[height<=${maxHeight}][ext=mp4]+bestaudio[ext=m4a]`,
+            `bestvideo[height<=${maxHeight}]+bestaudio`,
+            'best[ext=mp4]/best'
+        ].join('/');
 
     const buildArgs = () => [
         '-f', format,
         '--merge-output-format', 'mp4',
+        '--postprocessor-args', 'ffmpeg:-movflags +faststart',
         '-o', template, '--no-playlist', '--no-warnings', '--no-check-certificates',
         '--ffmpeg-location', ffmpegPath,
         '--retries', '5', '--socket-timeout', '60',

@@ -6,6 +6,7 @@ import { askGrok, grokChat } from './xai.js';
 import { ABOUT_META } from '../commands/aboutlux.js';
 import { buildPersonaSystem, getAITemperature } from './ai-persona.js';
 import { wrapQueryWithMeta } from './ai-context.js';
+import { buildGroupBotIntel } from './group-bot-context.js';
 
 const CREATOR_REPLY =
     `👑 *${ABOUT_META.creator}* — ${ABOUT_META.education.toLowerCase()}, arsitek di balik ${BOT_NAME}.\n\n` +
@@ -132,7 +133,11 @@ export async function tanyakanAI(query, type = 'tanya', isAdmin = false, fromId 
     const creatorReply = tryCreatorReply(query);
     if (creatorReply) return creatorReply;
 
-    const wrappedQuery = wrapQueryWithMeta(query, meta);
+    let wrappedQuery = wrapQueryWithMeta(query, meta);
+    if (meta?.isGroup && meta.chatId && (type === 'tanya' || type === 'chat_context')) {
+        const intel = buildGroupBotIntel(meta.chatId, query);
+        if (intel) wrappedQuery = `${wrappedQuery}\n\n${intel}`;
+    }
     const context = getUserContext(fromId);
     let contentsPayload = wrappedQuery;
     const temperature = getAITemperature(type);

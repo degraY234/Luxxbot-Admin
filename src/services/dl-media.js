@@ -3,23 +3,35 @@ import path from 'path';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import TiktokDownloader from '@tobyg74/tiktok-api-dl';
-import { downloadAudioToMp3, downloadVideoHd, getYtDlpTitle } from '../utils/ytdlp-download.js';
+import {
+    downloadAudioToMp3,
+    downloadVideoHd,
+    downloadVideoForWhatsApp,
+    getYtDlpTitle
+} from '../utils/ytdlp-download.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
 export function parseDlArgs(args) {
     const parts = [...args];
     let mode = 'video';
-    if (parts[0]?.toLowerCase() === 'mp3' || parts[0]?.toLowerCase() === 'audio') {
+    let quality = 'wa';
+
+    const head = (parts[0] || '').toLowerCase();
+    if (head === 'mp3' || head === 'audio') {
         mode = 'audio';
         parts.shift();
-    } else if (parts[0]?.toLowerCase() === 'video') {
+    } else if (head === 'mp4' || head === 'video') {
+        parts.shift();
+    } else if (head === 'mp4hd' || head === 'hd' || head === '1080') {
+        quality = 'hd';
         parts.shift();
     }
+
     const joined = parts.join(' ');
     const urlMatch = joined.match(/https?:\/\/[^\s]+/i);
     const url = urlMatch?.[0]?.replace(/[>,\])}]+$/, '') || parts.find((p) => /^https?:\/\//i.test(p));
-    return { mode, url };
+    return { mode, url, quality };
 }
 
 function detectPlatform(url) {
@@ -195,7 +207,7 @@ async function downloadInstagram(url, mode) {
     }
 
     try {
-        return await downloadViaYtDlp(url, mode, path.join('./temp/dl', `ig-${Date.now()}`));
+        return await downloadViaYtDlp(url, mode, path.join('./temp/dl', `ig-${Date.now()}`), 'wa');
     } catch (e) {
         errors.push(`yt-dlp: ${e.message}`);
     }
@@ -203,8 +215,10 @@ async function downloadInstagram(url, mode) {
     throw new Error(errors.slice(-3).join(' · ') || 'Instagram gagal diunduh');
 }
 
-async function downloadViaYtDlp(url, mode, tmpBase) {
+async function downloadViaYtDlp(url, mode, tmpBase, quality = 'wa') {
     const title = await getYtDlpTitle(url);
+    const platform = detectPlatform(url);
+
     if (mode === 'audio') {
         const out = `${tmpBase}.mp3`;
         await downloadAudioToMp3(url, out);
@@ -215,13 +229,21 @@ async function downloadViaYtDlp(url, mode, tmpBase) {
             fileName: `${sanitizeFileName(title)}.mp3`
         };
     }
+
     const out = `${tmpBase}.mp4`;
-    await downloadVideoHd(url, out);
+    const useWa = platform === 'youtube' || platform === 'facebook' || quality === 'wa';
+    if (useWa) {
+        await downloadVideoForWhatsApp(url, out, { maxHeight: quality === 'hd' ? 1080 : 720 });
+    } else {
+        await downloadVideoHd(url, out);
+    }
+
     return {
         buffer: fs.readFileSync(out),
         title,
         mimetype: 'video/mp4',
-        fileName: `${sanitizeFileName(title)}.mp4`
+        fileName: `${sanitizeFileName(title)}.mp4`,
+        qualityLabel: quality === 'hd' ? 'MP4 1080p' : 'MP4 720p (HP)'
     };
 }
 
@@ -239,7 +261,7 @@ function cleanupTmp(tmpBase) {
 /**
  * @returns {{ buffer: Buffer, title: string, mimetype: string, fileName: string, mode: string }}
  */
-export async function downloadMediaFromUrl(url, mode = 'video') {
+export async function downloadMediaFromUrl(url, mode = 'video', quality = 'wa') {
     const platform = detectPlatform(url);
     const id = Date.now();
     const tmpBase = path.join('./temp/dl', `media-${id}`);
@@ -260,7 +282,7 @@ export async function downloadMediaFromUrl(url, mode = 'video') {
             return { ...(await downloadInstagram(url, mode)), mode };
         }
 
-        return { ...(await downloadViaYtDlp(url, mode, tmpBase)), mode };
+        return { ...(await downloadViaYtDlp(url, mode, tmpBase, quality)), mode };
     } finally {
         cleanupTmp(tmpBase);
     }
@@ -269,9 +291,13 @@ export async function downloadMediaFromUrl(url, mode = 'video') {
 export function getDlHelpText() {
     return (
         `📥 *DOWNLOAD MEDIA*\n\n` +
-        `🎬 Video HD:\n\`!dl <link>\`\n` +
-        `🎵 Audio MP3:\n\`!dl mp3 <link>\`\n\n` +
+        `🎬 *Video MP4* (bisa dibuka di HP):\n` +
+        `\`!dl <link yt>\` → MP4 720p jernih\n` +
+        `\`!dl mp4 <link>\` → sama (eksplisit video)\n` +
+        `\`!dl mp4hd <link>\` → MP4 1080p\n\n` +
+        `🎵 *Audio MP3* kualitas tinggi:\n` +
+        `\`!dl mp3 <link yt>\`\n\n` +
         `✅ YouTube · TikTok · Instagram · Facebook\n` +
-        `_IG/TikTok prioritas HD · YT kirim MP3_`
+        `_Video YT dioptimasi H.264+AAC biar lancar di WhatsApp mobile_`
     );
 }

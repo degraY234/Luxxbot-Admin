@@ -114,6 +114,7 @@ function buildMenuText(isSelfMode, isSleeping, antiLink, isAdmin, botUptime) {
     m += lastItem('!meme', 'Meme random', '😂');
 
     m += section('🎨 *MEDIA & TOOLS*');
+    m += item('!sp', 'Sound pad — cari, simpan & putar ulang', '🔊');
     m += item('!tts', 'Teks → voice note', '🎙️');
     m += item('!quote', 'Kutipan inspiratif', '💬');
     m += item('!s', 'Stiker premium', '🎨');
