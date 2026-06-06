@@ -4,6 +4,9 @@
   "description": "WhatsApp Bot Premium",
   "main": "index.js",
   "type": "module",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "start": "node index.js",
     "pm2:start": "pm2 start ecosystem.config.cjs --update-env",
@@ -48,6 +51,13 @@
     "ytdl-core": "^4.11.5"
   },
   "allowScripts": {
-    "sodium-native@5.1.0": true
+    "sodium-native@5.1.0": true,
+    "canvas@3.2.3": true,
+    "@discordjs/opus@0.10.0": true,
+    "sharp@0.34.5": true,
+    "ffmpeg-static@5.3.0": true,
+    "@google/genai@2.8.0": true,
+    "@whiskeysockets/baileys@6.7.23": true,
+    "protobufjs@7.6.2": true
   }
 }
