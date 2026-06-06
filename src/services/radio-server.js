@@ -8,9 +8,10 @@ import { mountAdminApi } from './admin-api.js';
 import { mountWatchServer } from './watch-server.js';
 import { mountPortfolioServer } from './portfolio-server.js';
 import { getRadioPublicUrl as resolvePublicUrl } from '../utils/radio-url.js';
+import { getListenPort } from '../utils/listen-port.js';
 import { registerWaQrRoutes } from './wa-qr.js';
 
-const RADIO_PORT = Number(process.env.RADIO_PORT || process.env.PORT || 3920);
+const RADIO_PORT = getListenPort();
 const RADIO_DIR = './temp/radio';
 const CURRENT_MP3 = path.join(RADIO_DIR, 'current.mp3');
 

@@ -20,7 +20,12 @@ link_dir /app/data data
 mkdir -p /app/temp
 link_dir /app/temp temp
 
-if [ -n "$PORT" ] && [ -z "$RADIO_PORT" ]; then
+# Railway: WAJIB listen di $PORT (bukan 3920) — kalau RADIO_PORT=3920 di Variables, proxy 502
+if [ -n "$RAILWAY_ENVIRONMENT" ] || [ -n "$RAILWAY_PUBLIC_DOMAIN" ]; then
+    if [ -n "$PORT" ]; then
+        export RADIO_PORT="$PORT"
+    fi
+elif [ -n "$PORT" ] && [ -z "$RADIO_PORT" ]; then
     export RADIO_PORT="$PORT"
 fi
 
@@ -37,7 +42,7 @@ elif [ -n "$RAILWAY_STATIC_URL" ] && [ -z "$RADIO_PUBLIC_URL" ]; then
     export RADIO_PUBLIC_URL="$RAILWAY_STATIC_URL"
 fi
 
-echo "LuxxBot starting (port ${RADIO_PORT:-3920})"
+echo "LuxxBot starting (listen ${RADIO_PORT:-3920}, railway PORT=${PORT:-n/a})"
 if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
   echo "PAIR (buka di laptop): https://${RAILWAY_PUBLIC_DOMAIN}/pair"
 elif [ -n "${RADIO_PUBLIC_URL:-}" ]; then

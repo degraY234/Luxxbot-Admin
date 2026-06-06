@@ -2,6 +2,7 @@ import fs from 'fs';
 import express from 'express';
 import { registerWaQrRoutes } from './src/services/wa-qr.js';
 import { printPairLinkBanner } from './src/utils/startup-banner.js';
+import { getListenPort, isRailwayRuntime } from './src/utils/listen-port.js';
 
 process.on('uncaughtException', (err) => {
     console.error('❌ uncaughtException (server tetap jalan):', err?.message || err);
@@ -12,7 +13,7 @@ process.on('unhandledRejection', (reason) => {
 
 if (!fs.existsSync('./temp')) fs.mkdirSync('./temp', { recursive: true });
 
-const PORT = Number(process.env.RADIO_PORT || process.env.PORT || 3920);
+const PORT = getListenPort();
 const HOST = process.env.RADIO_BIND_HOST || '0.0.0.0';
 
 const app = express();
@@ -26,7 +27,11 @@ app.get('/health', (_req, res) => {
 });
 
 const server = app.listen(PORT, HOST, () => {
-    console.log(`\x1b[35m🚀 LuxxBot online (port ${PORT})\x1b[0m`);
+    const rail = isRailwayRuntime() ? ` · Railway PORT=${process.env.PORT}` : '';
+    console.log(`\x1b[35m🚀 LuxxBot online (listen ${PORT}${rail})\x1b[0m`);
+    if (isRailwayRuntime() && process.env.PORT && PORT !== Number(process.env.PORT)) {
+        console.error(`\x1b[31m❌ PORT SALAH: hapus RADIO_PORT=3920 di Railway Variables!\x1b[0m`);
+    }
     printPairLinkBanner();
 });
 
