@@ -10,9 +10,14 @@
     "pm2:restart": "pm2 restart luxx --update-env",
     "pm2:save": "pm2 save",
     "pm2:status": "pm2 status luxx",
+    "watch:setup": "node scripts/setup-public-watch.mjs",
+    "tunnel:start": "pm2 start ecosystem.config.cjs --only luxx-tunnel --update-env",
+    "tunnel:restart": "pm2 restart luxx-tunnel --update-env",
     "oracle:checklist": "type scripts\\oracle-setup-checklist.txt",
     "build:pages": "node scripts/build-pages.mjs",
-    "export:portfolio": "node scripts/export-portfolio-repo.mjs"
+    "export:portfolio": "node scripts/export-portfolio-repo.mjs",
+    "sync:portfolio": "node scripts/sync-portfolio-repo.mjs",
+    "portfolio:domain": "node scripts/enable-portfolio-domain.mjs"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",

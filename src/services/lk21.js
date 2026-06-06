@@ -12,6 +12,7 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const lk21Https = new https.Agent({ rejectUnauthorized: false });
 
 const AD_IFRAME_RE = /a-ads|coinserom|acceptable\.a-ads|ads\.|doubleclick|googlesyndication/i;
+const EMBED_LOW_PRIORITY = /gdriveplayer|googleusercontent|docs\.google/i;
 const EMBED_PRIORITY = [
     /vidplayer\.live/i,
     /vidsrc/i,
@@ -36,6 +37,7 @@ function getBase() {
 function absUrl(base, href = '') {
     if (!href) return '';
     if (href.startsWith('http')) return href;
+    if (href.startsWith('//')) return `https:${href}`;
     return `${base.replace(/\/$/, '')}${href.startsWith('/') ? '' : '/'}${href}`;
 }
 
@@ -46,9 +48,15 @@ function isBlockedMirror(html) {
 
 async function fetchHtml(url) {
     const { data } = await axios.get(url, {
-        timeout: 18000,
+        timeout: 22000,
         httpsAgent: lk21Https,
-        headers: { 'User-Agent': UA, Accept: 'text/html', 'Accept-Language': 'id,en;q=0.9' },
+        headers: {
+            'User-Agent': UA,
+            Accept: 'text/html',
+            'Accept-Language': 'id,en;q=0.9',
+            Referer: getBase() + '/'
+        },
+        maxRedirects: 5,
         validateStatus: (s) => s >= 200 && s < 400
     });
     if (isBlockedMirror(data)) throw new Error('Mirror diblokir ISP');
@@ -103,7 +111,7 @@ function parseFilmNode(node, $, base, seen, results) {
     pushResult(results, seen, {
         title: title.slice(0, 120),
         year,
-        poster: poster.startsWith('http') ? poster : absUrl(base, poster),
+        poster: poster.startsWith('http') || poster.startsWith('//') ? absUrl(base, poster) : absUrl(base, poster),
         url: absUrl(base, href),
         source: 'lk21'
     });
@@ -128,7 +136,7 @@ function parseSearchHtml(html, base, limit = 48) {
             pushResult(results, seen, {
                 title: title.slice(0, 120),
                 year: '',
-                poster: poster.startsWith('http') ? poster : absUrl(base, poster),
+                poster: absUrl(base, poster),
                 url: absUrl(base, href),
                 source: 'lk21'
             });
@@ -155,6 +163,7 @@ function normalizeMediaUrl(raw, base) {
 
 function scoreEmbed(url = '') {
     const u = String(url);
+    if (EMBED_LOW_PRIORITY.test(u)) return EMBED_PRIORITY.length + 50;
     for (let i = 0; i < EMBED_PRIORITY.length; i++) {
         if (EMBED_PRIORITY[i].test(u)) return i;
     }
@@ -166,7 +175,9 @@ function isLikelyPlayerIframe(src = '') {
     if (!url || isAdIframe(url)) return false;
     if (!/^https?:\/\//i.test(url) && !url.startsWith('//')) return false;
     if (/facebook|twitter|instagram|youtube\.com\/(?!embed)/i.test(url)) return false;
-    return scoreEmbed(url) < EMBED_PRIORITY.length + 10 || /\/v\//i.test(url);
+    if (/vidplayer\.live\/?$/i.test(url) && !/#[a-z0-9]+/i.test(url)) return false;
+    if (EMBED_LOW_PRIORITY.test(url)) return true;
+    return scoreEmbed(url) < EMBED_PRIORITY.length + 10 || /\/v\//i.test(url) || /#[a-z0-9]+$/i.test(url);
 }
 
 function collectEmbedCandidates($, html, base) {
@@ -181,8 +192,7 @@ function collectEmbedCandidates($, html, base) {
         /https?:\/\/[^\s"'<>]*vidplayer\.live[^\s"'<>#]*/gi,
         /https?:\/\/[^\s"'<>]*vidplayer\.live#[^\s"'<>]*/gi,
         /https?:\/\/[^\s"'<>]*(?:vidsrc|chillx|playerx)[^\s"'<>]*/gi,
-        /https?:\/\/[^\s"'<>]*(?:dood|filemoon|streamtape|mixdrop|p2p)[^\s"'<>]*/gi,
-        /(?:https?:)?\/\/[^\s"'<>]*vidplayer\.live[^\s"'<>]*/gi
+        /https?:\/\/[^\s"'<>]*(?:dood|filemoon|streamtape|mixdrop|p2p)[^\s"'<>]*/gi
     ];
     for (const re of patterns) {
         for (const m of html.matchAll(re)) {
@@ -224,7 +234,7 @@ async function probeVideoUrl(url) {
             const res = await axios.get(url, {
                 httpsAgent: lk21Https,
                 headers,
-                timeout: 10000,
+                timeout: 12000,
                 maxRedirects: 5,
                 validateStatus: (s) => s >= 200 && s < 400
             });
@@ -252,14 +262,119 @@ function effectivePage(page, totalPages, sort) {
     return p;
 }
 
+const META_FIELD_RULES = [
+    { key: 'genres', labels: ['genre'] },
+    { key: 'year', labels: ['tahun', 'year'] },
+    { key: 'country', labels: ['negara', 'country'] },
+    { key: 'duration', labels: ['durasi', 'duration'] },
+    { key: 'directors', labels: ['sutradara', 'director', 'directors'] },
+    { key: 'cast', labels: ['pemeran', 'actor', 'actors', 'cast', 'bintang'] },
+    { key: 'quality', labels: ['quality', 'kualitas'] }
+];
+
+function cleanSynopsisText(raw = '') {
+    return String(raw)
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/^(Nonton|Download|Streaming|Rebahin|Link)\b[^–-]*[–-]?\s*/i, '')
+        .trim()
+        .slice(0, 480);
+}
+
+function yearFromTitle(title = '') {
+    const m = String(title).match(/\((\d{4})\)/);
+    return m?.[1] || '';
+}
+
+function extractLabelFields($) {
+    const found = {};
+    $('article *').each((_, el) => {
+        const label = $(el).clone().children().remove().end().text().replace(/\s+/g, ' ').trim().replace(/:$/, '');
+        if (!label) return;
+        for (const rule of META_FIELD_RULES) {
+            if (found[rule.key]) continue;
+            if (!rule.labels.some((l) => label.toLowerCase() === l)) continue;
+            const block = $(el).closest('p, li, tr, div').text().replace(/\s+/g, ' ').trim();
+            const val = block.replace(new RegExp(`^${label}\\s*:?\\s*`, 'i'), '').trim();
+            if (val) found[rule.key] = val.slice(0, 280);
+        }
+    });
+    return found;
+}
+
+function extractSynopsis($, title = '') {
+    const paragraphs = [];
+    $('.entry-content p, article .content p, .sinopsis p, .gmr-single-post p').each((_, el) => {
+        const t = $(el).text().replace(/\s+/g, ' ').trim();
+        if (t.length > 50) paragraphs.push(t);
+    });
+
+    for (const t of paragraphs) {
+        const dash = t.match(/(?:Subtitle Indonesia|HD\s+Bluray|HD\s+CAM|Bluray)[^–-]*[–-]\s*(.+)$/i);
+        if (dash?.[1] && dash[1].length > 35) return cleanSynopsisText(dash[1]);
+    }
+
+    const titleBit = String(title).replace(/\s*\(\d{4}\)\s*$/, '').trim();
+    for (const t of paragraphs) {
+        if (titleBit && t.includes(titleBit.slice(0, Math.min(18, titleBit.length)))) {
+            const afterYear = t.match(/\(\d{4}\)\s*(.+)$/);
+            if (afterYear?.[1] && afterYear[1].length > 35) return cleanSynopsisText(afterYear[1]);
+        }
+    }
+
+    for (const t of paragraphs) {
+        if (/^(Genre|Tahun|Negara|Durasi|Sutradara|Directors|Pemeran|Actors|Quality):/i.test(t)) continue;
+        if (/^(Nonton|Download|Streaming|Rebahin|Link Streaming)/i.test(t) && t.length < 120) continue;
+        if (t.length > 80) return cleanSynopsisText(t);
+    }
+
+    return '';
+}
+
+function extractFilmDetails($, html, title = '') {
+    const fields = extractLabelFields($);
+    const synopsis = extractSynopsis($, title);
+    const year = fields.year || yearFromTitle(title);
+
+    let genres = fields.genres || '';
+    if (genres && fields.country) {
+        genres = genres
+            .split(',')
+            .map((g) => g.trim())
+            .filter((g) => g && g.toLowerCase() !== fields.country.toLowerCase())
+            .join(', ');
+    }
+
+    const duration = fields.duration && /\d/.test(fields.duration) ? fields.duration.slice(0, 40) : '';
+
+    const details = {
+        synopsis,
+        year,
+        country: fields.country || '',
+        duration,
+        genres,
+        directors: fields.directors || '',
+        cast: fields.cast || '',
+        quality: fields.quality || ''
+    };
+
+    const hasData = Object.values(details).some((v) => String(v || '').trim());
+    return hasData ? details : null;
+}
+
 async function resolveEmbed(pageUrl, base) {
     const html = await fetchHtml(pageUrl);
     const $ = cheerio.load(html);
     const embedCandidates = collectEmbedCandidates($, html, base);
     const videoCandidates = collectVideoCandidates($, html, base);
 
-    let embedUrl = embedCandidates[0] || '';
+    const nonVid = embedCandidates.filter((u) => !/vidplayer\.live/i.test(u));
+    let embedUrl = (nonVid[0] || embedCandidates[0]) || '';
     let videoUrl = '';
+    const orderedFallbacks = [
+        ...nonVid.filter((u) => u !== embedUrl),
+        ...embedCandidates.filter((u) => u !== embedUrl && !nonVid.includes(u))
+    ];
 
     if (!embedUrl && videoCandidates.length) {
         for (const candidate of videoCandidates) {
@@ -284,9 +399,10 @@ async function resolveEmbed(pageUrl, base) {
         title: title.slice(0, 140),
         embedUrl,
         videoUrl: embedUrl ? '' : videoUrl,
-        embedFallbacks: embedCandidates.slice(1, 4),
+        embedFallbacks: orderedFallbacks.slice(0, 5),
         pageUrl,
-        poster: poster.startsWith('http') ? poster : absUrl(base, poster)
+        poster: poster.startsWith('http') || poster.startsWith('//') ? absUrl(base, poster) : absUrl(base, poster),
+        details: extractFilmDetails($, html, title)
     };
 }
 
@@ -442,26 +558,101 @@ export async function searchLk21(query, page = 1) {
     return merged.slice(0, 48);
 }
 
-export async function getLk21Film(url) {
-    let base = getBase();
+function normalizeFilmPageUrl(url) {
     try {
-        base = new URL(url).origin;
+        const u = new URL(url);
+        if (u.pathname.includes('/sinopsis/')) return u.href;
     } catch (_) {}
+    return url;
+}
 
-    let film = await resolveEmbed(url, base);
+function slugFromPageUrl(url = '') {
+    const m = String(url).match(/\/sinopsis\/([^/]+)\/?$/i);
+    return m?.[1] || '';
+}
 
-    if (!film.embedUrl && film.embedFallbacks?.length) {
-        for (const alt of film.embedFallbacks) {
-            film = { ...film, embedUrl: alt, videoUrl: '' };
-            break;
+function mirrorPageUrl(pageUrl, base) {
+    try {
+        const src = new URL(pageUrl);
+        const dst = new URL(base.endsWith('/') ? base : `${base}/`);
+        src.protocol = dst.protocol;
+        src.host = dst.host;
+        return src.href;
+    } catch (_) {
+        return pageUrl;
+    }
+}
+
+function finalizeFilmRecord(film, pageUrl) {
+    let embedUrl = film.embedUrl || '';
+    let videoUrl = film.videoUrl || '';
+
+    if (!embedUrl && film.embedFallbacks?.length) {
+        embedUrl = film.embedFallbacks[0];
+    }
+
+    if (!embedUrl && !videoUrl) {
+        throw new Error('player kosong');
+    }
+
+    return {
+        title: film.title,
+        embedUrl,
+        videoUrl: embedUrl ? '' : videoUrl,
+        embedFallbacks: film.embedFallbacks || [],
+        pageUrl: film.pageUrl || pageUrl,
+        poster: film.poster,
+        source: 'lk21',
+        details: film.details || null
+    };
+}
+
+async function resolveFilmFromPage(pageUrl, base) {
+    const targets = [...new Set([pageUrl, mirrorPageUrl(pageUrl, base)].filter(Boolean))];
+    let lastErr = null;
+
+    for (const target of targets) {
+        try {
+            const film = await resolveEmbed(target, base);
+            return finalizeFilmRecord(film, pageUrl);
+        } catch (e) {
+            lastErr = e;
         }
     }
 
-    if (!film.embedUrl && !film.videoUrl) {
-        throw new Error('Player tidak ditemukan. Coba film terbaru atau judul lain.');
+    throw lastErr || new Error('player kosong');
+}
+
+export async function getLk21Film(url, { title = '', depth = 0 } = {}) {
+    const pageUrl = normalizeFilmPageUrl(url);
+    const errors = [];
+    const bases = [...new Set([
+        ...DEFAULT_BASES,
+        (() => { try { return new URL(pageUrl).origin; } catch { return null; } })()
+    ].filter(Boolean))];
+
+    for (const base of bases) {
+        try {
+            return await resolveFilmFromPage(pageUrl, base);
+        } catch (e) {
+            errors.push(`${base}: ${e.message}`);
+            console.log(`LK21 film skip ${base}:`, e.message);
+        }
     }
 
-    const out = { ...film, source: 'lk21' };
-    delete out.embedFallbacks;
-    return out;
+    const slug = slugFromPageUrl(pageUrl);
+    const searchQ = String(title || '').trim() || titleFromSlug(pageUrl);
+    if (depth < 1 && searchQ.length >= 2) {
+        try {
+            const results = await searchLk21(searchQ, 1);
+            const match = results.find((r) => slug && r.url.includes(`/sinopsis/${slug}`)) || results[0];
+            if (match?.url && match.url !== pageUrl) {
+                return getLk21Film(match.url, { title: match.title || title, depth: depth + 1 });
+            }
+        } catch (e) {
+            errors.push(`search: ${e.message}`);
+        }
+    }
+
+    throw new Error(errors[0] || 'Player tidak ditemukan. Coba film lain dari katalog.');
 }

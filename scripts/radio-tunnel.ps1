@@ -1,5 +1,5 @@
-# LuxxBot — buka radio ke internet via Cloudflare Tunnel (gratis, HTTPS)
-# Prasyarat: bot sudah jalan (npm start) dan radio listen di port 3920
+# LuxxBot - buka radio/watch ke internet via Cloudflare Tunnel
+# Prasyarat: bot sudah jalan (pm2) dan radio listen di port 3920
 
 $ErrorActionPreference = "Stop"
 $Port = if ($env:RADIO_PORT) { $env:RADIO_PORT } else { 3920 }
@@ -8,6 +8,13 @@ $LocalUrl = "http://127.0.0.1:$Port"
 function Test-Cloudflared {
     $cf = Get-Command cloudflared -ErrorAction SilentlyContinue
     if ($cf) { return $cf.Source }
+    $paths = @(
+        "${env:ProgramFiles(x86)}\cloudflared\cloudflared.exe",
+        "$env:ProgramFiles\cloudflared\cloudflared.exe"
+    )
+    foreach ($p in $paths) {
+        if (Test-Path $p) { return $p }
+    }
     $winget = Get-Command winget -ErrorAction SilentlyContinue
     if ($winget) {
         Write-Host "Menginstall cloudflared via winget..."
@@ -20,23 +27,23 @@ function Test-Cloudflared {
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Magenta
-Write-Host "  LuxxBot Radio — Cloudflare Tunnel" -ForegroundColor Magenta
+Write-Host "  LuxxBot - Cloudflare Tunnel" -ForegroundColor Magenta
 Write-Host "========================================" -ForegroundColor Magenta
 Write-Host ""
 
 try {
-    $health = Invoke-WebRequest -Uri "$LocalUrl/health" -UseBasicParsing -TimeoutSec 3
-    Write-Host "OK: Radio bot aktif di $LocalUrl" -ForegroundColor Green
+    $null = Invoke-WebRequest -Uri "$LocalUrl/health" -UseBasicParsing -TimeoutSec 3
+    Write-Host "OK: Bot aktif di $LocalUrl" -ForegroundColor Green
 } catch {
-    Write-Host "PERINGATAN: Bot/radio belum merespons di $LocalUrl" -ForegroundColor Yellow
-    Write-Host "Jalankan dulu: npm start" -ForegroundColor Yellow
+    Write-Host "PERINGATAN: Bot belum merespons di $LocalUrl" -ForegroundColor Yellow
+    Write-Host "Jalankan: npm run pm2:restart" -ForegroundColor Yellow
     Write-Host ""
 }
 
 $cfPath = Test-Cloudflared
 if (-not $cfPath) {
     Write-Host "cloudflared tidak ditemukan." -ForegroundColor Red
-    Write-Host "Install manual: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+    Write-Host "Install: winget install Cloudflare.cloudflared"
     exit 1
 }
 
@@ -45,13 +52,10 @@ Write-Host "Tunnel dimulai. Tunggu URL https://....trycloudflare.com" -Foregroun
 Write-Host ""
 Write-Host "Setelah URL muncul:" -ForegroundColor White
 Write-Host "  1. Salin URL ke .env -> RADIO_PUBLIC_URL=https://....trycloudflare.com"
-Write-Host "  2. Restart bot (pm2 restart luxx --update-env)"
-Write-Host "  3. Tes !radio dari WhatsApp (pakai data seluler, bukan WiFi rumah)"
+Write-Host "  2. pm2 restart luxx --update-env"
+Write-Host "  3. Tes !watch dari WhatsApp"
 Write-Host ""
-Write-Host "Biarkan jendela ini terbuka selama mau pakai link publik." -ForegroundColor DarkGray
-Write-Host "Tutup / Ctrl+C = link mati (bot tetap jalan)." -ForegroundColor DarkGray
-Write-Host ""
-Write-Host "Tekan Ctrl+C untuk stop tunnel." -ForegroundColor DarkGray
+Write-Host "Biarkan jendela ini terbuka. Tutup = link mati." -ForegroundColor DarkGray
 Write-Host ""
 
 & $cfPath tunnel --url $LocalUrl

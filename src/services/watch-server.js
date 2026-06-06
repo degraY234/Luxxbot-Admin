@@ -5,14 +5,30 @@ import { fileURLToPath } from 'url';
 import express from 'express';
 import { randomBytes } from 'crypto';
 import axios from 'axios';
-import { getRadioPublicUrl } from './radio-server.js';
+import { getRadioPublicUrl } from '../utils/radio-url.js';
 import {
     searchLk21, getLk21Film, fetchLatestLk21, fetchLk21Genres,
     browseLk21Genre, browseLk21, getLk21HomeMeta
 } from './lk21.js';
+import { isVidplayerUrl, resolveVidplayerStream } from './vidplayer.js';
 
 const streamAgent = new https.Agent({ rejectUnauthorized: false });
 const STREAM_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const PLAYER_REFERER = 'https://sf21.vidplayer.live/';
+const PLAYER_ORIGIN = 'https://sf21.vidplayer.live';
+
+function streamFetchHeaders(url, req) {
+    const headers = { 'User-Agent': STREAM_UA, Accept: '*/*' };
+    const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
+    if (/vidplayer\.live|\/v4\/|\.m3u8/i.test(url) || /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(host)) {
+        headers.Referer = PLAYER_REFERER;
+        headers.Origin = PLAYER_ORIGIN;
+    } else {
+        headers.Referer = 'https://lk21.us/';
+    }
+    if (req?.headers?.range) headers.Range = req.headers.range;
+    return headers;
+}
 
 function getWatchDiscordInvite() {
     return process.env.DISCORD_SERVER_INVITE?.trim() || 'https://discord.gg/QJQVDfvx';
@@ -30,12 +46,93 @@ function decodeB64Url(str) {
     return Buffer.from(String(str), 'base64url').toString('utf8');
 }
 
+function cleanEmbedFallbacks(embedUrl, fallbacks = []) {
+    return fallbacks.filter((u) => {
+        if (!u || u === embedUrl) return false;
+        if (/vidplayer\.live\/?$/i.test(u) && !/#[a-z0-9]+/i.test(u)) return false;
+        return true;
+    }).slice(0, 4);
+}
+
+function proxyEmbedUrl(url) {
+    if (!url) return '';
+    return `/watch/embed?u=${encodeB64Url(url)}`;
+}
+
+function clientEmbedUrl(url) {
+    if (!url || !/^https?:\/\//i.test(url)) return '';
+    return proxyEmbedUrl(url);
+}
+
 function enrichFilmForClient(film) {
     if (!film) return null;
     const out = { ...film };
-    if (out.embedUrl) out.playEmbedUrl = `/watch/embed?u=${encodeB64Url(out.embedUrl)}`;
-    if (out.videoUrl) out.playVideoUrl = `/watch/api/stream?u=${encodeB64Url(out.videoUrl)}`;
+    if (out.hls && out.videoUrl) {
+        out.playVideoUrl = `/watch/api/hls?u=${encodeB64Url(out.videoUrl)}`;
+        out.playUseHls = true;
+    } else if (out.videoUrl) {
+        out.playVideoUrl = `/watch/api/stream?u=${encodeB64Url(out.videoUrl)}`;
+    }
+    if (out.embedUrl) {
+        out.playEmbedUrl = clientEmbedUrl(out.embedUrl);
+        out.playEmbedProxyUrl = out.playEmbedUrl;
+    }
+    if (out.embedFallbacks?.length) {
+        const cleaned = cleanEmbedFallbacks(out.embedUrl, out.embedFallbacks);
+        out.playEmbedFallbacks = cleaned.map((u) => clientEmbedUrl(u)).filter(Boolean);
+    }
     return out;
+}
+
+async function tryResolveVidplayer(embedUrl) {
+    try {
+        return await resolveVidplayerStream(embedUrl);
+    } catch (e) {
+        const status = e.response?.status;
+        if (status === 429) console.log('vidplayer rate limited — pakai embed');
+        else console.log('vidplayer resolve skip:', e.message);
+        return null;
+    }
+}
+
+async function resolveFilmPlayback(film) {
+    if (!film || film.videoUrl) return film;
+
+    const candidates = [
+        film.embedUrl,
+        ...(film.embedFallbacks || [])
+    ].filter(Boolean);
+
+    if (!candidates.length) return film;
+
+    for (const url of candidates) {
+        if (!isVidplayerUrl(url)) continue;
+        const resolved = await tryResolveVidplayer(url);
+        if (resolved?.streamUrl) {
+            const rest = candidates.filter((u) => u !== url);
+            const nonVid = rest.filter((u) => !isVidplayerUrl(u));
+            return {
+                ...film,
+                title: film.title || resolved.title || film.title,
+                videoUrl: resolved.streamUrl,
+                hls: true,
+                embedUrl: url,
+                embedFallbacks: [...nonVid, ...rest.filter((u) => isVidplayerUrl(u) && u !== url)].slice(0, 5)
+            };
+        }
+    }
+
+    const nonVid = candidates.filter((u) => !isVidplayerUrl(u));
+    if (nonVid.length && isVidplayerUrl(film.embedUrl)) {
+        return {
+            ...film,
+            embedUrl: nonVid[0],
+            embedFallbacks: [...nonVid.slice(1), ...candidates.filter((u) => isVidplayerUrl(u))].slice(0, 5),
+            videoUrl: ''
+        };
+    }
+
+    return film;
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -95,6 +192,10 @@ function pruneViewers() {
     for (const [id, v] of room.viewers) {
         if (now - v.lastSeen > VIEWER_TTL_MS) room.viewers.delete(id);
     }
+    if (room.viewers.size === 0) {
+        room.film = null;
+        room.playback = { position: 0, playing: false, updatedAt: Date.now(), by: '' };
+    }
 }
 
 function pushChat(username, text) {
@@ -138,15 +239,27 @@ export function getWatchRoomState() {
     return roomSnapshot();
 }
 
-async function playNextFromQueue(by) {
-    if (!room.queue.length) return { ok: false, error: 'Antrian kosong.' };
+async function loadFilmFromUrl(url, title = '') {
+    let film = withFilmKey(await getLk21Film(url, { title }));
+    film = withFilmKey(await resolveFilmPlayback(film));
+    if (!film.embedUrl && !film.videoUrl) {
+        throw new Error('Player tidak ditemukan untuk film ini.');
+    }
+    return film;
+}
+
+async function playNextFromQueue(by, { auto = false } = {}) {
+    if (!room.queue.length) {
+        return { ok: false, error: auto ? 'Antrian kosong — film selesai.' : 'Antrian kosong — tambahkan film dulu.' };
+    }
     const next = room.queue.shift();
     try {
-        const film = withFilmKey(await getLk21Film(next.url));
+        const film = await loadFilmFromUrl(next.url, next.title);
         room.film = film;
-        setPlayback({ position: 0, playing: true, by });
-        pushChat('⏭️ TV', `${by} skip → ${film.title}`);
-        return { ok: true, film };
+        setPlayback({ position: 0, playing: false, by });
+        const label = auto ? 'auto lanjut' : 'skip';
+        pushChat('⏭️ TV', `${by} ${label} → ${film.title}`);
+        return { ok: true, film, auto };
     } catch (e) {
         room.queue.unshift(next);
         return { ok: false, error: e.message };
@@ -203,12 +316,15 @@ export function mountWatchServer(app) {
         res.json({ ok: true, sessionId, username, room: roomSnapshot() });
     });
 
-    app.post('/watch/api/ping', (req, res) => {
+    app.post('/watch/api/ping', async (req, res) => {
         const { sessionId, reportPlayback, position, playing } = req.body || {};
         if (sessionId && room.viewers.has(sessionId)) {
             const viewer = room.viewers.get(sessionId);
             viewer.lastSeen = Date.now();
-            if (reportPlayback && room.film?.videoUrl) {
+            const finished = !!req.body?.finished;
+            if (finished && room.film) {
+                await playNextFromQueue(viewer.username, { auto: true });
+            } else if (reportPlayback && room.film?.videoUrl) {
                 const clientPos = Number(position) || 0;
                 const serverPos = getEffectivePlayback();
                 const clientPlaying = !!playing;
@@ -235,6 +351,16 @@ export function mountWatchServer(app) {
         const user = room.viewers.get(sessionId).username;
         setPlayback({ position, playing, by: user });
         res.json({ ok: true, room: roomSnapshot() });
+    });
+
+    app.get('/watch/api/health', (_req, res) => {
+        res.json({
+            ok: true,
+            service: 'luxx-watch',
+            viewers: room.viewers.size,
+            hasFilm: Boolean(room.film),
+            publicUrl: `${getRadioPublicUrl()}/watch`
+        });
     });
 
     app.get('/watch/api/state', (_req, res) => res.json({ ok: true, room: roomSnapshot() }));
@@ -308,31 +434,19 @@ export function mountWatchServer(app) {
             if (!raw) return res.status(400).json({ ok: false, error: 'URL kosong.' });
             const url = decodeB64Url(raw);
             if (!/^https?:\/\//i.test(url)) return res.status(400).json({ ok: false, error: 'URL tidak valid.' });
-            const referers = [
-                'https://lk21.us/',
-                `https://${new URL(url).hostname}/`,
-                'https://www.lk21.us/',
-                ''
-            ];
             let response = null;
             let lastErr = null;
-            for (const referer of referers) {
-                try {
-                    const headers = { 'User-Agent': STREAM_UA, Accept: '*/*' };
-                    if (referer) headers.Referer = referer;
-                    if (req.headers.range) headers.Range = req.headers.range;
-                    response = await axios.get(url, {
-                        responseType: 'stream',
-                        httpsAgent: streamAgent,
-                        headers,
-                        timeout: 120000,
-                        maxRedirects: 5,
-                        validateStatus: (s) => s >= 200 && s < 400
-                    });
-                    break;
-                } catch (e) {
-                    lastErr = e;
-                }
+            try {
+                response = await axios.get(url, {
+                    responseType: 'stream',
+                    httpsAgent: streamAgent,
+                    headers: streamFetchHeaders(url, req),
+                    timeout: 120000,
+                    maxRedirects: 5,
+                    validateStatus: (s) => s >= 200 && s < 400
+                });
+            } catch (e) {
+                lastErr = e;
             }
             if (!response) throw lastErr || new Error('Stream gagal');
             if (response.headers['content-type']) res.setHeader('Content-Type', response.headers['content-type']);
@@ -340,12 +454,84 @@ export function mountWatchServer(app) {
             if (response.headers['content-range']) res.setHeader('Content-Range', response.headers['content-range']);
             res.setHeader('Accept-Ranges', 'bytes');
             res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Cache-Control', 'no-store');
             res.status(response.status);
-            response.data.pipe(res);
+
+            const upstream = response.data;
+            const cleanup = () => {
+                try { upstream.destroy(); } catch (_) {}
+            };
+            req.on('close', cleanup);
+            res.on('close', cleanup);
+            upstream.on('error', () => {
+                if (!res.headersSent) {
+                    res.status(502).json({ ok: false, error: 'Stream putus. Coba film dengan player embed.' });
+                } else {
+                    res.end();
+                }
+            });
+            upstream.pipe(res);
         } catch (e) {
             console.log('watch stream proxy:', e.message);
             if (!res.headersSent) res.status(502).json({ ok: false, error: 'Gagal memuat video. Coba film terbaru dengan player embed.' });
         }
+    });
+
+    app.get('/watch/api/hls', async (req, res) => {
+        try {
+            const raw = req.query.u;
+            if (!raw) return res.status(400).send('URL kosong');
+            const url = decodeB64Url(raw);
+            if (!/^https?:\/\//i.test(url)) return res.status(400).send('URL tidak valid');
+
+            let text = '';
+            try {
+                const response = await axios.get(url, {
+                    httpsAgent: streamAgent,
+                    headers: streamFetchHeaders(url, req),
+                    timeout: 30000,
+                    responseType: 'text',
+                    validateStatus: (s) => s >= 200 && s < 400
+                });
+                text = String(response.data || '');
+            } catch (_) {}
+            if (!text) return res.status(502).send('Gagal memuat playlist');
+
+            const base = url.substring(0, url.lastIndexOf('/') + 1);
+            const publicRoot = `${getRadioPublicUrl()}/watch/api/stream?u=`;
+            const rewritten = text.split('\n').map((line) => {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith('#')) return line;
+                const abs = /^https?:\/\//i.test(trimmed) ? trimmed : new URL(trimmed, base).href;
+                return `${publicRoot}${encodeB64Url(abs)}`;
+            }).join('\n');
+
+            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Cache-Control', 'no-store');
+            res.send(rewritten);
+        } catch (e) {
+            console.log('watch hls proxy:', e.message);
+            if (!res.headersSent) res.status(502).send('Gagal memuat HLS');
+        }
+    });
+
+    app.get('/watch/lk21', (req, res) => {
+        const raw = req.query.u;
+        if (!raw) return res.status(400).send('URL kosong');
+        let target;
+        try {
+            target = decodeB64Url(raw);
+        } catch (_) {
+            return res.status(400).send('URL tidak valid');
+        }
+        if (!/^https?:\/\//i.test(target) || !/\/sinopsis\//i.test(target)) {
+            return res.status(400).send('URL LK21 tidak valid');
+        }
+        const safe = target.replace(/"/g, '&quot;').replace(/</g, '&lt;');
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(`<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><meta name="referrer" content="no-referrer-when-downgrade"/><title>Player</title><style>*{margin:0;padding:0;box-sizing:border-box}html,body{height:100%;background:#000;overflow:hidden}#stage{position:relative;width:100%;height:100%;overflow:hidden;background:#000}#lk21-frame{position:absolute;left:0;width:100%;height:280%;top:-132%;border:0;display:block;background:#000;pointer-events:auto}@media(max-width:768px){#lk21-frame{height:310%;top:-138%}}</style></head><body><div id="stage"><iframe id="lk21-frame" src="${safe}" referrerpolicy="no-referrer-when-downgrade" allowfullscreen allow="autoplay;encrypted-media;picture-in-picture;fullscreen;clipboard-write"></iframe></div></body></html>`);
     });
 
     app.get('/watch/embed', (req, res) => {
@@ -358,9 +544,10 @@ export function mountWatchServer(app) {
             return res.status(400).send('URL tidak valid');
         }
         if (!/^https?:\/\//i.test(target)) return res.status(400).send('URL tidak valid');
-        const safe = target.replace(/"/g, '&quot;');
+        const safe = target.replace(/"/g, '&quot;').replace(/</g, '&lt;');
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.send(`<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><style>*{margin:0;padding:0}html,body{height:100%;background:#000;overflow:hidden}iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style></head><body><iframe src="${safe}" referrerpolicy="no-referrer-when-downgrade" allowfullscreen allow="autoplay;encrypted-media;picture-in-picture;fullscreen"></iframe></body></html>`);
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(`<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><meta name="referrer" content="no-referrer-when-downgrade"/><title>Player</title><style>*{margin:0;padding:0}html,body{height:100%;background:#000;overflow:hidden}iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style></head><body><iframe src="${safe}" referrerpolicy="no-referrer-when-downgrade" allowfullscreen allow="autoplay;encrypted-media;picture-in-picture;fullscreen;clipboard-write"></iframe></body></html>`);
     });
 
     app.post('/watch/api/play', async (req, res) => {
@@ -372,21 +559,25 @@ export function mountWatchServer(app) {
         try {
             let film;
             if (embedUrl) {
-                film = {
+                film = withFilmKey(await resolveFilmPlayback({
                     title: title || 'Video',
                     embedUrl,
                     videoUrl: req.body?.videoUrl || '',
                     poster: poster || '',
                     pageUrl: url || '',
-                    source: 'custom'
-                };
+                    source: 'custom',
+                    embedFallbacks: req.body?.embedFallbacks || []
+                }));
             } else if (url) {
-                film = await getLk21Film(url);
+                film = await loadFilmFromUrl(url, title);
             } else {
                 return res.status(400).json({ ok: false, error: 'URL film kosong.' });
             }
-            room.film = withFilmKey(film);
-            setPlayback({ position: 0, playing: true, by: user });
+            room.film = film;
+            if (!room.film.embedUrl && !room.film.videoUrl) {
+                throw new Error('Player LK21 tidak ditemukan untuk film ini.');
+            }
+            setPlayback({ position: 0, playing: false, by: user });
             pushChat('📺 TV', `${user} memutar ${film.title}`);
             res.json({ ok: true, room: roomSnapshot() });
         } catch (e) {
@@ -443,7 +634,14 @@ export function mountWatchServer(app) {
 
     app.get('/watch', sendWatch);
     app.get('/watch/', sendWatch);
-    app.use('/watch', express.static(watchStaticDir, { index: false, redirect: false }));
+    app.use('/watch', express.static(watchStaticDir, {
+        index: false,
+        redirect: false,
+        maxAge: '1h',
+        setHeaders(res, filePath) {
+            if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+        }
+    }));
 
     console.log(`\x1b[35m📺 Luxx Watch: ${getRadioPublicUrl()}/watch\x1b[0m`);
 }

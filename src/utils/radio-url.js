@@ -1,9 +1,19 @@
+import fs from 'fs';
+import path from 'path';
 import os from 'os';
 import axios from 'axios';
 
 const RADIO_PORT = Number(process.env.RADIO_PORT || 3920);
+const TUNNEL_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/gi;
 
 let cache = { base: null, at: 0 };
+
+const TUNNEL_LOG_PATHS = [
+    path.join(process.cwd(), 'temp', 'radio-tunnel-new.log'),
+    path.join(process.cwd(), 'temp', 'radio-tunnel.log'),
+    path.join(process.cwd(), 'temp', 'radio-tunnel-setup.log'),
+    path.join(process.env.USERPROFILE || process.env.HOME || '', '.pm2', 'logs', 'luxx-tunnel-out.log')
+];
 
 export function getLanIPv4() {
     const nets = os.networkInterfaces();
@@ -27,18 +37,147 @@ function isPrivateHost(hostname) {
 
 async function probeBase(base) {
     const { data } = await axios.get(`${base.replace(/\/$/, '')}/health`, {
-        timeout: 4000,
+        timeout: 5000,
         validateStatus: (s) => s === 200
     });
     return Boolean(data?.ok);
 }
 
+function getConfiguredBaseUrl() {
+    return process.env.RADIO_PUBLIC_URL?.trim().replace(/\/$/, '') || '';
+}
+
+/** URL publik dari .env (tunnel/domain/VPS) — bukan localhost/LAN. */
+export function getConfiguredPublicBaseUrl() {
+    const configured = getConfiguredBaseUrl();
+    if (!configured) return null;
+    try {
+        const { hostname } = new URL(configured);
+        if (!isPrivateHost(hostname)) return configured;
+    } catch {
+        /* invalid */
+    }
+    return null;
+}
+
+/** Ambil URL trycloudflare terbaru dari log tunnel (kalau .env ketinggalan). */
+export function extractTunnelUrlsFromLogs() {
+    const ordered = [];
+    const seen = new Set();
+    for (const logPath of TUNNEL_LOG_PATHS) {
+        try {
+            if (!fs.existsSync(logPath)) continue;
+            const content = fs.readFileSync(logPath, 'utf8');
+            for (const m of content.matchAll(TUNNEL_URL_RE)) {
+                const u = m[0];
+                if (seen.has(u)) {
+                    ordered.splice(ordered.indexOf(u), 1);
+                } else {
+                    seen.add(u);
+                }
+                ordered.push(u);
+            }
+        } catch {
+            /* skip */
+        }
+    }
+    return ordered.reverse();
+}
+
+async function collectPublicCandidates() {
+    const out = [];
+    const push = (u) => {
+        const clean = String(u || '').trim().replace(/\/$/, '');
+        if (clean && !out.includes(clean)) out.push(clean);
+    };
+    push(getConfiguredPublicBaseUrl());
+    for (const u of extractTunnelUrlsFromLogs()) push(u);
+    return out;
+}
+
 /**
- * Pilih URL radio yang benar-benar hidup: publik (tunnel) → LAN → localhost.
+ * Cari URL publik yang benar-benar hidup (probe /health).
+ * @returns {Promise<{ base: string|null, source: string, localOk: boolean }>}
+ */
+export async function discoverLivePublicBase() {
+    let localOk = false;
+    try {
+        localOk = await probeBase(`http://127.0.0.1:${RADIO_PORT}`);
+    } catch {
+        localOk = false;
+    }
+
+    const candidates = await collectPublicCandidates();
+    for (const base of candidates) {
+        try {
+            if (await probeBase(base)) {
+                const configured = getConfiguredPublicBaseUrl();
+                if (configured && configured !== base) {
+                    console.log(`\x1b[33m🌐 Tunnel aktif: ${base} (update RADIO_PUBLIC_URL di .env)\x1b[0m`);
+                }
+                return { base, source: 'tunnel', localOk };
+            }
+        } catch {
+            /* coba berikutnya */
+        }
+    }
+
+    if (localOk) {
+        const configured = getConfiguredPublicBaseUrl();
+        if (configured) {
+            return { base: configured, source: 'stale', localOk };
+        }
+        const lan = getLanIPv4();
+        if (lan) return { base: `http://${lan}:${RADIO_PORT}`, source: 'lan', localOk };
+        return { base: `http://127.0.0.1:${RADIO_PORT}`, source: 'local', localOk };
+    }
+
+    return { base: null, source: 'down', localOk: false };
+}
+
+/** Cari URL publik hidup — tanpa restart tunnel (restart = URL baru = link lama mati). */
+export async function ensureLivePublicBase() {
+    invalidateRadioUrlCache();
+    return discoverLivePublicBase();
+}
+
+/**
+ * URL untuk dibagikan ke user (!radio, !watch).
+ */
+export async function resolveShareBaseUrl() {
+    if (cache.base && Date.now() - cache.at < 30000) return cache.base;
+
+    const live = await discoverLivePublicBase();
+    if (live.base && live.source === 'tunnel') {
+        cache = { base: live.base, at: Date.now() };
+        return live.base;
+    }
+
+    const configured = getConfiguredPublicBaseUrl();
+    if (configured) {
+        cache = { base: configured, at: Date.now() };
+        return configured;
+    }
+
+    return resolveRadioBaseUrl();
+}
+
+export async function getShareBaseStatus() {
+    return discoverLivePublicBase();
+}
+
+/**
+ * Pilih URL yang hidup untuk cek internal: .env lokal → LAN → localhost.
  */
 export async function resolveRadioBaseUrl() {
-    const configured = process.env.RADIO_PUBLIC_URL?.trim().replace(/\/$/, '');
+    const configured = getConfiguredBaseUrl();
     if (cache.base && Date.now() - cache.at < 45000) return cache.base;
+
+    const publicBase = getConfiguredPublicBaseUrl();
+    if (publicBase) {
+        cache = { base: publicBase, at: Date.now() };
+        return publicBase;
+    }
 
     const candidates = [];
     if (configured) candidates.push(configured);
@@ -63,11 +202,17 @@ export async function resolveRadioBaseUrl() {
 }
 
 export async function getRadioListenUrlAsync() {
-    const base = await resolveRadioBaseUrl();
+    const base = await resolveShareBaseUrl();
     return `${base}/radio`;
 }
 
-export function getRadioUrlHint(baseUrl) {
+export function getRadioUrlHint(baseUrl, status = null) {
+    if (status?.source === 'stale') {
+        return '\n\n⚠️ _Tunnel di .env mungkin mati. Owner: jalankan `scripts\\radio-tunnel.ps1` lalu restart bot._';
+    }
+    if (status?.source === 'down') {
+        return '\n\n❌ _Server watch belum hidup. Pastikan bot (pm2) & tunnel jalan._';
+    }
     try {
         const { hostname } = new URL(baseUrl);
         if (!isPrivateHost(hostname)) return '';
@@ -76,10 +221,19 @@ export function getRadioUrlHint(baseUrl) {
         }
         return '\n\n💡 _Link WiFi/LAN — HP harus satu WiFi dengan PC bot. Untuk internet: jalankan tunnel._';
     } catch {
-        return '\n\n⚠️ _URL radio tidak valid._';
+        return '\n\n⚠️ _URL tidak valid._';
     }
 }
 
 export function invalidateRadioUrlCache() {
     cache = { base: null, at: 0 };
+}
+
+/** URL publik untuk share (/radio, /watch) */
+export function getRadioPublicUrl() {
+    return (
+        getConfiguredPublicBaseUrl() ||
+        getConfiguredBaseUrl() ||
+        `http://127.0.0.1:${RADIO_PORT}`
+    );
 }

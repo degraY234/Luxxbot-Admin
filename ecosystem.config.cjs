@@ -19,6 +19,20 @@ module.exports = {
                 NODE_ENV: 'production',
                 PM2_APP_NAME: 'luxx'
             }
+        },
+        {
+            name: 'luxx-tunnel',
+            script: 'scripts/radio-tunnel-daemon.mjs',
+            cwd: root,
+            interpreter: 'node',
+            autorestart: true,
+            max_restarts: 50,
+            min_uptime: '5s',
+            restart_delay: 8000,
+            watch: false,
+            env: {
+                NODE_ENV: 'production'
+            }
         }
     ]
 };

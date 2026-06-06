@@ -9,7 +9,7 @@ import { Sticker, StickerTypes } from 'wa-sticker-formatter';
 import { buildMenuText } from '../../menu.js';
 import { BOT_NAME, OWNER_NUMBER, PM2_APP_NAME, ai, GEMINI_API_KEY, GEMINI_VISION_MODEL, startTime, W2G_ROOM_FILE, bratStyles } from '../config.js';
 import { state, aiConversationMemory, userAIContext } from '../state.js';
-import { checkCooldown } from '../utils/cooldown.js';
+import { checkCooldown, checkCommandCooldown, getRemainingCooldown } from '../utils/cooldown.js';
 import { runtime } from '../utils/runtime.js';
 import { getOrCreateRoom, createW2GRoom } from '../services/w2g.js';
 import { addTrackToRadio } from '../services/radio-server.js';
@@ -17,6 +17,7 @@ import { getWeatherMessages } from '../services/weather.js';
 import { buildChangelogText } from '../services/changelog.js';
 import { groqAI, tanyakanAI, tryCreatorReply } from '../services/ai.js';
 import { askLuxxAI } from '../services/ai-context.js';
+import { trackGroupBotActivity } from '../services/group-bot-context.js';
 import { generateFallbackImage, polishText } from '../services/media.js';
 import { generateBuatImage } from '../services/buat-image.js';
 import { fetchFootballSchedule } from '../services/football.js';
@@ -121,12 +122,6 @@ export function registerMessageHandler(sock) {
                 delete global.playSession[from];
             }
 
-            // Global cooldown anti-spam (kecuali pilihan angka !play)
-            if (!checkCooldown(from, 'global', 1200)) {
-                await sock.sendMessage(from, { text: '⏳ pelan dulu ya sayang, jangan spam 😤' }, { quoted: msg });
-                return;
-            }
-
             // --- Anti-Link ---
             if (state.antiLink && isGroup && text.match(/(chat\.whatsapp\.com\/)/gi)) {
                 try {
@@ -148,7 +143,20 @@ export function registerMessageHandler(sock) {
                 }
             }
 
+            if (isGroup && text) {
+                const selfJid = sock.user?.id ? `${sock.user.id.split(':')[0]}@s.whatsapp.net` : undefined;
+                trackGroupBotActivity(from, sender, text, selfJid);
+            }
+
             if (!command) return;
+
+            // Anti-spam hanya untuk perintah ! (per user, 5 detik)
+            if (!checkCommandCooldown(sender)) {
+                const wait = getRemainingCooldown(sender, 'command');
+                return await sock.sendMessage(from, {
+                    text: `⏳ Pelan dikit ya — tunggu ~${wait || 5} detik antar perintah 😊`
+                }, { quoted: msg });
+            }
 
             const senderNumber = sender.split('@')[0];
             // ✅ FIX: isAdmin correctly scoped as const (was shadowing outer let)
@@ -492,7 +500,7 @@ export function registerMessageHandler(sock) {
             }
 
             if (command === 'quotesanime') {
-                if (!checkCooldown(from, 'quotesanime', 8000)) {
+                if (!checkCooldown(sender, 'quotesanime', 8000)) {
                     return await sock.sendMessage(from, { text: '⏳ Tunggu sebentar sebelum quote anime berikutnya.' }, { quoted: msg });
                 }
                 return handleQuotesAnimeCommand({ sock, from, msg });
@@ -580,7 +588,7 @@ export function registerMessageHandler(sock) {
             }
 
             if (command === 'darkjokes') {
-                if (!checkCooldown(from, 'darkjokes', 8000)) {
+                if (!checkCooldown(sender, 'darkjokes', 8000)) {
                     return await sock.sendMessage(from, { text: '⏳ Tunggu sebentar sebelum dark joke berikutnya.' }, { quoted: msg });
                 }
                 return handleDarkJokesCommand({ sock, from, msg });
@@ -876,14 +884,14 @@ export function registerMessageHandler(sock) {
             // 🎨 STICKER — !s (alias !sticker)
             // =======================================================
             if (command === 'sticker' || command === 's') {
-                if (!checkCooldown(from, 'sticker', 10000)) {
+                if (!checkCooldown(sender, 'sticker', 10000)) {
                     return sock.sendMessage(from, { text: '⏳ Sabar ya, jangan spam 😤' }, { quoted: msg });
                 }
                 return handleStickerCommand({ sock, from, msg, args });
             }
 
             if (command === 'anomali') {
-                if (!checkCooldown(from, 'anomali', 10000)) return sock.sendMessage(from, { text: '⏳ Tunggu dulu ya, jangan spam 😤' }, { quoted: msg });
+                if (!checkCooldown(sender, 'anomali', 10000)) return sock.sendMessage(from, { text: '⏳ Tunggu dulu ya, jangan spam 😤' }, { quoted: msg });
                 let teksAnomali = args.join(' ');
                 if (!teksAnomali) return sock.sendMessage(from, { text: '⚠️ Contoh: !anomali aku capek banget' }, { quoted: msg });
                 teksAnomali = await polishText(teksAnomali);
@@ -906,7 +914,7 @@ export function registerMessageHandler(sock) {
             // 📥 DOWNLOAD — !dl
             // =======================================================
             if (command === 'dl') {
-                if (!checkCooldown(from, 'dl', 15000)) {
+                if (!checkCooldown(sender, 'dl', 15000)) {
                     return sock.sendMessage(from, { text: '⏳ Tunggu dulu, download butuh waktu~' }, { quoted: msg });
                 }
                 return handleDlCommand({ sock, from, msg, args });
