@@ -1,0 +1,14 @@
+# Salin ke config/cloudflared.yml lalu isi tunnel + credentials (sekali setup).
+# Setup: scripts/radio-tunnel-named-setup.ps1
+#
+# Setelah jalan, .env:
+#   RADIO_PUBLIC_URL=https://radio.domain-kamu.com
+# URL ini TETAP sama meski laptop restart — kecuali kamu stop/restart tunnel.
+
+tunnel: GANTI_TUNNEL_ID_ATAU_NAMA
+credentials-file: config/cloudflared-credentials.json
+
+ingress:
+  - hostname: radio.domain-kamu.com
+    service: http://127.0.0.1:3920
+  - service: http_status:404

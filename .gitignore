@@ -2,10 +2,20 @@
 node_modules/
 
 # Session files
+session/
 session*/
 *.session
-*.json
 creds.json
+w2g_room.json
+
+# Keep package files; ignore other runtime json in root only
+/*.json
+!package.json
+!package-lock.json
+
+# Cloudflare tunnel (credentials + config lokal)
+config/cloudflared.yml
+config/cloudflared-credentials.json
 
 # Environment
 .env
@@ -13,6 +23,12 @@ creds.json
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Runtime / local
+temp/
+terminals/
+backup/
+dasu.response
 
 # Logs
 *.log

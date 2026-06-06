@@ -1,0 +1,102 @@
+═══════════════════════════════════════════════════════════
+  LUXXBOT — HOSTING ORACLE CLOUD (GRATIS) + KONTROL ANDROID
+═══════════════════════════════════════════════════════════
+
+BAGIAN A — BUAT VPS DI ORACLE (sekali, ~15 menit)
+───────────────────────────────────────────────────────────
+1. Daftar: https://www.oracle.com/cloud/free/
+2. Console → Compute → Instances → Create Instance
+3. Pilih:
+   - Name: luxxbot
+   - Image: Ubuntu 22.04 atau 24.04
+   - Shape: Ampere A1 (ARM) — 1 OCPU, 6 GB RAM (cukup & gratis)
+   - Networking: public subnet + assign public IPv4
+   - SSH keys: download private key (.key) — SIMPAN AMAN
+4. Create Instance → catat PUBLIC IP (contoh 123.45.67.89)
+
+BAGIAN B — BUKA PORT (WAJIB)
+───────────────────────────────────────────────────────────
+Oracle Console → Networking → Virtual Cloud Networks
+→ Security List (default) → Add Ingress Rules:
+
+  | Port | Protocol | Source    | Keterangan      |
+  |------|----------|-----------|-----------------|
+  | 22   | TCP      | 0.0.0.0/0 | SSH (manage)    |
+  | 3920 | TCP      | 0.0.0.0/0 | Radio LuxxBot   |
+
+(TCP 3920 opsional kalau radio cuma untuk kamu via tunnel)
+
+BAGIAN C — UPLOAD BOT KE VPS
+───────────────────────────────────────────────────────────
+Opsi 1 — Git (disarankan):
+  Di PC: push project ke GitHub (tanpa .env & session/)
+  Di VPS:
+    ssh -i luxxbot.key ubuntu@IP_PUBLIK
+    git clone https://github.com/USER/luxxbot.git ~/luxxbot
+    cd ~/luxxbot
+    REPO_URL= git clone sudah → langsung:
+    chmod +x scripts/oracle-deploy.sh
+    ./scripts/oracle-deploy.sh
+
+Opsi 2 — Copy dari PC (SCP):
+  scp -i luxxbot.key -r "Project Bot Wa" ubuntu@IP:~/luxxbot
+  (include session/ kalau tidak mau scan QR lagi)
+
+BAGIAN D — ISI .env DI VPS
+───────────────────────────────────────────────────────────
+  nano ~/luxxbot/.env
+  (paste API key — jangan share ke orang)
+
+  RADIO_PUBLIC_URL=http://IP_PUBLIK_VPS:3920
+  RADIO_BIND_HOST=0.0.0.0
+
+  pm2 restart luxx --update-env
+
+BAGIAN E — SCAN QR WHATSAPP (jika session baru)
+───────────────────────────────────────────────────────────
+  pm2 logs luxx
+  Scan QR di HP → LuxxBot online 24/7
+
+BAGIAN F — KONTROL DARI ANDROID (SSH)
+───────────────────────────────────────────────────────────
+Install app: Termius atau JuiceSSH (gratis)
+
+Tambah host:
+  Address : IP_PUBLIK_VPS
+  User    : ubuntu
+  Key     : file .key dari Oracle
+
+Setelah connect, ketik:
+  cd ~/luxxbot
+  ./scripts/luxx-ctl.sh status    ← cek hidup/mati
+  ./scripts/luxx-ctl.sh restart   ← restart bot
+  ./scripts/luxx-ctl.sh logs      ← lihat log / QR
+  ./scripts/luxx-ctl.sh stop      ← matikan sementara
+  ./scripts/luxx-ctl.sh update    ← git pull + restart
+
+Atau singkat tanpa script:
+  pm2 status
+  pm2 restart luxx
+  pm2 logs luxx
+
+BAGIAN G — BOT HIDUP TERUS
+───────────────────────────────────────────────────────────
+oracle-deploy.sh sudah pasang:
+  - pm2 startup (auto nyala saat VPS reboot)
+  - pm2 save (ingat daftar proses)
+
+Bot HANYA hilang permanen kalau:
+  pm2 delete luxx
+  atau VPS di-terminate di Oracle Console
+
+Oracle Cloud app (Android/iOS):
+  Bisa start/stop instance VPS dari HP (kalau VPS dimatikan total)
+
+BAGIAN H — RADIO HTTPS (opsional)
+───────────────────────────────────────────────────────────
+Di VPS install cloudflared + tunnel, atau pakai domain + Nginx.
+Atau cukup http://IP:3920/radio untuk tes.
+
+═══════════════════════════════════════════════════════════
+Support: cek pm2 logs luxx | ./scripts/luxx-ctl.sh status
+═══════════════════════════════════════════════════════════

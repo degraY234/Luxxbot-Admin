@@ -1,0 +1,15 @@
+{
+  "version": "3.1.0",
+  "updatedAt": "2026-06-05",
+  "highlights": [
+    "!status — cek kesehatan bot, radio & Discord",
+    "!help <cmd> — panduan perintah",
+    "!welcome — sambutan otomatis grup",
+    "!tts & !quote — voice note & kartu quote",
+    "!aboutlux — profil pembuat bot",
+    "!cuaca diperbaiki + multi info",
+    "!changelogs otomatis dari data & git",
+    "!dl / !s — download HD & sticker ffmpeg",
+    "Radio + Discord voice sinkron"
+  ]
+}
