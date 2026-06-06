@@ -3,11 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <base href="/admin/" />
   <title>LuxxBot Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -15,59 +14,33 @@
     <div class="orb orb-1"></div>
     <div class="orb orb-2"></div>
     <div class="orb orb-3"></div>
-    <div class="grid-noise"></div>
   </div>
 
-  <div id="login-screen" class="screen">
-    <div class="login-wrap">
-      <div class="brand-panel">
-        <div class="brand-badge">OWNER ONLY</div>
-        <div class="brand-logo">🌸</div>
-        <h1 class="brand-title">L U X X B O T</h1>
-        <p class="brand-sub">Admin Control Panel</p>
-        <p class="brand-desc">Kelola bot, radio, antrian lagu, dan Discord dari satu dashboard premium.</p>
-        <ul class="brand-features">
-          <li><span>📊</span> Status bot real-time</li>
-          <li><span>📻</span> Kontrol radio & antrian</li>
-          <li><span>🎧</span> Monitor Discord voice</li>
-          <li><span>🔄</span> Restart bot dari web</li>
-        </ul>
-        <p class="brand-footer">Made with 💖 by DoxxBorx</p>
+  <div id="login-screen" class="screen login-screen">
+    <div class="card login-card">
+      <div class="login-logo">🌸</div>
+      <h1 class="login-title">L U X X B O T</h1>
+      <p class="login-sub">Admin Panel</p>
+      <p class="muted login-desc">Khusus owner — kelola bot & radio</p>
+
+      <div class="field">
+        <label for="api-base">API Base URL</label>
+        <input id="api-base" type="url" placeholder="http://localhost:3920" autocomplete="url" />
+        <span class="field-hint">Bukan URL GitHub Pages. Pakai alamat bot (localhost / tunnel).</span>
       </div>
 
-      <div class="card login-card">
-        <div class="login-head">
-          <h2>Masuk Dashboard</h2>
-          <p class="muted">Hubungkan ke API server bot kamu</p>
+      <div class="field">
+        <label for="api-token">Admin Token</label>
+        <div class="input-row">
+          <input id="api-token" type="password" placeholder="ADMIN_API_TOKEN" autocomplete="current-password" />
+          <button type="button" id="btn-toggle-token" class="toggle-eye" aria-label="Tampilkan token">👁</button>
         </div>
-
-        <div class="field">
-          <label for="api-base">API Base URL</label>
-          <div class="input-wrap">
-            <span class="input-icon">🔗</span>
-            <input id="api-base" type="url" placeholder="http://localhost:3920" autocomplete="url" />
-          </div>
-          <span class="field-hint">Sama dengan <code>RADIO_PUBLIC_URL</code> di .env</span>
-        </div>
-
-        <div class="field">
-          <label for="api-token">Admin Token</label>
-          <div class="input-wrap">
-            <span class="input-icon">🔐</span>
-            <input id="api-token" type="password" placeholder="ADMIN_API_TOKEN" autocomplete="current-password" />
-            <button type="button" id="btn-toggle-token" class="toggle-eye" aria-label="Tampilkan token">👁</button>
-          </div>
-        </div>
-
-        <button id="btn-login" class="btn primary">
-          <span class="btn-text">Masuk Dashboard</span>
-          <span class="btn-shine"></span>
-        </button>
-
-        <button type="button" id="btn-local" class="btn secondary">⚡ Pakai localhost (PC ini)</button>
-
-        <p id="login-error" class="login-error hidden"></p>
       </div>
+
+      <button id="btn-login" class="btn primary">Masuk Dashboard</button>
+      <button type="button" id="btn-local" class="btn secondary">⚡ Isi localhost otomatis</button>
+
+      <p id="login-error" class="login-error hidden"></p>
     </div>
   </div>
 
@@ -95,7 +68,7 @@
             <h2 id="hero-bot-name">LuxxBot</h2>
             <p id="hero-uptime" class="hero-meta">—</p>
           </div>
-          <div id="hero-pill" class="hero-pill">⏸ Idle</div>
+          <div id="hero-pill" class="hero-pill">⚡ Online</div>
         </div>
       </section>
 
@@ -126,7 +99,7 @@
         <ul id="queue-list" class="queue-list"></ul>
       </section>
     </main>
-    <footer class="footer muted">LuxxBot v3.1 Premium · Admin only</footer>
+    <footer class="footer muted">LuxxBot v3.1 Premium · Made by DoxxBorx</footer>
   </div>
 
   <div id="toast" class="toast hidden"></div>

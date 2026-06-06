@@ -5,7 +5,7 @@ const appScreen = $('#app-screen');
 const toastEl = $('#toast');
 const loginError = $('#login-error');
 
-function showToast(msg, ms = 2800) {
+function showToast(msg, ms = 3000) {
   toastEl.textContent = msg;
   toastEl.classList.remove('hidden');
   clearTimeout(showToast._t);
@@ -25,80 +25,81 @@ function showLoginError(msg) {
 function cfg() {
   return {
     base: (localStorage.getItem('luxx_api_base') || '').replace(/\/$/, ''),
-    token: localStorage.getItem('luxx_api_token') || ''
+    token: (localStorage.getItem('luxx_api_token') || '').trim()
   };
 }
 
 function defaultLocalBase() {
-  const { protocol, hostname, port } = window.location;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    const p = port || '3920';
-    return `${protocol}//${hostname}:${p}`;
+  return 'http://localhost:3920';
+}
+
+function friendlyError(err, base) {
+  const msg = String(err?.message || err || 'Gagal connect');
+  if (msg === 'Failed to fetch' || msg.includes('NetworkError')) {
+    return `Tidak bisa hubungi bot di ${base}.\n• Bot jalan? (pm2 status)\n• Tunnel hidup? (kalau pakai trycloudflare)\n• API Base URL harus alamat BOT, bukan link GitHub Pages.`;
   }
-  return '';
+  if (msg.includes('Unauthorized')) {
+    return 'Token salah. Harus sama persis dengan ADMIN_API_TOKEN di .env bot.';
+  }
+  if (msg.includes('Admin API disabled')) {
+    return 'ADMIN_API_TOKEN belum diset di .env bot. Restart: pm2 restart luxx --update-env';
+  }
+  return msg;
 }
 
 async function api(path, method = 'GET') {
   const { base, token } = cfg();
-  if (!base || !token) throw new Error('Belum login');
+  if (!base || !token) throw new Error('Isi API Base URL dan Admin Token.');
 
-  const res = await fetch(`${base}/admin/api${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    }
-  });
+  let res;
+  try {
+    res = await fetch(`${base}/admin/api${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+  } catch (e) {
+    throw new Error(friendlyError(e, base));
+  }
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(friendlyError({ message: data.error || `HTTP ${res.status}` }, base));
   return data;
 }
 
 function renderStatus(d) {
-  const badge = $('#conn-badge');
-  badge.textContent = 'online';
-  badge.className = 'badge online';
+  $('#conn-badge').textContent = 'online';
+  $('#conn-badge').className = 'badge online';
 
   $('#hero-bot-name').textContent = d.bot || 'LuxxBot';
   $('#hero-uptime').textContent = `Uptime ${d.uptime} · RAM ${d.ramMb} MB`;
 
   const cur = d.radio?.current;
   const pill = $('#hero-pill');
-  if (cur) {
-    pill.textContent = `▶ ${cur.title.slice(0, 36)}${cur.title.length > 36 ? '…' : ''}`;
-  } else if (d.radio?.isPreparing) {
-    pill.textContent = '⏳ Memuat lagu...';
-  } else if (d.sleeping) {
-    pill.textContent = '🛌 Mode tidur';
-  } else {
-    pill.textContent = '⚡ Online';
-  }
+  if (cur) pill.textContent = `▶ ${cur.title.slice(0, 32)}${cur.title.length > 32 ? '…' : ''}`;
+  else if (d.radio?.isPreparing) pill.textContent = '⏳ Memuat...';
+  else if (d.sleeping) pill.textContent = '🛌 Tidur';
+  else pill.textContent = '⚡ Online';
 
   $('#status-grid').innerHTML = [
-    ['Bot', d.bot],
-    ['Uptime', d.uptime],
-    ['RAM', `${d.ramMb} MB`],
-    ['Host', d.host],
-    ['Mode', d.sleeping ? '🛌 Tidur' : '⚡ Online'],
-    ['Self', d.selfMode ? '🔒' : '🔓'],
+    ['Bot', d.bot], ['Uptime', d.uptime], ['RAM', `${d.ramMb} MB`], ['Host', d.host],
+    ['Mode', d.sleeping ? 'Tidur' : 'Online'], ['Self', d.selfMode ? 'On' : 'Off'],
     ['Anti-Link', d.antiLink ? 'ON' : 'OFF']
-  ].map(([label, value]) => `
-    <div class="stat"><div class="label">${label}</div><div class="value">${value}</div></div>
-  `).join('');
+  ].map(([l, v]) => `<div class="stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
 
   const disc = d.discord || {};
   $('#discord-box').innerHTML = `
-    <div>🖥️ Server: <strong>${disc.guildCount || 0}</strong></div>
-    <div style="margin-top:0.4rem">${disc.inVoice ? `🔊 ${disc.voiceChannel}` : '🔇 Belum di voice'}</div>
-    <div style="margin-top:0.4rem">Slash: ${disc.slashReady ? '✅ Siap' : '⏳ ...'}</div>
-    ${disc.inviteUrl ? `<div style="margin-top:0.6rem"><a href="${disc.inviteUrl}" target="_blank" rel="noopener" style="color:var(--pink3)">Invite bot →</a></div>` : ''}
-  `;
+    Server: <strong>${disc.guildCount || 0}</strong><br>
+    Voice: ${disc.inVoice ? disc.voiceChannel : 'Belum connect'}<br>
+    Slash: ${disc.slashReady ? '✅' : '⏳'}
+    ${disc.inviteUrl ? `<br><a href="${disc.inviteUrl}" target="_blank" rel="noopener" style="color:var(--pink3)">Invite →</a>` : ''}`;
 
   const r = d.radio || {};
   $('#now-box').innerHTML = cur
-    ? `<strong>${cur.title}</strong><br><span class="muted">${cur.author || '-'}</span><br>🙋 ${cur.requestedBy || '-'}<br><br><a href="${r.listenUrl}/radio" target="_blank" rel="noopener">Buka player ↗</a>`
-    : (r.isPreparing ? '⏳ Memuat lagu...' : '<span class="muted">⏸ Tidak ada lagu aktif</span>');
+    ? `<strong>${cur.title}</strong><br>${cur.author || '-'}<br>🙋 ${cur.requestedBy || '-'}`
+    : (r.isPreparing ? '⏳ Memuat...' : '⏸ Tidak ada lagu');
 
   const q = r.queue || [];
   $('#queue-list').innerHTML = q.length
@@ -108,8 +109,7 @@ function renderStatus(d) {
 
 async function refresh() {
   try {
-    const data = await api('/status');
-    renderStatus(data);
+    renderStatus(await api('/status'));
   } catch (e) {
     $('#conn-badge').textContent = 'error';
     $('#conn-badge').className = 'badge offline';
@@ -127,12 +127,17 @@ async function doLogin() {
     return;
   }
 
+  if (base.includes('github.io')) {
+    showLoginError('API Base URL salah — itu link Pages. Isi http://localhost:3920 atau URL tunnel bot.');
+    return;
+  }
+
   localStorage.setItem('luxx_api_base', base);
   localStorage.setItem('luxx_api_token', token);
 
   const btn = $('#btn-login');
   btn.disabled = true;
-  btn.querySelector('.btn-text').textContent = 'Menghubungkan...';
+  btn.textContent = 'Menghubungkan...';
 
   try {
     await api('/status');
@@ -144,23 +149,19 @@ async function doLogin() {
     showLoginError(e.message);
   } finally {
     btn.disabled = false;
-    btn.querySelector('.btn-text').textContent = 'Masuk Dashboard';
+    btn.textContent = 'Masuk Dashboard';
   }
 }
 
 $('#btn-login').addEventListener('click', doLogin);
-
 $('#btn-local').addEventListener('click', () => {
-  const local = defaultLocalBase();
-  if (local) $('#api-base').value = local;
-  showToast('URL localhost diisi otomatis');
+  $('#api-base').value = defaultLocalBase();
+  showToast('Diisi: http://localhost:3920');
 });
-
 $('#btn-toggle-token').addEventListener('click', () => {
   const inp = $('#api-token');
   inp.type = inp.type === 'password' ? 'text' : 'password';
 });
-
 $('#btn-logout').addEventListener('click', () => {
   localStorage.removeItem('luxx_api_base');
   localStorage.removeItem('luxx_api_token');
@@ -169,47 +170,23 @@ $('#btn-logout').addEventListener('click', () => {
   clearInterval(window._poll);
   window._poll = null;
 });
-
 $('#btn-refresh').addEventListener('click', refresh);
-
 $('#btn-skip').addEventListener('click', async () => {
-  try {
-    const r = await api('/skip', 'POST');
-    showToast(r.message || 'Skipped');
-    refresh();
-  } catch (e) { showToast(e.message); }
+  try { const r = await api('/skip', 'POST'); showToast(r.message || 'OK'); refresh(); }
+  catch (e) { showToast(e.message); }
 });
-
 $('#btn-clear').addEventListener('click', async () => {
-  if (!confirm('Kosongkan antrian radio?')) return;
-  try {
-    await api('/clear', 'POST');
-    showToast('Antrian dikosongkan');
-    refresh();
-  } catch (e) { showToast(e.message); }
+  if (!confirm('Kosongkan antrian?')) return;
+  try { await api('/clear', 'POST'); showToast('Antrian dikosongkan'); refresh(); }
+  catch (e) { showToast(e.message); }
 });
-
 $('#btn-restart').addEventListener('click', async () => {
-  if (!confirm('Restart bot via PM2?')) return;
-  try {
-    await api('/restart', 'POST');
-    showToast('Restart diminta...');
-  } catch (e) { showToast(e.message); }
+  if (!confirm('Restart bot?')) return;
+  try { await api('/restart', 'POST'); showToast('Restart diminta'); }
+  catch (e) { showToast(e.message); }
 });
 
-// Init login form
-const localBase = defaultLocalBase();
 const savedBase = localStorage.getItem('luxx_api_base');
 const savedToken = localStorage.getItem('luxx_api_token');
-
-$('#api-base').value = savedBase || localBase || '';
+$('#api-base').value = savedBase || defaultLocalBase();
 if (savedToken) $('#api-token').value = savedToken;
-
-if (savedBase && savedToken) {
-  api('/status').then(() => {
-    loginScreen.classList.add('hidden');
-    appScreen.classList.remove('hidden');
-    refresh();
-    window._poll = setInterval(refresh, 12000);
-  }).catch(() => {});
-}
