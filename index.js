@@ -55,7 +55,7 @@ function launchBotWorker() {
     botWorker.on('exit', (code, signal) => {
         console.error(`\x1b[33m⚠️ Bot worker stop (${code}/${signal}) — /pair tetap hidup, retry 20s\x1b[0m`);
         botWorker = null;
-        setTimeout(launchBotWorker, 20000);
+        setTimeout(launchBotWorker, 8000);
     });
 }
 

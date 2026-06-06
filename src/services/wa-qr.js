@@ -9,23 +9,37 @@ function isRailwayOrPublicDeploy() {
 }
 
 const QR_FILE = path.resolve('./temp/wa-qr.png');
+const QR_META_FILE = path.resolve('./temp/wa-qr-meta.json');
 const QR_TTL_MS = 90_000;
 
-let latestQr = null;
-let qrGeneratedAt = 0;
 let routesRegistered = false;
+const qrEncoderPromise = import('qrcode').then((m) => m.default);
+
+/** Baca status QR dari file — HTTP parent & bot worker beda proses */
+function getQrState() {
+    let generatedAt = 0;
+    try {
+        if (fs.existsSync(QR_META_FILE)) {
+            const meta = JSON.parse(fs.readFileSync(QR_META_FILE, 'utf8'));
+            generatedAt = Number(meta?.generatedAt) || 0;
+        }
+    } catch {
+        /* ignore */
+    }
+    if (!generatedAt && fs.existsSync(QR_FILE)) {
+        generatedAt = fs.statSync(QR_FILE).mtimeMs;
+    }
+    const age = generatedAt ? Date.now() - generatedAt : Infinity;
+    const ready = generatedAt > 0 && age <= QR_TTL_MS;
+    return {
+        ready,
+        generatedAt,
+        expiresIn: ready ? Math.max(0, Math.ceil((generatedAt + QR_TTL_MS - Date.now()) / 1000)) : 0
+    };
+}
 
 export function getPairPageUrl() {
     return getPairLink();
-}
-
-function qrIsReady() {
-    return Boolean(latestQr && Date.now() - qrGeneratedAt <= QR_TTL_MS);
-}
-
-function qrExpiresInSec() {
-    if (!latestQr) return 0;
-    return Math.max(0, Math.ceil((qrGeneratedAt + QR_TTL_MS - Date.now()) / 1000));
 }
 
 function pairPageShell({ title, body, script = '' }) {
@@ -96,6 +110,7 @@ ${script}
 
 function pairHtmlReady() {
     const ts = Date.now();
+    const { expiresIn } = getQrState();
     const body = `<div class="grid">
 <div class="qr-panel">
 <div class="qr-frame"><img id="qrImg" src="/pair/qr.png?t=${ts}" alt="QR WhatsApp" width="360" height="360"></div>
@@ -110,11 +125,11 @@ function pairHtmlReady() {
 <div class="tip"><b>QR kedaluwarsa ~90 detik</b> — halaman refresh otomatis.</div>
 </aside></div>`;
     const script = `
-let left=${qrExpiresInSec()};
+let left=${expiresIn};
 const timer=document.getElementById('timer');
 const tick=()=>{if(left<=0){location.reload();return}timer.textContent='QR aktif · '+left+' detik lagi';left--;};
 tick();setInterval(tick,1000);
-setInterval(()=>fetch('/pair/status').then(r=>r.json()).then(d=>{if(!d.ready)location.reload()}).catch(()=>{}),5000);
+setInterval(()=>fetch('/pair/status').then(r=>r.json()).then(d=>{if(!d.ready)location.reload()}).catch(()=>{}),4000);
 `;
     return pairPageShell({ title: 'LuxxBot — Scan QR', body, script });
 }
@@ -122,36 +137,39 @@ setInterval(()=>fetch('/pair/status').then(r=>r.json()).then(d=>{if(!d.ready)loc
 function pairHtmlWaiting() {
     const body = `<div class="grid">
 <div class="qr-panel">
-<div class="qr-wait"><div class="spinner"></div><p><b>Menunggu QR dari bot...</b></p><p style="font-size:.9rem">Refresh otomatis tiap 3 detik.</p></div>
+<div class="qr-wait"><div class="spinner"></div><p><b>Menunggu QR dari bot...</b></p><p id="waitSec" style="font-size:.9rem">Memuat bot WhatsApp...</p></div>
 </div>
-<aside class="side"><p style="color:var(--muted);line-height:1.6;margin:0">Halaman ini sudah benar. Tunggu bot generate QR (biasanya &lt; 1 menit setelah deploy).</p></aside></div>`;
-    const script = `setInterval(()=>fetch('/pair/status').then(r=>r.json()).then(d=>{if(d.ready)location.reload()}).catch(()=>{}),3000);`;
+<aside class="side"><p style="color:var(--muted);line-height:1.6;margin:0">Halaman sudah benar. QR muncul otomatis begitu bot siap (biasanya 10–30 detik).</p></aside></div>`;
+    const script = `
+let s=0;
+const el=document.getElementById('waitSec');
+setInterval(()=>{s++;el.textContent='Menunggu '+s+' detik...';},1000);
+const poll=()=>fetch('/pair/status').then(r=>r.json()).then(d=>{if(d.ready)location.reload()}).catch(()=>{});
+poll();setInterval(poll,1500);
+`;
     return pairPageShell({ title: 'LuxxBot — Menunggu QR', body, script });
 }
 
 function pairHtml() {
-    return qrIsReady() ? pairHtmlReady() : pairHtmlWaiting();
+    return getQrState().ready ? pairHtmlReady() : pairHtmlWaiting();
 }
 
-async function loadQrEncoder() {
-    const mod = await import('qrcode');
-    return mod.default;
-}
-
-/** Simpan QR + log link /pair */
+/** Simpan QR PNG + meta (dibaca proses HTTP terpisah) */
 export async function publishWaQr(qrString) {
-    latestQr = qrString;
-    qrGeneratedAt = Date.now();
-
+    const generatedAt = Date.now();
     fs.mkdirSync(path.dirname(QR_FILE), { recursive: true });
-    const QRCode = await loadQrEncoder();
-    await QRCode.toFile(QR_FILE, qrString, {
-        width: 480,
-        margin: 2,
-        errorCorrectionLevel: 'M'
-    });
 
-    console.log(`\x1b[33m🔄 QR baru — refresh di laptop lalu scan HP: ${getPairLink()}\x1b[0m`);
+    const QRCode = await qrEncoderPromise;
+    const png = await QRCode.toBuffer(qrString, {
+        type: 'png',
+        width: 400,
+        margin: 1,
+        errorCorrectionLevel: 'L'
+    });
+    fs.writeFileSync(QR_FILE, png);
+    fs.writeFileSync(QR_META_FILE, JSON.stringify({ generatedAt, ready: true }));
+
+    console.log(`\x1b[33m🔄 QR siap — refresh /pair di laptop: ${getPairLink()}\x1b[0m`);
 
     if (!isRailwayOrPublicDeploy()) {
         const { default: qrcodeTerminal } = await import('qrcode-terminal');
@@ -173,22 +191,25 @@ export function registerWaQrRoutes(app) {
     app.get('/pair/', servePairPage);
 
     app.get('/pair/status', (_req, res) => {
+        const st = getQrState();
         res.json({
             ok: true,
-            ready: qrIsReady(),
-            expiresIn: qrExpiresInSec(),
-            url: getPairPageUrl()
+            ready: st.ready,
+            expiresIn: st.expiresIn,
+            url: getPairPageUrl(),
+            hasFile: fs.existsSync(QR_FILE)
         });
     });
 
     app.get('/pair/qr.png', (_req, res) => {
-        if (!fs.existsSync(QR_FILE) || !qrIsReady()) {
+        const st = getQrState();
+        if (!st.ready || !fs.existsSync(QR_FILE)) {
             return res.status(404).type('text/plain').send('QR belum siap');
         }
         res.setHeader('Content-Type', 'image/png');
         res.setHeader('Cache-Control', 'no-store');
-        return res.sendFile(path.resolve(QR_FILE));
+        return res.sendFile(QR_FILE);
     });
 
-    console.log(`\x1b[32m✅ Route /pair aktif\x1b[0m`);
+    console.log('\x1b[32m✅ Route /pair aktif (file-sync QR)\x1b[0m');
 }
