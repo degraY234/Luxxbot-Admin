@@ -6,8 +6,8 @@ import {
     fetchLatestBaileysVersion
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
-import qrcode from 'qrcode-terminal';
 import pino from 'pino';
+import { publishWaQr } from './services/wa-qr.js';
 import './globals.js';
 import { BOT_NAME } from './config.js';
 import { state } from './state.js';
@@ -30,7 +30,7 @@ export async function startBot() {
     const sock = makeWASocket({
         version,
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: true,
+        printQRInTerminal: false,
         auth: authState,
         browser: [BOT_NAME, 'Chrome', '1.0.0']
     });
@@ -40,10 +40,7 @@ export async function startBot() {
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
-            console.log('\n\x1b[35m🎀 ============================================== 🎀\x1b[0m');
-            console.log('\x1b[36m✨ SILAKAN SCAN QR CODE DI BAWAH UNTUK MENYALAKAN BOT ✨\x1b[0m');
-            console.log('\x1b[35m🎀 ============================================== 🎀\x1b[0m\n');
-            qrcode.generate(qr, { small: true });
+            publishWaQr(qr).catch((e) => console.error('❌ Gagal publish QR:', e.message));
         }
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error instanceof Boom)

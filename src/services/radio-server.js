@@ -8,6 +8,7 @@ import { mountAdminApi } from './admin-api.js';
 import { mountWatchServer } from './watch-server.js';
 import { mountPortfolioServer } from './portfolio-server.js';
 import { getRadioPublicUrl as resolvePublicUrl } from '../utils/radio-url.js';
+import { registerWaQrRoutes } from './wa-qr.js';
 
 const RADIO_PORT = Number(process.env.RADIO_PORT || process.env.PORT || 3920);
 const RADIO_DIR = './temp/radio';
@@ -350,6 +351,7 @@ export function startRadioServer() {
     mountAdminApi(app);
     mountWatchServer(app);
     mountPortfolioServer(app);
+    registerWaQrRoutes(app);
 
     app.get('/', (req, res) => {
         res.redirect(302, '/admin');
