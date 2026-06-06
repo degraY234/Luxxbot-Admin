@@ -17,12 +17,25 @@ function getAdminToken() {
     return process.env.ADMIN_API_TOKEN?.trim() || '';
 }
 
-function corsOrigin() {
-    return process.env.ADMIN_CORS_ORIGIN?.trim() || '*';
+function isAllowedCorsOrigin(origin) {
+    if (!origin) return true;
+    const configured = process.env.ADMIN_CORS_ORIGIN?.trim();
+    if (!configured || configured === '*') return true;
+    const list = configured.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+    if (list.includes(origin)) return true;
+    if (/^https:\/\/[a-z0-9-]+\.github\.io$/i.test(origin)) return true;
+    if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
+    return false;
 }
 
 function applyCors(req, res) {
-    res.setHeader('Access-Control-Allow-Origin', corsOrigin());
+    const origin = req.headers.origin;
+    if (origin && isAllowedCorsOrigin(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+    } else if (!origin) {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     if (req.method === 'OPTIONS') {
@@ -38,9 +51,10 @@ function requireAdmin(req, res) {
         res.status(503).json({ ok: false, error: 'Admin API disabled — set ADMIN_API_TOKEN di .env' });
         return false;
     }
-    const auth = req.headers.authorization || '';
-    if (auth !== `Bearer ${token}`) {
-        res.status(401).json({ ok: false, error: 'Unauthorized' });
+    const auth = (req.headers.authorization || '').trim();
+    const expected = `Bearer ${token}`;
+    if (auth !== expected) {
+        res.status(401).json({ ok: false, error: 'Unauthorized — token tidak cocok dengan ADMIN_API_TOKEN di .env' });
         return false;
     }
     return true;
