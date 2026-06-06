@@ -187,7 +187,7 @@ export function registerWaQrRoutes(app) {
         }
         res.setHeader('Content-Type', 'image/png');
         res.setHeader('Cache-Control', 'no-store');
-        return res.sendFile(QR_FILE);
+        return res.sendFile(path.resolve(QR_FILE));
     });
 
     console.log(`\x1b[32m✅ Route /pair aktif\x1b[0m`);
