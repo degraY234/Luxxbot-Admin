@@ -36,7 +36,10 @@ function defaultLocalBase() {
 function friendlyError(err, base) {
   const msg = String(err?.message || err || 'Gagal connect');
   if (msg === 'Failed to fetch' || msg.includes('NetworkError')) {
-    return `Tidak bisa hubungi bot di ${base}.\n• Bot jalan? (pm2 status)\n• Tunnel hidup? (kalau pakai trycloudflare)\n• API Base URL harus alamat BOT, bukan link GitHub Pages.`;
+    const tunnelHint = base.includes('trycloudflare.com')
+      ? '\n• URL trycloudflare MATI kalau tunnel ditutup — jalankan ulang: scripts\\radio-tunnel.ps1\n• Salin URL BARU ke API Base URL (bukan URL lama).'
+      : '';
+    return `Tidak bisa hubungi bot di ${base}.\n• Bot jalan? (pm2 status)\n• Tunnel hidup? (jendela cloudflared harus terbuka)${tunnelHint}\n• API Base URL = alamat bot/tunnel, BUKAN link GitHub Pages.`;
   }
   if (msg.includes('Unauthorized')) {
     return 'Token salah. Harus sama persis dengan ADMIN_API_TOKEN di .env bot.';
