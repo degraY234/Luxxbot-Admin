@@ -62,11 +62,13 @@ Set di Variables:
 
 BAGIAN F — SCAN QR WHATSAPP
 ───────────────────────────────────────────────────────────
-CARA MUDAH (disarankan — QR pas di HP):
-  Buka di browser HP: https://<domain-railway-kamu>.up.railway.app/pair
-  Scan QR di halaman itu → WhatsApp → Perangkat tertaut
+CARA MUDAH (disarankan):
+  1. Railway Logs → copy link: https://<domain-kamu>.up.railway.app/pair
+  2. Buka link itu di browser LAPTOP (Chrome/Edge)
+  3. QR besar muncul di layar laptop
+  4. Di HP: WhatsApp → Perangkat tertaut → Tautkan perangkat → scan QR di laptop
 
-Alternatif: Railway Logs → cari link 🔗 .../pair (jangan scan QR ASCII di log)
+Jangan scan QR ASCII dari log Railway (sering terpotong).
 
 Atau upload session/ ke volume (advanced):
   railway run bash → copy creds ke /app/persist/session
