@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getConfiguredPublicBaseUrl } from '../utils/radio-url.js';
+import { getServiceLinks, printStartupBanner } from '../utils/startup-banner.js';
 
 function isRailwayOrPublicDeploy() {
     if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PUBLIC_DOMAIN) return true;
@@ -15,10 +16,7 @@ let qrGeneratedAt = 0;
 let routesRegistered = false;
 
 export function getPairPageUrl() {
-    const base = getConfiguredPublicBaseUrl();
-    if (base) return `${base.replace(/\/$/, '')}/pair`;
-    const port = process.env.RADIO_PORT || process.env.PORT || 3920;
-    return `http://127.0.0.1:${port}/pair`;
+    return getServiceLinks().pair;
 }
 
 function qrIsReady() {
@@ -153,14 +151,7 @@ export async function publishWaQr(qrString) {
         errorCorrectionLevel: 'M'
     });
 
-    const url = getPairPageUrl();
-    console.log('\n\x1b[35m╔══════════════════════════════════════════════════════════╗\x1b[0m');
-    console.log('\x1b[33m║  📱 PAIR WA — COPY LINK INI → BUKA DI LAPTOP (Chrome)   ║\x1b[0m');
-    console.log('\x1b[32m║\x1b[0m');
-    console.log(`\x1b[32m║  ${url}\x1b[0m`);
-    console.log('\x1b[32m║\x1b[0m');
-    console.log('\x1b[36m║  Scan QR di layar laptop pakai WhatsApp di HP            ║\x1b[0m');
-    console.log('\x1b[35m╚══════════════════════════════════════════════════════════╝\x1b[0m\n');
+    printStartupBanner('qr');
 
     if (!isRailwayOrPublicDeploy()) {
         const { default: qrcodeTerminal } = await import('qrcode-terminal');
@@ -199,5 +190,6 @@ export function registerWaQrRoutes(app) {
         return res.sendFile(QR_FILE);
     });
 
-    console.log(`\x1b[32m✅ Route /pair aktif → ${getPairPageUrl()}\x1b[0m`);
+    const { pair } = getServiceLinks();
+    console.log(`\x1b[32m✅ /pair siap → ${pair}\x1b[0m`);
 }
