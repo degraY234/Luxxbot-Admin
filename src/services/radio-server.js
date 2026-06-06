@@ -340,18 +340,14 @@ export function getRadioStatusText() {
     );
 }
 
-export function startRadioServer() {
-    if (serverStarted) return;
+export function attachRadioServer(app) {
+    if (app._luxxRadioAttached) return;
+    app._luxxRadioAttached = true;
     ensureDirs();
-
-    const app = express();
-    app.set('trust proxy', true);
-    app.use(express.json({ limit: '1mb' }));
 
     mountAdminApi(app);
     mountWatchServer(app);
     mountPortfolioServer(app);
-    registerWaQrRoutes(app);
 
     app.get('/', (req, res) => {
         res.redirect(302, '/admin');
@@ -457,13 +453,31 @@ setInterval(poll, 3000); poll();
 </script></body></html>`);
     });
 
-    const bindHost = process.env.RADIO_BIND_HOST || '0.0.0.0';
-    app.listen(RADIO_PORT, bindHost, () => {
-        console.log(`\x1b[35m📻 LuxxBot Radio: ${getRadioListenUrl()} (bind ${bindHost}:${RADIO_PORT})\x1b[0m`);
-        const pub = getRadioPublicUrl();
-        if (/localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\./i.test(pub)) {
-            console.log('\x1b[33m⚠️  RADIO_PUBLIC_URL masih lokal/LAN — jalankan scripts/radio-tunnel.ps1 untuk link publik\x1b[0m');
-        }
-    });
+}
+
+export function startRadioServer(externalApp = null) {
+    if (serverStarted) return externalApp;
     serverStarted = true;
+
+    const app = externalApp || express();
+    if (!externalApp) {
+        app.set('trust proxy', true);
+        app.use(express.json({ limit: '1mb' }));
+    }
+
+    attachRadioServer(app);
+
+    if (!externalApp) {
+        registerWaQrRoutes(app);
+        const bindHost = process.env.RADIO_BIND_HOST || '0.0.0.0';
+        app.listen(RADIO_PORT, bindHost, () => {
+            console.log(`\x1b[35m📻 LuxxBot Radio: ${getRadioListenUrl()} (bind ${bindHost}:${RADIO_PORT})\x1b[0m`);
+            const pub = getRadioPublicUrl();
+            if (/localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\./i.test(pub)) {
+                console.log('\x1b[33m⚠️  RADIO_PUBLIC_URL masih lokal/LAN — jalankan scripts/radio-tunnel.ps1 untuk link publik\x1b[0m');
+            }
+        });
+    }
+
+    return app;
 }
