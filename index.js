@@ -2,7 +2,7 @@ import fs from 'fs';
 import express from 'express';
 import { registerWaQrRoutes } from './src/services/wa-qr.js';
 import { startRadioServer } from './src/services/radio-server.js';
-import { printStartupBanner } from './src/utils/startup-banner.js';
+import { printPairLinkBanner } from './src/utils/startup-banner.js';
 
 if (!fs.existsSync('./temp')) fs.mkdirSync('./temp', { recursive: true });
 
@@ -18,13 +18,12 @@ registerWaQrRoutes(app);
 startRadioServer(app);
 
 app.listen(PORT, HOST, () => {
-    console.log(`\x1b[35m🚀 LuxxBot HTTP listening on ${HOST}:${PORT}\x1b[0m`);
-    printStartupBanner('startup');
+    console.log(`\x1b[35m🚀 LuxxBot online (port ${PORT})\x1b[0m`);
+    printPairLinkBanner();
 });
 
 import('./src/bot.js')
     .then(({ startBot }) => startBot())
     .catch((e) => {
-        console.error('❌ Gagal start bot:', e);
-        process.exit(1);
+        console.error('❌ WhatsApp bot error (halaman /pair tetap hidup):', e?.message || e);
     });

@@ -24,20 +24,19 @@ if [ -n "$PORT" ] && [ -z "$RADIO_PORT" ]; then
     export RADIO_PORT="$PORT"
 fi
 
-if [ -n "$RAILWAY_PUBLIC_DOMAIN" ] && [ -z "$RADIO_PUBLIC_URL" ]; then
-    export RADIO_PUBLIC_URL="https://${RAILWAY_PUBLIC_DOMAIN}"
+if [ -n "$RAILWAY_PUBLIC_DOMAIN" ]; then
+    case "$RAILWAY_PUBLIC_DOMAIN" in
+        http://*|https://*) export RADIO_PUBLIC_URL="${RAILWAY_PUBLIC_DOMAIN}" ;;
+        *) export RADIO_PUBLIC_URL="https://${RAILWAY_PUBLIC_DOMAIN}" ;;
+    esac
+elif [ -n "$RAILWAY_STATIC_URL" ] && [ -z "$RADIO_PUBLIC_URL" ]; then
+    export RADIO_PUBLIC_URL="$RAILWAY_STATIC_URL"
 fi
 
-echo "=============================================="
-echo "  LuxxBot Docker / Railway"
-echo "=============================================="
-echo "PORT=${RADIO_PORT:-3920} | persist=${PERSIST}"
+echo "LuxxBot starting (port ${RADIO_PORT:-3920})"
 if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
-  echo "Public : https://${RAILWAY_PUBLIC_DOMAIN}"
-  echo "Pair   : https://${RAILWAY_PUBLIC_DOMAIN}/pair"
+  echo "PAIR (buka di laptop): https://${RAILWAY_PUBLIC_DOMAIN}/pair"
+elif [ -n "${RADIO_PUBLIC_URL:-}" ]; then
+  echo "PAIR (buka di laptop): ${RADIO_PUBLIC_URL%/}/pair"
 fi
-if [ -n "${RADIO_PUBLIC_URL:-}" ]; then
-  echo "RADIO_PUBLIC_URL=${RADIO_PUBLIC_URL}"
-fi
-echo "=============================================="
 exec "$@"

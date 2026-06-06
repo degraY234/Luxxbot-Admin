@@ -45,14 +45,18 @@ async function probeBase(base) {
 
 function getRailwayBaseUrl() {
     const domain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
-    if (!domain) return '';
-    return `https://${domain}`.replace(/\/$/, '');
+    if (domain) return `https://${domain}`.replace(/\/$/, '');
+    const staticUrl = process.env.RAILWAY_STATIC_URL?.trim().replace(/\/$/, '');
+    if (staticUrl && !/localhost|127\.0\.0\.1/i.test(staticUrl)) return staticUrl;
+    return '';
 }
 
 function getConfiguredBaseUrl() {
+    const railway = getRailwayBaseUrl();
+    if (railway) return railway;
     const configured = process.env.RADIO_PUBLIC_URL?.trim().replace(/\/$/, '') || '';
     if (configured && !/localhost|127\.0\.0\.1/i.test(configured)) return configured;
-    return getRailwayBaseUrl() || configured;
+    return '';
 }
 
 /** URL publik dari .env (tunnel/domain/VPS) — bukan localhost/LAN. */

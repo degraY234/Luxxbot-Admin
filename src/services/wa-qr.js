@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getConfiguredPublicBaseUrl } from '../utils/radio-url.js';
-import { getServiceLinks, printStartupBanner } from '../utils/startup-banner.js';
+import { getPairLink } from '../utils/startup-banner.js';
 
 function isRailwayOrPublicDeploy() {
     if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PUBLIC_DOMAIN) return true;
@@ -16,7 +16,7 @@ let qrGeneratedAt = 0;
 let routesRegistered = false;
 
 export function getPairPageUrl() {
-    return getServiceLinks().pair;
+    return getPairLink();
 }
 
 function qrIsReady() {
@@ -151,7 +151,7 @@ export async function publishWaQr(qrString) {
         errorCorrectionLevel: 'M'
     });
 
-    printStartupBanner('qr');
+    console.log(`\x1b[33m🔄 QR baru — refresh di laptop lalu scan HP: ${getPairLink()}\x1b[0m`);
 
     if (!isRailwayOrPublicDeploy()) {
         const { default: qrcodeTerminal } = await import('qrcode-terminal');
@@ -190,6 +190,5 @@ export function registerWaQrRoutes(app) {
         return res.sendFile(QR_FILE);
     });
 
-    const { pair } = getServiceLinks();
-    console.log(`\x1b[32m✅ /pair siap → ${pair}\x1b[0m`);
+    console.log(`\x1b[32m✅ Route /pair aktif\x1b[0m`);
 }
