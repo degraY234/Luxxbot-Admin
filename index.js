@@ -3,6 +3,7 @@ import express from 'express';
 import { registerWaQrRoutes } from './src/services/wa-qr.js';
 import { printPairLinkBanner } from './src/utils/startup-banner.js';
 import { getListenPort, isRailwayRuntime } from './src/utils/listen-port.js';
+import { getWaHealth } from './src/wa-status.js';
 
 process.on('uncaughtException', (err) => {
     console.error('❌ uncaughtException (server tetap jalan):', err?.message || err);
@@ -31,11 +32,13 @@ app.get('/health', async (_req, res) => {
             isPreparing: r.isPreparing
         };
     } catch { /* radio belum load */ }
+    const wa = getWaHealth();
     res.json({
         ok: true,
         uptime: Math.floor(process.uptime()),
         railway: isRailwayRuntime(),
         port: PORT,
+        wa,
         radio
     });
 });
@@ -68,7 +71,7 @@ function startFullStack({ usePairBot = false } = {}) {
 
 if (isRailwayRuntime()) {
     console.log('\x1b[36m🚂 Railway: semua fitur aktif (satu proses)\x1b[0m');
-    setTimeout(() => startFullStack({ usePairBot: false }), 1500);
+    setTimeout(() => startFullStack({ usePairBot: true }), 1500);
 } else {
     startFullStack({ usePairBot: false });
 }

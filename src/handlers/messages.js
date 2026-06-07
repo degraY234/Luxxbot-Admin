@@ -45,7 +45,23 @@ import { handleSpCommand, handleSpPick, getSpSession } from '../commands/sp.js';
 import { handleJoinCommand } from '../commands/join.js';
 import { handleDbCommand } from '../commands/db.js';
 
+let boundMessageSock = null;
+
+const COMMAND_ALIASES = {
+    mrnu: 'menu',
+    halp: 'help',
+    radlo: 'radio',
+    ply: 'play',
+    wath: 'watch'
+};
+
 export function registerMessageHandler(sock) {
+    if (boundMessageSock === sock) return;
+    if (boundMessageSock?.ev) {
+        try { boundMessageSock.ev.removeAllListeners('messages.upsert'); } catch { /* ignore */ }
+    }
+    boundMessageSock = sock;
+
     sock.ev.on('messages.upsert', async (chatUpdate) => {
         try {
             const msg = chatUpdate.messages[0];
@@ -71,6 +87,7 @@ export function registerMessageHandler(sock) {
             if (text.startsWith('!')) {
                 const parts = text.slice(1).split(' ');
                 command = parts[0].toLowerCase();
+                if (COMMAND_ALIASES[command]) command = COMMAND_ALIASES[command];
                 args = parts.slice(1);
             }
 
@@ -215,7 +232,7 @@ export function registerMessageHandler(sock) {
             if (command === 'menu' || command === 'loot') {
                 const botUptime = runtime((Date.now() - startTime) / 1000);
                 const menuText = buildMenuText(state.isSelfMode, state.isSleeping, state.antiLink, isAdmin, botUptime);
-                await sock.sendMessage(from, { text: menuText }, { quoted: msg });
+                return await sock.sendMessage(from, { text: menuText }, { quoted: msg });
             }
 
             if (command === 'status') {

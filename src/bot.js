@@ -1,4 +1,3 @@
-import fs from 'fs';
 import {
     makeWASocket,
     useMultiFileAuthState,
@@ -8,6 +7,7 @@ import {
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import { publishWaQr } from './services/wa-qr.js';
+import { setWaConnection, setWaHandlersReady } from './wa-status.js';
 import './globals.js';
 import { BOT_NAME } from './config.js';
 import { state } from './state.js';
@@ -21,6 +21,7 @@ let sock = null;
 let isStarting = false;
 let reconnectTimer = null;
 let dailySchedulerStarted = false;
+let handlersBound = false;
 
 function clearReconnectTimer() {
     if (reconnectTimer) {
@@ -31,12 +32,10 @@ function clearReconnectTimer() {
 
 function teardownSocket() {
     if (!sock) return;
-    try {
-        sock.end();
-    } catch (e) {
-        console.error('⚠️ Gagal tutup socket WA:', e?.message || e);
-    }
+    try { sock.end(); } catch { /* ignore */ }
     sock = null;
+    handlersBound = false;
+    setWaHandlersReady(false);
 }
 
 function scheduleReconnect(delayMs = 5000) {
@@ -47,6 +46,14 @@ function scheduleReconnect(delayMs = 5000) {
     }, delayMs);
 }
 
+function bindHandlers() {
+    if (!sock || handlersBound) return;
+    registerMessageHandler(sock);
+    registerGroupEventHandler(sock);
+    handlersBound = true;
+    setWaHandlersReady(true);
+}
+
 export async function startBot() {
     if (isStarting) return;
     isStarting = true;
@@ -54,6 +61,7 @@ export async function startBot() {
     try {
         startDiscordRadio();
         state.isSleeping = false;
+        setWaConnection('connecting');
 
         clearReconnectTimer();
         teardownSocket();
@@ -74,6 +82,7 @@ export async function startBot() {
         sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
             if (qr) {
+                setWaConnection('qr');
                 publishWaQr(qr).catch((e) => console.error('❌ Gagal publish QR:', e.message));
             }
             if (connection === 'close') {
@@ -82,13 +91,22 @@ export async function startBot() {
                     : null;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 console.log('🔄 Koneksi WA terputus, reconnect:', shouldReconnect, statusCode ?? '');
+                setWaConnection('close', {
+                    error: lastDisconnect?.error?.message,
+                    reconnect: shouldReconnect
+                });
                 sock = null;
+                handlersBound = false;
+                setWaHandlersReady(false);
                 if (shouldReconnect && !isStarting) {
                     scheduleReconnect(statusCode === DisconnectReason.restartRequired ? 15000 : 5000);
                 } else if (!shouldReconnect) {
                     teardownSocket();
+                    console.error('\x1b[31m❌ WA logout — scan QR di /pair\x1b[0m');
                 }
             } else if (connection === 'open') {
+                setWaConnection('open');
+                bindHandlers();
                 console.log('\x1b[36m%s\x1b[0m', `
             ╔════════════════════════════════════════════════════╗
             ║  🚀 ${BOT_NAME} MULTI-DEVICE IS SUCCESSFULLY ONLINE! 🤖 ║
@@ -105,11 +123,12 @@ export async function startBot() {
                     dailySchedulerStarted = true;
                     startDailyFactScheduler();
                 }
+            } else if (connection) {
+                setWaConnection(connection);
             }
         });
 
-        registerMessageHandler(sock);
-        registerGroupEventHandler(sock);
+        bindHandlers();
     } finally {
         isStarting = false;
     }
