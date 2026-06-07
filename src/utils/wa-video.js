@@ -1,7 +1,7 @@
 import ffmpeg from 'fluent-ffmpeg';
-import ffmpegPath from 'ffmpeg-static';
+import { configureFluentFfmpeg } from './ffmpeg-path.js';
 
-ffmpeg.setFfmpegPath(ffmpegPath);
+configureFluentFfmpeg(ffmpeg);
 
 function probe(filePath) {
     return new Promise((resolve, reject) => {

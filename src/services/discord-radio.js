@@ -1,4 +1,5 @@
 import fs, { createReadStream } from 'fs';
+import path from 'path';
 import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
 import {
     joinVoiceChannel,
@@ -179,9 +180,13 @@ async function joinMemberVoice(member, guild) {
     return joinVoiceChannelEntity(channel);
 }
 
-function playCurrentMp3() {
+function playCurrentMp3(retry = 0) {
     const file = getCurrentMp3Path();
-    if (!player || !connection || !fs.existsSync(file)) return;
+    if (!player || !connection) return;
+    if (!fs.existsSync(file)) {
+        if (retry < 8) setTimeout(() => playCurrentMp3(retry + 1), 500);
+        return;
+    }
 
     try {
         const resource = createAudioResource(createReadStream(file), {
@@ -190,9 +195,10 @@ function playCurrentMp3() {
         });
         player.stop();
         player.play(resource);
-        console.log(`🎧 Discord: playing ${file}`);
+        console.log(`🎧 Discord: playing ${path.basename(file)}`);
     } catch (e) {
         console.error('❌ Discord play error:', e.message);
+        if (retry < 4) setTimeout(() => playCurrentMp3(retry + 1), 1000);
     }
 }
 
@@ -446,7 +452,7 @@ export function startDiscordRadio() {
             stopDiscordPlayback();
             return;
         }
-        if (connection) playCurrentMp3();
+        if (connection) setTimeout(() => playCurrentMp3(), 400);
     });
 
     client.login(token).catch((e) => {

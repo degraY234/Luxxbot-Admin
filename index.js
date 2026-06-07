@@ -21,12 +21,22 @@ app.set('trust proxy', true);
 app.use(express.json({ limit: '1mb' }));
 
 registerWaQrRoutes(app);
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
+    let radio = null;
+    try {
+        const { radio: r } = await import('./src/services/radio-server.js');
+        radio = {
+            current: r.current?.title || null,
+            queue: r.queue.length,
+            isPreparing: r.isPreparing
+        };
+    } catch { /* radio belum load */ }
     res.json({
         ok: true,
         uptime: Math.floor(process.uptime()),
         railway: isRailwayRuntime(),
-        port: PORT
+        port: PORT,
+        radio
     });
 });
 
@@ -58,7 +68,7 @@ function startFullStack({ usePairBot = false } = {}) {
 
 if (isRailwayRuntime()) {
     console.log('\x1b[36m🚂 Railway: semua fitur aktif (satu proses)\x1b[0m');
-    setTimeout(() => startFullStack({ usePairBot: true }), 1500);
+    setTimeout(() => startFullStack({ usePairBot: false }), 1500);
 } else {
     startFullStack({ usePairBot: false });
 }

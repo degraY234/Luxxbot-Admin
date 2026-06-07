@@ -4,9 +4,9 @@ dotenv.config({ override: true });
 import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
 import ffmpeg from 'fluent-ffmpeg';
-import ffmpegPath from 'ffmpeg-static';
+import { configureFluentFfmpeg } from './utils/ffmpeg-path.js';
 
-ffmpeg.setFfmpegPath(ffmpegPath);
+configureFluentFfmpeg(ffmpeg);
 
 export const BOT_NAME = 'LuxxBot';
 export const PM2_APP_NAME = process.env.name || process.env.PM2_APP_NAME || 'luxx';

@@ -33,6 +33,10 @@ if [ -n "$RAILWAY_ENVIRONMENT" ] && [ -z "$NODE_OPTIONS" ]; then
     export NODE_OPTIONS="--max-old-space-size=768"
 fi
 
+if [ -z "$FFMPEG_PATH" ] && [ -x /usr/bin/ffmpeg ]; then
+    export FFMPEG_PATH=/usr/bin/ffmpeg
+fi
+
 if [ -n "$RAILWAY_PUBLIC_DOMAIN" ]; then
     case "$RAILWAY_PUBLIC_DOMAIN" in
         http://*|https://*) export RADIO_PUBLIC_URL="${RAILWAY_PUBLIC_DOMAIN}" ;;

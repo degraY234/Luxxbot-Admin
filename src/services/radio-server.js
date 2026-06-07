@@ -2,6 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import express from 'express';
 import ffmpeg from 'fluent-ffmpeg';
+import { configureFluentFfmpeg } from '../utils/ffmpeg-path.js';
+
+configureFluentFfmpeg(ffmpeg);
 import { downloadYoutubeToMp3 } from '../utils/ytdlp-download.js';
 import { enrichTrackMeta, formatDurationSec } from '../utils/youtube-meta.js';
 import { mountAdminApi } from './admin-api.js';
@@ -171,11 +174,18 @@ function ensureDirs() {
     if (!fs.existsSync(RADIO_DIR)) fs.mkdirSync(RADIO_DIR, { recursive: true });
 }
 
+const PREPARE_TIMEOUT_MS = Number(process.env.RADIO_PREPARE_TIMEOUT_MS || 300_000);
+
 async function prepareTrack(track, gen) {
     ensureDirs();
     const tmpPath = path.join(RADIO_DIR, `track-${track.id}.mp3`);
     try {
-        await downloadYoutubeToMp3(track.url, tmpPath);
+        await Promise.race([
+            downloadYoutubeToMp3(track.url, tmpPath),
+            new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Download radio timeout')), PREPARE_TIMEOUT_MS);
+            })
+        ]);
     } catch (e) {
         if (fs.existsSync(tmpPath)) try { fs.unlinkSync(tmpPath); } catch (_) {}
         throw e;

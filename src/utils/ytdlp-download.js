@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import ffmpegPath from 'ffmpeg-static';
+import { resolveFfmpegPath } from './ffmpeg-path.js';
 import { ensureWaCompatibleMp4 } from './wa-video.js';
 
 const COOKIE_BROWSERS = (process.env.YTDLP_COOKIES_BROWSER || 'chrome,edge,firefox')
@@ -9,15 +9,27 @@ const COOKIE_BROWSERS = (process.env.YTDLP_COOKIES_BROWSER || 'chrome,edge,firef
     .map((s) => s.trim())
     .filter(Boolean);
 
-function runYtDlp(args, label = 'yt-dlp') {
+const YTDLP_TIMEOUT_MS = Number(process.env.YTDLP_TIMEOUT_MS || 240_000);
+
+function runYtDlp(args, label = 'yt-dlp', timeoutMs = YTDLP_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
         const proc = spawn('yt-dlp', args, { windowsHide: true });
         let stderr = '';
+        let stdout = '';
+        const timer = setTimeout(() => {
+            try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+            reject(new Error(`${label}: timeout ${Math.round(timeoutMs / 1000)}s`));
+        }, timeoutMs);
+        proc.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
         proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-        proc.on('error', (err) => reject(new Error(`${label}: ${err.message}`)));
+        proc.on('error', (err) => {
+            clearTimeout(timer);
+            reject(new Error(`${label}: ${err.message}`));
+        });
         proc.on('close', (code) => {
-            if (code === 0) return resolve(stderr);
-            reject(new Error(stderr.trim() || `${label} exited with code ${code}`));
+            clearTimeout(timer);
+            if (code === 0) return resolve(stdout.trim() || stderr.trim());
+            reject(new Error((stderr || stdout).trim().slice(-500) || `${label} exit ${code}`));
         });
     });
 }
@@ -40,26 +52,47 @@ function isInstagramUrl(url) {
     return /instagram\.com|instagr\.am/i.test(url);
 }
 
-async function runYtDlpWithFallback(url, buildArgs) {
-    const attempts = [];
-    if (isInstagramUrl(url)) {
-        for (const browser of COOKIE_BROWSERS) {
-            attempts.push({
-                label: `cookies-${browser}`,
-                args: ['--cookies-from-browser', browser, ...buildArgs(url)]
-            });
-        }
-    }
-    attempts.push({ label: 'default', args: buildArgs(url) });
+function isYoutubeUrl(url) {
+    return /youtube\.com|youtu\.be|music\.youtube/i.test(url);
+}
 
+function commonFlags(template) {
+    const ffmpegLoc = resolveFfmpegPath();
+    return [
+        '-o', template,
+        '--no-playlist', '--no-warnings', '--no-check-certificates',
+        '--ffmpeg-location', ffmpegLoc,
+        '--retries', '3',
+        '--socket-timeout', '25',
+        '--extractor-retries', '3',
+        '--geo-bypass'
+    ];
+}
+
+async function runYtDlpWithFallback(url, buildArgsList) {
+    const list = Array.isArray(buildArgsList) ? buildArgsList : [buildArgsList];
     let lastErr;
-    for (const { label, args } of attempts) {
-        try {
-            return await runYtDlp(args, label);
-        } catch (e) {
-            lastErr = e;
-            const msg = e.message || '';
-            if (!/instagram|login|cookie|empty media/i.test(msg) && label === 'default') break;
+    for (const item of list) {
+        const attempts = [];
+        if (isInstagramUrl(url)) {
+            for (const browser of COOKIE_BROWSERS) {
+                attempts.push({
+                    label: `cookies-${browser}`,
+                    args: ['--cookies-from-browser', browser, ...item(url)]
+                });
+            }
+        }
+        attempts.push({ label: 'default', args: item(url) });
+
+        for (const { label, args } of attempts) {
+            try {
+                return await runYtDlp(args, label);
+            } catch (e) {
+                lastErr = e;
+                const msg = e.message || '';
+                console.error(`yt-dlp ${label} gagal:`, msg.slice(0, 200));
+                if (!/instagram|login|cookie|empty media/i.test(msg) && label === 'default') break;
+            }
         }
     }
     throw lastErr || new Error('yt-dlp gagal');
@@ -78,16 +111,23 @@ export async function downloadAudioToMp3(url, outputPath) {
         if (fs.existsSync(f)) try { fs.unlinkSync(f); } catch (_) {}
     }
 
-    const buildArgs = () => [
+    const buildAudioArgs = (extra = []) => (targetUrl) => [
         '-x', '--audio-format', 'mp3', '--audio-quality', '0',
-        '-o', template, '--no-playlist', '--no-warnings', '--no-check-certificates',
-        '--ffmpeg-location', ffmpegPath,
-        '--retries', '5', '--socket-timeout', '60',
-        '--extractor-retries', '3',
-        url
+        ...commonFlags(template),
+        ...extra,
+        targetUrl
     ];
 
-    await runYtDlpWithFallback(url, buildArgs);
+    const builders = [buildAudioArgs()];
+    if (isYoutubeUrl(url)) {
+        builders.push(
+            buildAudioArgs(['--extractor-args', 'youtube:player_client=android,web']),
+            buildAudioArgs(['--extractor-args', 'youtube:player_client=tv_embedded,web']),
+            buildAudioArgs(['--extractor-args', 'youtube:player_client=mweb,web'])
+        );
+    }
+
+    await runYtDlpWithFallback(url, builders);
 
     const file = resolveOutputFile(base, ['mp3', 'm4a', 'opus', 'webm']);
     if (!file) throw new Error('File MP3 tidak ditemukan setelah unduhan');
@@ -98,16 +138,10 @@ export async function downloadAudioToMp3(url, outputPath) {
     return outputPath;
 }
 
-/**
- * Download video HD (max 1080p mp4) via yt-dlp — untuk IG/TikTok dll.
- */
 export async function downloadVideoHd(url, outputPath) {
     return downloadVideoRaw(url, outputPath, 1080);
 }
 
-/**
- * Download video YouTube/Facebook → H.264 MP4 yang kompatibel WhatsApp mobile.
- */
 export async function downloadVideoForWhatsApp(url, outputPath, { maxHeight = 720 } = {}) {
     const dir = path.dirname(outputPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -147,15 +181,12 @@ async function downloadVideoRaw(url, outputPath, maxHeight = 1080) {
             'best[ext=mp4]/best'
         ].join('/');
 
-    const buildArgs = () => [
+    const buildArgs = () => (targetUrl) => [
         '-f', format,
         '--merge-output-format', 'mp4',
         '--postprocessor-args', 'ffmpeg:-movflags +faststart',
-        '-o', template, '--no-playlist', '--no-warnings', '--no-check-certificates',
-        '--ffmpeg-location', ffmpegPath,
-        '--retries', '5', '--socket-timeout', '60',
-        '--extractor-retries', '3',
-        url
+        ...commonFlags(template),
+        targetUrl
     ];
 
     await runYtDlpWithFallback(url, buildArgs);
@@ -169,25 +200,26 @@ async function downloadVideoRaw(url, outputPath, maxHeight = 1080) {
     return outputPath;
 }
 
-/** Alias untuk radio-server (kompatibilitas) */
 export async function downloadYoutubeToMp3(url, outputPath) {
     return downloadAudioToMp3(url, outputPath);
 }
 
 export async function getYtDlpTitle(url) {
-    const attempts = [
-        ['--print', 'title', '--no-warnings', url],
-        ...COOKIE_BROWSERS.map((b) => ['--cookies-from-browser', b, '--print', 'title', '--no-warnings', url])
-    ];
+    const ytClients = isYoutubeUrl(url)
+        ? [['--extractor-args', 'youtube:player_client=android,web'], ['--extractor-args', 'youtube:player_client=tv_embedded,web']]
+        : [[]];
+    const attempts = [];
+    for (const extra of ytClients) {
+        attempts.push(['--print', 'title', '--no-warnings', ...extra, url]);
+    }
+    for (const browser of COOKIE_BROWSERS) {
+        attempts.push(['--cookies-from-browser', browser, '--print', 'title', '--no-warnings', url]);
+    }
+
     for (const args of attempts) {
         try {
-            const out = await new Promise((resolve, reject) => {
-                const proc = spawn('yt-dlp', args, { windowsHide: true });
-                let stdout = '';
-                proc.stdout.on('data', (c) => { stdout += c.toString(); });
-                proc.on('close', (code) => (code === 0 ? resolve(stdout.trim()) : reject()));
-            });
-            if (out) return out;
+            const out = await runYtDlp(args, 'title', 45_000);
+            if (out?.trim()) return out.trim();
         } catch (_) {}
     }
     return 'Media';
