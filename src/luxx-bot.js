@@ -11,7 +11,12 @@ import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import { publishWaQr } from './services/wa-qr.js';
 import { setWaConnection, setWaHandlersReady, waStatus } from './wa-status.js';
-import { isWaSessionPaired, logSessionDiagnostics } from './utils/wa-session.js';
+import {
+    isWaSessionPaired,
+    logSessionDiagnostics,
+    backupWaSession,
+    restoreSessionFromBackupIfNeeded
+} from './utils/wa-session.js';
 
 const BOT_NAME = process.env.BOT_NAME || 'LuxxBot';
 
@@ -97,6 +102,7 @@ export async function startLuxxBot() {
     isStarting = true;
 
     try {
+        restoreSessionFromBackupIfNeeded();
         logSessionDiagnostics();
         setWaConnection('connecting');
         setWaHandlersReady(false);
@@ -110,7 +116,9 @@ export async function startLuxxBot() {
         teardownSocket();
 
         const { state: authState, saveCreds } = await useMultiFileAuthState('./session');
-        const flushCreds = () => saveCreds().catch((e) => console.error('❌ saveCreds:', e.message));
+        const flushCreds = () => saveCreds()
+            .then(() => backupWaSession())
+            .catch((e) => console.error('❌ saveCreds:', e.message));
         const { version } = await fetchLatestBaileysVersion();
 
         sock = makeWASocket({

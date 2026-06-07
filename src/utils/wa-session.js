@@ -5,6 +5,7 @@ import { isRailwayRuntime } from './listen-port.js';
 const SESSION_DIR = path.resolve('./session');
 const CREDS_FILE = path.join(SESSION_DIR, 'creds.json');
 const PERSIST_DIR = path.resolve(process.env.PERSIST_DIR || '/app/persist');
+const SESSION_BACKUP_DIR = path.join(PERSIST_DIR, 'session-backup');
 
 /** Session sudah pernah scan QR? */
 export function isWaSessionPaired() {
@@ -27,10 +28,47 @@ function isPersistVolumeMounted() {
     if (!isRailwayRuntime()) return null;
     try {
         const mounts = fs.readFileSync('/proc/self/mounts', 'utf8');
-        return /\/app\/persist\s/.test(mounts) || mounts.split('\n').some((l) => l.includes(' /app/persist '));
+        if (mounts.split('\n').some((l) => l.includes(' /app/persist '))) return true;
+        const real = fs.realpathSync(PERSIST_DIR);
+        if (real !== PERSIST_DIR && mounts.includes(real)) return true;
+        return false;
     } catch {
         return null;
     }
+}
+
+function copyDirContents(src, dest) {
+    if (!fs.existsSync(src)) return 0;
+    fs.mkdirSync(dest, { recursive: true });
+    let n = 0;
+    for (const name of fs.readdirSync(src)) {
+        const from = path.join(src, name);
+        const to = path.join(dest, name);
+        const st = fs.statSync(from);
+        if (st.isDirectory()) continue;
+        fs.copyFileSync(from, to);
+        n += 1;
+    }
+    return n;
+}
+
+/** Backup session ke volume persist (survive redeploy). */
+export function backupWaSession() {
+    if (!fs.existsSync(SESSION_DIR)) return 0;
+    return copyDirContents(SESSION_DIR, SESSION_BACKUP_DIR);
+}
+
+/** Restore session dari backup kalau creds hilang setelah redeploy. */
+export function restoreSessionFromBackupIfNeeded() {
+    if (isWaSessionPaired()) return false;
+    const backupCreds = path.join(SESSION_BACKUP_DIR, 'creds.json');
+    if (!fs.existsSync(backupCreds)) return false;
+    const n = copyDirContents(SESSION_BACKUP_DIR, SESSION_DIR);
+    if (n > 0) {
+        console.log(`\x1b[32m♻️  Session dipulihkan dari backup (${n} file)\x1b[0m`);
+        return true;
+    }
+    return false;
 }
 
 function getCredsSize() {
@@ -52,6 +90,8 @@ export function getSessionDiagnostics() {
     const sessionReal = fs.existsSync(SESSION_DIR)
         ? (fs.realpathSync?.(SESSION_DIR) || SESSION_DIR)
         : SESSION_DIR;
+    const onPersistPath = sessionReal.includes('/app/persist') || sessionReal.includes(String(PERSIST_DIR));
+    const hasBackup = fs.existsSync(path.join(SESSION_BACKUP_DIR, 'creds.json'));
 
     return {
         paired,
@@ -60,13 +100,17 @@ export function getSessionDiagnostics() {
         sessionDir: SESSION_DIR,
         sessionResolved: sessionReal,
         persistDir: PERSIST_DIR,
-        volumeMounted,
+        onPersistPath,
+        hasBackup,
+        volumeMounted: volumeMounted === true || (volumeMounted === false && onPersistPath ? true : volumeMounted),
         needsQr: !paired,
         pairHint: paired
             ? 'Session tersimpan — redeploy tanpa scan QR'
-            : volumeMounted === false
-                ? 'WAJIB: Railway → Volume mount /app/persist lalu scan /pair sekali'
-                : 'Buka /pair di laptop → scan QR sekali (session belum ada)'
+            : hasBackup
+                ? 'Session backup ada — bot akan restore otomatis'
+                : volumeMounted === false && !onPersistPath
+                    ? 'WAJIB: Railway → Volume mount /app/persist lalu scan /pair sekali'
+                    : 'Buka /pair di laptop → scan QR sekali (session belum ada)'
     };
 }
 

@@ -50,7 +50,7 @@ function friendlyError(err, base) {
   return msg;
 }
 
-async function api(path, method = 'GET') {
+async function api(path, method = 'GET', body = null) {
   const { base, token } = cfg();
   if (!base || !token) throw new Error('Isi API Base URL dan Admin Token.');
 
@@ -61,7 +61,8 @@ async function api(path, method = 'GET') {
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
-      }
+      },
+      body: body != null ? JSON.stringify(body) : undefined
     });
   } catch (e) {
     throw new Error(friendlyError(e, base));
@@ -228,6 +229,15 @@ function renderStatus(d) {
     Antrian: ${(w.queue || []).length} film<br>
     <span class="muted">User pakai !watch → login username saja</span>`;
 
+  const yt = d.youtubeCookies || {};
+  const sess = d.session || {};
+  $('#cookies-box').innerHTML = yt.ready
+    ? `✅ Cookies aktif · <strong>${yt.bytes || 0}</strong> bytes<br><span class="muted">${yt.path || ''}</span>`
+    : `❌ Cookies belum ada — !play gagal di Railway<br><span class="muted">${yt.hint || ''}</span>`;
+  if (sess.paired) {
+    $('#cookies-box').innerHTML += `<br>📱 WA session: <strong>paired</strong> (${sess.credsBytes || 0}B) · persist: ${sess.onPersistPath ? '✅' : '⚠️'}`;
+  }
+
   const r = d.radio || {};
   renderPlayer(r, cfg().base);
 
@@ -346,6 +356,17 @@ $('#btn-watch-stop').addEventListener('click', async () => {
     await refresh();
   } catch (e) { showToast(e.message); }
 });
+$('#btn-cookies-save').addEventListener('click', async () => {
+  const content = ($('#cookies-paste').value || '').trim();
+  if (!content) return showToast('Paste isi file cookies dulu.');
+  try {
+    const r = await api('/youtube-cookies', 'POST', { content });
+    showToast(r.message || 'Cookies tersimpan');
+    $('#cookies-paste').value = '';
+    await refresh();
+  } catch (e) { showToast(e.message); }
+});
+
 $('#btn-watch-clear-q').addEventListener('click', async () => {
   if (!confirm('Kosongkan antrian watch?')) return;
   try {

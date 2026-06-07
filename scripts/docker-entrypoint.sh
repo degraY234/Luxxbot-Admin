@@ -2,7 +2,7 @@
 set -e
 
 PERSIST="${PERSIST_DIR:-/app/persist}"
-mkdir -p "$PERSIST/session" "$PERSIST/data" "$PERSIST/temp"
+mkdir -p "$PERSIST/session" "$PERSIST/session-backup" "$PERSIST/data" "$PERSIST/temp"
 
 link_dir() {
     target="$1"
@@ -46,14 +46,27 @@ elif [ -n "$RAILWAY_STATIC_URL" ] && [ -z "$RADIO_PUBLIC_URL" ]; then
     export RADIO_PUBLIC_URL="$RAILWAY_STATIC_URL"
 fi
 
+COOKIES_FILE="$PERSIST/data/youtube-cookies.txt"
+export YTDLP_COOKIES_FILE="${YTDLP_COOKIES_FILE:-$COOKIES_FILE}"
+
 if [ -f "$PERSIST/session/creds.json" ]; then
   echo "✅ Session WA ada di volume — redeploy tanpa scan QR"
   echo "   creds size: $(wc -c < "$PERSIST/session/creds.json" 2>/dev/null || echo 0) bytes"
+elif [ -f "$PERSIST/session-backup/creds.json" ]; then
+  echo "♻️  Session backup ada — bot restore otomatis saat start"
+  cp -a "$PERSIST/session-backup/." "$PERSIST/session/" 2>/dev/null || true
 else
   echo "⚠️  SESSION KOSONG — wajib:"
   echo "   1) Railway → Volume mount /app/persist"
   echo "   2) Buka /pair → scan QR sekali"
 fi
+
+if [ -f "$COOKIES_FILE" ] && [ "$(wc -c < "$COOKIES_FILE" 2>/dev/null || echo 0)" -gt 80 ]; then
+  echo "✅ YouTube cookies: $COOKIES_FILE ($(wc -c < "$COOKIES_FILE") bytes)"
+else
+  echo "⚠️  YouTube cookies belum ada — jalankan scripts/export-youtube-cookies.ps1 di PC"
+fi
+
 ls -la "$PERSIST/session" 2>/dev/null | head -5 || true
 
 if command -v yt-dlp >/dev/null 2>&1; then

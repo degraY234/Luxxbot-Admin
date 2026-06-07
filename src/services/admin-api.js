@@ -22,6 +22,8 @@ import { getDiscordDiagnostics } from './discord-radio.js';
 import { BOT_NAME, PM2_APP_NAME, startTime } from '../config.js';
 import { state } from '../state.js';
 import { runtime } from '../utils/runtime.js';
+import { getYoutubeCookiesStatus, saveYoutubeCookies } from '../utils/youtube-cookies.js';
+import { getSessionDiagnostics } from '../utils/wa-session.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const adminStaticDir = path.resolve(__dirname, '../../admin');
@@ -106,11 +108,15 @@ function buildStatusPayload() {
             slashReady: discord.slashReady,
             inviteUrl: discord.inviteUrl
         },
-        watch: getWatchRoomState()
+        watch: getWatchRoomState(),
+        session: getSessionDiagnostics(),
+        youtubeCookies: getYoutubeCookiesStatus()
     };
 }
 
 export function mountAdminApi(app) {
+    app.use('/admin/api', express.json({ limit: '2mb' }));
+
     app.use('/admin/api', (req, res, next) => {
         if (applyCors(req, res)) return;
         if (!requireAdmin(req, res)) return;
@@ -153,6 +159,20 @@ export function mountAdminApi(app) {
     app.post('/admin/api/watch/clear-queue', (req, res) => {
         const result = adminWatchClearQueue();
         res.json({ ...result, room: getWatchRoomState() });
+    });
+
+    app.get('/admin/api/youtube-cookies', (req, res) => {
+        res.json({ ok: true, ...getYoutubeCookiesStatus() });
+    });
+
+    app.post('/admin/api/youtube-cookies', (req, res) => {
+        try {
+            const content = req.body?.content || req.body?.cookies || req.body?.text || '';
+            const saved = saveYoutubeCookies(content);
+            res.json({ ok: true, message: 'Cookies YouTube tersimpan di volume persist.', ...saved });
+        } catch (e) {
+            res.status(400).json({ ok: false, error: e.message });
+        }
     });
 
     app.post('/admin/api/restart', (req, res) => {

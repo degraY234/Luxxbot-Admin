@@ -3,6 +3,11 @@ import fs from 'fs';
 import path from 'path';
 import { resolveFfmpegPath } from './ffmpeg-path.js';
 import { ensureWaCompatibleMp4 } from './wa-video.js';
+import {
+    hasYoutubeCookies,
+    resolveYoutubeCookiesPath,
+    getYoutubePoTokenArg
+} from './youtube-cookies.js';
 
 const COOKIE_BROWSERS = (process.env.YTDLP_COOKIES_BROWSER || 'chrome,edge,firefox')
     .split(',')
@@ -69,13 +74,25 @@ function commonFlags(template) {
         '--remote-components', 'ejs:github',
         '--js-runtimes', process.env.YTDLP_JS_RUNTIME || 'node'
     ];
-    const cookiesFile = process.env.YTDLP_COOKIES_FILE?.trim();
-    if (cookiesFile && fs.existsSync(cookiesFile)) {
+    const cookiesFile = resolveYoutubeCookiesPath();
+    if (cookiesFile && fs.existsSync(cookiesFile) && fs.statSync(cookiesFile).size > 80) {
         flags.push('--cookies', cookiesFile);
     }
+    flags.push(...getYoutubePoTokenArg());
     const proxy = process.env.YTDLP_PROXY?.trim();
     if (proxy) flags.push('--proxy', proxy);
     return flags;
+}
+
+function isBotBlockError(msg = '') {
+    return /sign in to confirm|not a bot|cookies-from-browser|confirm you.?re not/i.test(msg);
+}
+
+function buildYoutubeBotHint() {
+    if (hasYoutubeCookies()) {
+        return 'Cookies YouTube kedaluwarsa — export ulang: scripts/export-youtube-cookies.ps1 lalu upload di /admin';
+    }
+    return 'YouTube butuh cookies di server. Jalankan di PC: scripts/export-youtube-cookies.ps1 (upload otomatis ke Railway)';
 }
 
 async function runYtDlpWithFallback(url, buildArgsList) {
@@ -83,13 +100,18 @@ async function runYtDlpWithFallback(url, buildArgsList) {
     let lastErr;
     for (const item of list) {
         const attempts = [];
-        if (isInstagramUrl(url)) {
+        const ytCookies = isYoutubeUrl(url) && hasYoutubeCookies();
+
+        if (isInstagramUrl(url) || (isYoutubeUrl(url) && process.platform === 'win32')) {
             for (const browser of COOKIE_BROWSERS) {
                 attempts.push({
                     label: `cookies-${browser}`,
                     args: ['--cookies-from-browser', browser, ...item(url)]
                 });
             }
+        }
+        if (ytCookies) {
+            attempts.push({ label: 'cookies-file', args: item(url) });
         }
         attempts.push({ label: 'default', args: item(url) });
 
@@ -100,9 +122,15 @@ async function runYtDlpWithFallback(url, buildArgsList) {
                 lastErr = e;
                 const msg = e.message || '';
                 console.error(`yt-dlp ${label} gagal:`, msg.slice(0, 200));
-                if (!/instagram|login|cookie|empty media/i.test(msg) && label === 'default') break;
+                const retryable = /instagram|login|cookie|empty media|sign in|not a bot/i.test(msg);
+                if (!retryable && label === 'default') break;
             }
         }
+    }
+
+    const errMsg = lastErr?.message || 'yt-dlp gagal';
+    if (isYoutubeUrl(url) && isBotBlockError(errMsg)) {
+        throw new Error(`${errMsg.slice(-300)}\n\n💡 ${buildYoutubeBotHint()}`);
     }
     throw lastErr || new Error('yt-dlp gagal');
 }
@@ -221,8 +249,11 @@ export async function getYtDlpTitle(url) {
         '--remote-components', 'ejs:github',
         '--js-runtimes', process.env.YTDLP_JS_RUNTIME || 'node'
     ];
-    const cookiesFile = process.env.YTDLP_COOKIES_FILE?.trim();
-    if (cookiesFile && fs.existsSync(cookiesFile)) baseMeta.push('--cookies', cookiesFile);
+    const cookiesFile = resolveYoutubeCookiesPath();
+    if (cookiesFile && fs.existsSync(cookiesFile) && fs.statSync(cookiesFile).size > 80) {
+        baseMeta.push('--cookies', cookiesFile);
+    }
+    baseMeta.push(...getYoutubePoTokenArg());
     const proxy = process.env.YTDLP_PROXY?.trim();
     if (proxy) baseMeta.push('--proxy', proxy);
 
