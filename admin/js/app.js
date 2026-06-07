@@ -24,13 +24,60 @@ function showLoginError(msg) {
 
 function cfg() {
   return {
-    base: (localStorage.getItem('luxx_api_base') || '').replace(/\/$/, ''),
+    base: resolveApiBase(),
     token: (localStorage.getItem('luxx_api_token') || '').trim()
   };
 }
 
-function defaultLocalBase() {
+function isGitHubPages() {
+  return location.hostname.includes('github.io');
+}
+
+function isSelfHostedAdmin() {
+  return !isGitHubPages();
+}
+
+/** Default API base: Railway/VPS = origin ini; GitHub Pages = localhost */
+function defaultApiBase() {
+  if (isSelfHostedAdmin()) {
+    return location.origin.replace(/\/$/, '');
+  }
   return 'http://localhost:3920';
+}
+
+function defaultLocalBase() {
+  return defaultApiBase();
+}
+
+function resolveApiBase() {
+  const saved = (localStorage.getItem('luxx_api_base') || '').replace(/\/$/, '');
+  if (isSelfHostedAdmin()) {
+    return location.origin.replace(/\/$/, '');
+  }
+  return saved || defaultApiBase();
+}
+
+function setupLoginForm() {
+  const baseInput = $('#api-base');
+  const baseField = baseInput?.closest('.field');
+  const localBtn = $('#btn-local');
+  const hint = document.querySelector('.field-hint');
+
+  if (isSelfHostedAdmin()) {
+    const origin = location.origin.replace(/\/$/, '');
+    if (baseInput) {
+      baseInput.value = origin;
+      baseInput.readOnly = true;
+    }
+    if (baseField) baseField.style.display = 'none';
+    if (localBtn) localBtn.style.display = 'none';
+    if (hint) hint.textContent = 'Admin jalan di server yang sama — cukup isi Admin Token dari .env / Railway Variables.';
+  } else {
+    if (baseInput) baseInput.readOnly = false;
+    if (baseField) baseField.style.display = '';
+    if (localBtn) localBtn.style.display = '';
+    if (hint) hint.textContent = 'Isi URL bot/tunnel (tanpa /admin). Bukan link GitHub Pages.';
+  }
 }
 
 function friendlyError(err, base) {
@@ -263,21 +310,27 @@ async function refresh() {
 }
 
 async function doLogin() {
-  const base = $('#api-base').value.trim().replace(/\/$/, '');
+  const base = resolveApiBase();
   const token = $('#api-token').value.trim();
   showLoginError('');
 
-  if (!base || !token) {
+  if (!token) {
+    showLoginError('Isi Admin Token (sama dengan ADMIN_API_TOKEN di Railway Variables).');
+    return;
+  }
+
+  if (!isSelfHostedAdmin() && !$('#api-base').value.trim()) {
     showLoginError('Isi API Base URL dan Admin Token.');
     return;
   }
 
-  if (base.includes('github.io')) {
-    showLoginError('API Base URL salah — itu link Pages. Isi http://localhost:3920 atau URL tunnel bot.');
+  const typedBase = ($('#api-base').value || '').trim().replace(/\/$/, '');
+  if (!isSelfHostedAdmin() && typedBase.includes('github.io')) {
+    showLoginError('API Base URL salah — itu link Pages. Isi URL Railway atau localhost:3920.');
     return;
   }
 
-  localStorage.setItem('luxx_api_base', base);
+  localStorage.setItem('luxx_api_base', isSelfHostedAdmin() ? base : typedBase);
   localStorage.setItem('luxx_api_token', token);
 
   const btn = $('#btn-login');
@@ -376,7 +429,10 @@ $('#btn-watch-clear-q').addEventListener('click', async () => {
   } catch (e) { showToast(e.message); }
 });
 
-const savedBase = localStorage.getItem('luxx_api_base');
+setupLoginForm();
 const savedToken = localStorage.getItem('luxx_api_token');
-$('#api-base').value = savedBase || defaultLocalBase();
+if (!isSelfHostedAdmin()) {
+  const savedBase = localStorage.getItem('luxx_api_base');
+  $('#api-base').value = savedBase || defaultApiBase();
+}
 if (savedToken) $('#api-token').value = savedToken;
