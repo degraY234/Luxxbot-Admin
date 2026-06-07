@@ -5,34 +5,64 @@ param(
     [string]$AdminToken = $env:ADMIN_API_TOKEN
 )
 
-$ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $outDir = Join-Path $root "data"
 $outFile = Join-Path $outDir "youtube-cookies.txt"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
+$locking = @('chrome', 'msedge', 'brave') | Where-Object {
+    Get-Process -Name $_ -ErrorAction SilentlyContinue
+}
+if ($locking) {
+    Write-Host ""
+    Write-Host "PERINGATAN: Browser masih jalan ($($locking -join ', '))" -ForegroundColor Yellow
+    Write-Host "  yt-dlp tidak bisa baca cookie DB kalau browser terbuka."
+    Write-Host "  Tutup SEMUA jendela Chrome/Edge/Brave lalu jalankan ulang script."
+    Write-Host ""
+}
+
 $testUrl = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
 $browsers = @($Browser, 'edge', 'chrome', 'firefox', 'brave') | Select-Object -Unique
 $exported = $false
+$errors = @()
 
 foreach ($b in $browsers) {
     Write-Host "Coba export dari $b ..."
     if (Test-Path $outFile) { Remove-Item $outFile -Force -ErrorAction SilentlyContinue }
-    & yt-dlp --cookies-from-browser $b --cookies $outFile --skip-download $testUrl 2>&1 | Out-Host
+    $out = & yt-dlp --cookies-from-browser $b --cookies $outFile --skip-download $testUrl 2>&1
+    $code = $LASTEXITCODE
+    if ($out) { $out | ForEach-Object { Write-Host $_ } }
     if ((Test-Path $outFile) -and ((Get-Item $outFile).Length -gt 80)) {
         $exported = $true
         $Browser = $b
         break
     }
+    if ($code -ne 0 -and $out) {
+        $errors += "$b : $($out | Select-Object -Last 1)"
+    }
 }
 
 if (-not $exported) {
     Write-Host ""
-    Write-Host "GAGAL export cookies. Coba:" -ForegroundColor Red
-    Write-Host "  1) Tutup SEMUA jendela Chrome/Edge (browser lock cookie DB)"
-    Write-Host "  2) Login youtube.com di browser"
-    Write-Host "  3) Jalankan ulang script ini"
-    Write-Host "  Atau export manual pakai ekstensi 'Get cookies.txt LOCALLY' → paste di /admin"
+    Write-Host "GAGAL export cookies." -ForegroundColor Red
+    if ($errors) {
+        Write-Host "Error terakhir per browser:" -ForegroundColor Red
+        $errors | ForEach-Object { Write-Host "  $_" }
+    }
+    Write-Host ""
+    Write-Host "Penyebab paling umum:" -ForegroundColor Yellow
+    Write-Host "  • Chrome/Edge MASIH TERBUKA → database cookie dikunci"
+    Write-Host "  • Belum login youtube.com di browser"
+    Write-Host "  • Firefox tidak terpasang / tidak pernah dipakai"
+    Write-Host ""
+    Write-Host "Langkah fix:" -ForegroundColor Cyan
+    Write-Host "  1) Tutup SEMUA Chrome, Edge, Brave (cek Task Manager)"
+    Write-Host "  2) Buka Chrome → login youtube.com"
+    Write-Host "  3) Tutup Chrome lagi → jalankan: .\scripts\export-youtube-cookies.ps1"
+    Write-Host ""
+    Write-Host "Alternatif (tanpa tutup browser):" -ForegroundColor Cyan
+    Write-Host "  • Ekstensi 'Get cookies.txt LOCALLY' di Chrome → export youtube.com"
+    Write-Host "  • Paste isi file di https://luxxbot-production.up.railway.app/admin → Simpan Cookies"
     exit 1
 }
 
