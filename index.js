@@ -34,7 +34,7 @@ app.get('/health', async (_req, res) => {
     } catch { /* radio belum load */ }
     const wa = getWaHealth();
     res.json({
-        ok: true,
+        ok: wa.connected && wa.handlersReady,
         uptime: Math.floor(process.uptime()),
         railway: isRailwayRuntime(),
         port: PORT,
@@ -50,28 +50,27 @@ const server = app.listen(PORT, HOST, () => {
         console.error('\x1b[31m❌ PORT SALAH: hapus RADIO_PORT=3920 di Railway Variables!\x1b[0m');
     }
     printPairLinkBanner();
+    bootLuxx(app);
 });
 
 server.on('error', (err) => {
     console.error('❌ HTTP server error:', err?.message || err);
 });
 
-function startFullStack({ usePairBot = false } = {}) {
-    import('./src/services/radio-server.js')
-        .then(({ startRadioServer }) => {
-            startRadioServer(app);
-            console.log('\x1b[32m✅ Radio / admin / watch / portfolio aktif\x1b[0m');
-            if (usePairBot) return import('./src/bot-pair.js').then((m) => m.startPairBot());
-            return import('./src/bot.js').then((m) => m.startBot());
-        })
-        .catch((e) => {
-            console.error('❌ Startup error (HTTP /pair tetap hidup):', e?.message || e);
-        });
-}
+async function bootLuxx(expressApp) {
+    try {
+        await Promise.all([
+            import('./src/handlers/messages.js'),
+            import('./src/services/radio-server.js')
+        ]);
+        const { startRadioServer } = await import('./src/services/radio-server.js');
+        startRadioServer(expressApp);
+        console.log('\x1b[32m✅ Radio / admin / watch / portfolio aktif\x1b[0m');
 
-if (isRailwayRuntime()) {
-    console.log('\x1b[36m🚂 Railway: semua fitur aktif (satu proses)\x1b[0m');
-    setTimeout(() => startFullStack({ usePairBot: true }), 1500);
-} else {
-    startFullStack({ usePairBot: false });
+        const { startLuxxBot } = await import('./src/luxx-bot.js');
+        await startLuxxBot();
+    } catch (e) {
+        console.error('❌ Boot error:', e?.message || e);
+        setTimeout(() => bootLuxx(expressApp), 10_000);
+    }
 }

@@ -64,7 +64,9 @@ export function registerMessageHandler(sock) {
 
     sock.ev.on('messages.upsert', async (chatUpdate) => {
         try {
-            const msg = chatUpdate.messages[0];
+            if (chatUpdate.type && chatUpdate.type !== 'notify') return;
+
+            const msg = chatUpdate.messages?.[0];
             if (!msg || !msg.message) return;
             if (msg.key.fromMe) return;
             if (msg.messageStubType) return;
@@ -178,6 +180,8 @@ export function registerMessageHandler(sock) {
             }
 
             if (!command) return;
+
+            console.log(`\x1b[90m📩 !${command} dari ${sender.split('@')[0]}\x1b[0m`);
 
             // Anti-spam hanya untuk perintah ! (per user, 5 detik)
             if (!checkCommandCooldown(sender)) {

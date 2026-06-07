@@ -30,7 +30,7 @@ elif [ -n "$PORT" ] && [ -z "$RADIO_PORT" ]; then
 fi
 
 if [ -n "$RAILWAY_ENVIRONMENT" ] && [ -z "$NODE_OPTIONS" ]; then
-    export NODE_OPTIONS="--max-old-space-size=768"
+    export NODE_OPTIONS="--max-old-space-size=1024"
 fi
 
 if [ -z "$FFMPEG_PATH" ] && [ -x /usr/bin/ffmpeg ]; then
