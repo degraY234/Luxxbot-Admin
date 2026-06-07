@@ -47,10 +47,14 @@ elif [ -n "$RAILWAY_STATIC_URL" ] && [ -z "$RADIO_PUBLIC_URL" ]; then
 fi
 
 if [ -f "$PERSIST/session/creds.json" ]; then
-  echo "✅ Session WA ada di volume — redeploy/update tanpa scan QR"
+  echo "✅ Session WA ada di volume — redeploy tanpa scan QR"
+  echo "   creds size: $(wc -c < "$PERSIST/session/creds.json" 2>/dev/null || echo 0) bytes"
 else
-  echo "⚠️  Session WA kosong — scan QR sekali di /pair"
+  echo "⚠️  SESSION KOSONG — wajib:"
+  echo "   1) Railway → Volume mount /app/persist"
+  echo "   2) Buka /pair → scan QR sekali"
 fi
+ls -la "$PERSIST/session" 2>/dev/null | head -5 || true
 
 echo "LuxxBot starting (listen ${RADIO_PORT:-3920}, railway PORT=${PORT:-n/a})"
 if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then

@@ -20,17 +20,21 @@ const HOST = process.env.RADIO_BIND_HOST || '0.0.0.0';
 const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: '1mb' }));
+global.__luxxApp = app;
+global.__luxxRadioMounted = false;
 
 registerWaQrRoutes(app);
 app.get('/health', async (_req, res) => {
     let radio = null;
     try {
-        const { radio: r } = await import('./src/services/radio-server.js');
-        radio = {
-            current: r.current?.title || null,
-            queue: r.queue.length,
-            isPreparing: r.isPreparing
-        };
+        if (global.__luxxRadioMounted) {
+            const { radio: r } = await import('./src/services/radio-server.js');
+            radio = {
+                current: r.current?.title || null,
+                queue: r.queue.length,
+                isPreparing: r.isPreparing
+            };
+        }
     } catch { /* radio belum load */ }
     const wa = getWaHealth();
     res.json({
@@ -39,7 +43,8 @@ app.get('/health', async (_req, res) => {
         railway: isRailwayRuntime(),
         port: PORT,
         wa,
-        radio
+        radio,
+        radioMounted: Boolean(global.__luxxRadioMounted)
     });
 });
 
@@ -50,27 +55,19 @@ const server = app.listen(PORT, HOST, () => {
         console.error('\x1b[31m❌ PORT SALAH: hapus RADIO_PORT=3920 di Railway Variables!\x1b[0m');
     }
     printPairLinkBanner();
-    bootLuxx(app);
+    bootWaOnly();
 });
 
 server.on('error', (err) => {
     console.error('❌ HTTP server error:', err?.message || err);
 });
 
-async function bootLuxx(expressApp) {
+async function bootWaOnly() {
     try {
-        await Promise.all([
-            import('./src/handlers/messages.js'),
-            import('./src/services/radio-server.js')
-        ]);
-        const { startRadioServer } = await import('./src/services/radio-server.js');
-        startRadioServer(expressApp);
-        console.log('\x1b[32m✅ Radio / admin / watch / portfolio aktif\x1b[0m');
-
         const { startLuxxBot } = await import('./src/luxx-bot.js');
         await startLuxxBot();
     } catch (e) {
-        console.error('❌ Boot error:', e?.message || e);
-        setTimeout(() => bootLuxx(expressApp), 10_000);
+        console.error('❌ Boot WA error:', e?.message || e);
+        setTimeout(bootWaOnly, 12_000);
     }
 }
