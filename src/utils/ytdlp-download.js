@@ -58,15 +58,24 @@ function isYoutubeUrl(url) {
 
 function commonFlags(template) {
     const ffmpegLoc = resolveFfmpegPath();
-    return [
+    const flags = [
         '-o', template,
         '--no-playlist', '--no-warnings', '--no-check-certificates',
         '--ffmpeg-location', ffmpegLoc,
         '--retries', '3',
         '--socket-timeout', '25',
         '--extractor-retries', '3',
-        '--geo-bypass'
+        '--geo-bypass',
+        '--remote-components', 'ejs:github',
+        '--js-runtimes', process.env.YTDLP_JS_RUNTIME || 'node'
     ];
+    const cookiesFile = process.env.YTDLP_COOKIES_FILE?.trim();
+    if (cookiesFile && fs.existsSync(cookiesFile)) {
+        flags.push('--cookies', cookiesFile);
+    }
+    const proxy = process.env.YTDLP_PROXY?.trim();
+    if (proxy) flags.push('--proxy', proxy);
+    return flags;
 }
 
 async function runYtDlpWithFallback(url, buildArgsList) {
@@ -122,8 +131,10 @@ export async function downloadAudioToMp3(url, outputPath) {
     if (isYoutubeUrl(url)) {
         builders.push(
             buildAudioArgs(['--extractor-args', 'youtube:player_client=android,web']),
+            buildAudioArgs(['--extractor-args', 'youtube:player_client=ios,web']),
             buildAudioArgs(['--extractor-args', 'youtube:player_client=tv_embedded,web']),
-            buildAudioArgs(['--extractor-args', 'youtube:player_client=mweb,web'])
+            buildAudioArgs(['--extractor-args', 'youtube:player_client=mweb,web']),
+            buildAudioArgs(['--extractor-args', 'youtube:player_client=web_creator,web'])
         );
     }
 
@@ -205,15 +216,29 @@ export async function downloadYoutubeToMp3(url, outputPath) {
 }
 
 export async function getYtDlpTitle(url) {
+    const baseMeta = [
+        '--print', 'title', '--no-warnings', '--no-playlist',
+        '--remote-components', 'ejs:github',
+        '--js-runtimes', process.env.YTDLP_JS_RUNTIME || 'node'
+    ];
+    const cookiesFile = process.env.YTDLP_COOKIES_FILE?.trim();
+    if (cookiesFile && fs.existsSync(cookiesFile)) baseMeta.push('--cookies', cookiesFile);
+    const proxy = process.env.YTDLP_PROXY?.trim();
+    if (proxy) baseMeta.push('--proxy', proxy);
+
     const ytClients = isYoutubeUrl(url)
-        ? [['--extractor-args', 'youtube:player_client=android,web'], ['--extractor-args', 'youtube:player_client=tv_embedded,web']]
+        ? [
+            ['--extractor-args', 'youtube:player_client=android,web'],
+            ['--extractor-args', 'youtube:player_client=ios,web'],
+            ['--extractor-args', 'youtube:player_client=tv_embedded,web']
+        ]
         : [[]];
     const attempts = [];
     for (const extra of ytClients) {
-        attempts.push(['--print', 'title', '--no-warnings', ...extra, url]);
+        attempts.push([...baseMeta, ...extra, url]);
     }
     for (const browser of COOKIE_BROWSERS) {
-        attempts.push(['--cookies-from-browser', browser, '--print', 'title', '--no-warnings', url]);
+        attempts.push(['--cookies-from-browser', browser, ...baseMeta, url]);
     }
 
     for (const args of attempts) {

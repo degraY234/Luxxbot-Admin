@@ -147,8 +147,11 @@ function renderPlayer(r = {}, base = '') {
   if (!cur) {
     badge.textContent = 'IDLE';
     badge.className = 'player-badge idle';
-    $('#player-title').textContent = 'Belum ada lagu';
-    $('#player-artist').textContent = '—';
+    const err = r.lastPrepareError?.message;
+    $('#player-title').textContent = err ? 'Gagal memuat lagu' : 'Belum ada lagu';
+    $('#player-artist').textContent = err
+      ? `${r.lastPrepareError.title || ''}: ${err.slice(0, 120)}`
+      : '—';
     $('#player-requester').textContent = '🙋 —';
     thumb.classList.remove('visible');
     thumb.removeAttribute('src');

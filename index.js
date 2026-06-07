@@ -32,7 +32,8 @@ app.get('/health', async (_req, res) => {
             radio = {
                 current: r.current?.title || null,
                 queue: r.queue.length,
-                isPreparing: r.isPreparing
+                isPreparing: r.isPreparing,
+                lastPrepareError: r.lastPrepareError?.message || null
             };
         }
     } catch { /* radio belum load */ }
@@ -55,12 +56,29 @@ const server = app.listen(PORT, HOST, () => {
         console.error('\x1b[31m❌ PORT SALAH: hapus RADIO_PORT=3920 di Railway Variables!\x1b[0m');
     }
     printPairLinkBanner();
+    bootRadioAndDiscord();
     bootWaOnly();
 });
 
 server.on('error', (err) => {
     console.error('❌ HTTP server error:', err?.message || err);
 });
+
+async function bootRadioAndDiscord() {
+    try {
+        if (!global.__luxxRadioMounted) {
+            const { startRadioServer } = await import('./src/services/radio-server.js');
+            startRadioServer(global.__luxxApp);
+            global.__luxxRadioMounted = true;
+            console.log('\x1b[32m✅ Radio / admin / watch aktif\x1b[0m');
+        }
+        const { startDiscordRadio } = await import('./src/services/discord-radio.js');
+        startDiscordRadio();
+    } catch (e) {
+        console.error('❌ Boot radio/discord:', e?.message || e);
+        setTimeout(bootRadioAndDiscord, 10_000);
+    }
+}
 
 async function bootWaOnly() {
     try {

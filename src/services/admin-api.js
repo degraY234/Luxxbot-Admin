@@ -93,6 +93,7 @@ function buildStatusPayload() {
             queue: radio.queue,
             queueLength: radio.queue.length,
             isPreparing: radio.isPreparing,
+            lastPrepareError: radio.lastPrepareError,
             listenUrl: getRadioListenUrl(),
             streamPath: '/radio/live.mp3',
             playback: getRadioPlayback(),

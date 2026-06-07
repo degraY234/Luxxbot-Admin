@@ -56,6 +56,9 @@ else
 fi
 ls -la "$PERSIST/session" 2>/dev/null | head -5 || true
 
+if command -v yt-dlp >/dev/null 2>&1; then
+  echo "yt-dlp: $(yt-dlp --version 2>/dev/null || echo unknown)"
+fi
 echo "LuxxBot starting (listen ${RADIO_PORT:-3920}, railway PORT=${PORT:-n/a})"
 if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
   echo "PAIR (buka di laptop): https://${RAILWAY_PUBLIC_DOMAIN}/pair"

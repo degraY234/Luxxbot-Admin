@@ -74,7 +74,9 @@ export const radio = {
     queue: [],
     current: null,
     isPreparing: false,
-    listeners: 0
+    listeners: 0,
+    lastPrepareError: null,
+    lastPrepareAt: null
 };
 
 function nextId() {
@@ -223,6 +225,7 @@ async function startQueueHead(gen) {
     if (radio.isPreparing) return false;
 
     radio.isPreparing = true;
+    radio.lastPrepareError = null;
     const track = radio.queue[0];
 
     try {
@@ -234,11 +237,14 @@ async function startQueueHead(gen) {
         }
         radio.queue.shift();
         syncGlobalQueue();
+        radio.lastPrepareError = null;
         console.log(`📻 Radio: now playing ${track.title} (sisa antrian: ${radio.queue.length})`);
         return true;
     } catch (e) {
         if (gen !== radioGeneration) return false;
-        console.error('📻 Radio gagal memuat:', track.title, e.message);
+        const errMsg = e.message || String(e);
+        radio.lastPrepareError = { title: track.title, message: errMsg, at: Date.now() };
+        console.error('📻 Radio gagal memuat:', track.title, errMsg);
         radio.queue.shift();
         syncGlobalQueue();
         if (radio.queue.length && gen === radioGeneration) {
@@ -378,8 +384,31 @@ export function attachRadioServer(app) {
         if (!fs.existsSync(CURRENT_MP3)) {
             return res.status(404).send('No track');
         }
+        const stat = fs.statSync(CURRENT_MP3);
+        const fileSize = stat.size;
+        const range = req.headers.range;
+
         res.setHeader('Content-Type', 'audio/mpeg');
-        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Cache-Control', 'no-cache, no-store');
+
+        if (range) {
+            const parts = range.replace(/bytes=/, '').split('-');
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+            if (Number.isNaN(start) || start >= fileSize) {
+                res.status(416).setHeader('Content-Range', `bytes */${fileSize}`).end();
+                return;
+            }
+            const safeEnd = Math.min(end, fileSize - 1);
+            res.status(206);
+            res.setHeader('Content-Range', `bytes ${start}-${safeEnd}/${fileSize}`);
+            res.setHeader('Content-Length', safeEnd - start + 1);
+            fs.createReadStream(CURRENT_MP3, { start, end: safeEnd }).pipe(res);
+            return;
+        }
+
+        res.setHeader('Content-Length', fileSize);
         fs.createReadStream(CURRENT_MP3).pipe(res);
     });
 
@@ -388,6 +417,8 @@ export function attachRadioServer(app) {
             current: radio.current,
             queueLength: radio.queue.length,
             isPreparing: radio.isPreparing,
+            lastPrepareError: radio.lastPrepareError,
+            hasStream: fs.existsSync(CURRENT_MP3),
             playback: getRadioPlayback(),
             streamEpoch: radioGeneration
         });
@@ -454,7 +485,10 @@ async function poll() {
       }
     } else {
       lastKey = null;
-      document.getElementById('track').innerHTML = '<b>Belum ada lagu</b><br/>Tambah via !play';
+      const err = d.lastPrepareError?.message;
+      document.getElementById('track').innerHTML = err
+        ? '<b>Gagal memuat lagu</b><br/>' + (d.lastPrepareError.title || '') + ': ' + err.slice(0, 100)
+        : '<b>Belum ada lagu</b><br/>Tambah via !play';
       document.getElementById('thumb').style.display = 'none';
       stopPlayer();
     }

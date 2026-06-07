@@ -42,28 +42,17 @@ async function loadServicesAndHandlers(activeSock) {
         const [
             { registerMessageHandler },
             { registerGroupEventHandler },
-            { startDiscordRadio },
             { setDailyFactSocket, startDailyFactScheduler },
             { getOrCreateRoom }
         ] = await Promise.all([
             import('./handlers/messages.js'),
             import('./handlers/group-events.js'),
-            import('./services/discord-radio.js'),
             import('./services/daily-fact.js'),
             import('./services/w2g.js')
         ]);
 
-        if (global.__luxxApp && !global.__luxxRadioMounted) {
-            const { startRadioServer } = await import('./services/radio-server.js');
-            startRadioServer(global.__luxxApp);
-            global.__luxxRadioMounted = true;
-            console.log('\x1b[32m✅ Radio / admin / watch aktif\x1b[0m');
-        }
-
         const { state } = await import('./state.js');
         state.isSleeping = false;
-
-        startDiscordRadio();
         registerMessageHandler(activeSock);
         registerGroupEventHandler(activeSock);
         setDailyFactSocket(activeSock);
