@@ -46,6 +46,12 @@ elif [ -n "$RAILWAY_STATIC_URL" ] && [ -z "$RADIO_PUBLIC_URL" ]; then
     export RADIO_PUBLIC_URL="$RAILWAY_STATIC_URL"
 fi
 
+if [ -f "$PERSIST/session/creds.json" ]; then
+  echo "✅ Session WA ada di volume — redeploy/update tanpa scan QR"
+else
+  echo "⚠️  Session WA kosong — scan QR sekali di /pair"
+fi
+
 echo "LuxxBot starting (listen ${RADIO_PORT:-3920}, railway PORT=${PORT:-n/a})"
 if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
   echo "PAIR (buka di laptop): https://${RAILWAY_PUBLIC_DOMAIN}/pair"

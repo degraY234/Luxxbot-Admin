@@ -8,6 +8,7 @@ import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import { publishWaQr } from './services/wa-qr.js';
 import { setWaConnection, setWaHandlersReady } from './wa-status.js';
+import { isWaSessionPaired } from './utils/wa-session.js';
 
 const BOT_NAME = process.env.BOT_NAME || 'LuxxBot';
 
@@ -78,7 +79,10 @@ export async function startPairBot() {
     isStarting = true;
 
     try {
-        console.log('\x1b[36m⚡ Start WhatsApp...\x1b[0m');
+        const alreadyPaired = isWaSessionPaired();
+        console.log(alreadyPaired
+            ? '\x1b[36m⚡ Start WhatsApp (session tersimpan — tanpa QR)\x1b[0m'
+            : '\x1b[36m⚡ Start WhatsApp (belum paired — buka /pair)\x1b[0m');
         setWaConnection('connecting');
         clearReconnectTimer();
         teardownSocket();
@@ -104,8 +108,12 @@ export async function startPairBot() {
         sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
             if (qr) {
-                setWaConnection('qr');
-                publishWaQr(qr).catch((e) => console.error('❌ Gagal publish QR:', e.message));
+                if (isWaSessionPaired()) {
+                    console.log('\x1b[33m⏳ QR diabaikan — session sudah ada, reconnect otomatis...\x1b[0m');
+                } else {
+                    setWaConnection('qr');
+                    publishWaQr(qr).catch((e) => console.error('❌ Gagal publish QR:', e.message));
+                }
             }
             if (connection === 'close') {
                 const statusCode = (lastDisconnect?.error instanceof Boom)
@@ -119,7 +127,14 @@ export async function startPairBot() {
                 handlersLoaded = false;
                 setWaHandlersReady(false);
                 if (shouldReconnect && !isStarting) {
-                    scheduleReconnect(statusCode === DisconnectReason.restartRequired ? 12000 : 4000);
+                    const paired = isWaSessionPaired();
+                    let delay = 4000;
+                    if (statusCode === DisconnectReason.restartRequired) {
+                        delay = paired ? 2000 : 12000;
+                    } else if (paired) {
+                        delay = 3000;
+                    }
+                    scheduleReconnect(delay);
                 } else if (!shouldReconnect) {
                     teardownSocket();
                     console.error('\x1b[31m❌ WA logout — scan QR ulang di /pair\x1b[0m');

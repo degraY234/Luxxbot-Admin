@@ -8,6 +8,7 @@ import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import { publishWaQr } from './services/wa-qr.js';
 import { setWaConnection, setWaHandlersReady } from './wa-status.js';
+import { isWaSessionPaired } from './utils/wa-session.js';
 import './globals.js';
 import { BOT_NAME } from './config.js';
 import { state } from './state.js';
@@ -82,8 +83,12 @@ export async function startBot() {
         sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
             if (qr) {
-                setWaConnection('qr');
-                publishWaQr(qr).catch((e) => console.error('❌ Gagal publish QR:', e.message));
+                if (isWaSessionPaired()) {
+                    console.log('\x1b[33m⏳ QR diabaikan — session tersimpan\x1b[0m');
+                } else {
+                    setWaConnection('qr');
+                    publishWaQr(qr).catch((e) => console.error('❌ Gagal publish QR:', e.message));
+                }
             }
             if (connection === 'close') {
                 const statusCode = (lastDisconnect?.error instanceof Boom)
