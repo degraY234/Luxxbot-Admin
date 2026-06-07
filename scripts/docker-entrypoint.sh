@@ -53,7 +53,12 @@ if [ -f "$PERSIST/session/creds.json" ]; then
   echo "✅ Session WA ada di volume — redeploy tanpa scan QR"
   echo "   creds size: $(wc -c < "$PERSIST/session/creds.json" 2>/dev/null || echo 0) bytes"
 elif [ -f "$PERSIST/session-backup/creds.json" ]; then
-  echo "♻️  Session backup ada — bot restore otomatis saat start"
+  echo "♻️  Session backup ada — restore ke session"
+  cp -a "$PERSIST/session-backup/." "$PERSIST/session/" 2>/dev/null || true
+elif [ -f "$PERSIST/data/wa-creds.json" ]; then
+  echo "♻️  Snapshot wa-creds.json ada — restore session"
+  mkdir -p "$PERSIST/session"
+  cp -f "$PERSIST/data/wa-creds.json" "$PERSIST/session/creds.json"
   cp -a "$PERSIST/session-backup/." "$PERSIST/session/" 2>/dev/null || true
 else
   echo "⚠️  SESSION KOSONG — wajib:"

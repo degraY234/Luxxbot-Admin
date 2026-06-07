@@ -26,6 +26,8 @@ let reconnectTimer = null;
 let servicesLoaded = false;
 let handlerWatchdog = null;
 let reconnectCount = 0;
+let pendingReconnectDelay = null;
+let connectionWatchdog = null;
 
 function clearReconnectTimer() {
     if (reconnectTimer) {
@@ -88,7 +90,10 @@ function startHandlerWatchdog() {
 }
 
 function scheduleReconnect(delayMs = 5000) {
-    if (reconnectTimer) return;
+    if (reconnectTimer) {
+        pendingReconnectDelay = Math.min(pendingReconnectDelay ?? delayMs, delayMs);
+        return;
+    }
     reconnectCount += 1;
     const wait = Math.min(delayMs + reconnectCount * 2000, 45_000);
     reconnectTimer = setTimeout(() => {
@@ -97,8 +102,23 @@ function scheduleReconnect(delayMs = 5000) {
     }, wait);
 }
 
+function startConnectionWatchdog() {
+    if (connectionWatchdog) return;
+    connectionWatchdog = setInterval(() => {
+        if (isStarting || reconnectTimer) return;
+        const st = waStatus.connection;
+        if (isWaSessionPaired() && st !== 'open' && st !== 'connecting' && st !== 'qr') {
+            console.log('\x1b[33m🔄 Watchdog: session ada tapi putus — reconnect\x1b[0m');
+            startLuxxBot().catch(() => {});
+        }
+    }, 25_000);
+}
+
 export async function startLuxxBot() {
-    if (isStarting) return;
+    if (isStarting) {
+        pendingReconnectDelay = pendingReconnectDelay ?? 3000;
+        return;
+    }
     isStarting = true;
 
     try {
@@ -176,9 +196,11 @@ export async function startLuxxBot() {
             if (connection === 'open') {
                 setWaConnection('open');
                 flushCreds();
+                backupWaSession();
                 logSessionDiagnostics();
                 console.log('\x1b[32m✅ WhatsApp TERHUBUNG — perintah !menu !play aktif\x1b[0m');
                 startHandlerWatchdog();
+                startConnectionWatchdog();
                 loadServicesAndHandlers(sock).catch((e) => console.error('❌ onOpen:', e?.message || e));
                 return;
             }
@@ -191,6 +213,11 @@ export async function startLuxxBot() {
         scheduleReconnect(10_000);
     } finally {
         isStarting = false;
+        if (pendingReconnectDelay != null) {
+            const d = pendingReconnectDelay;
+            pendingReconnectDelay = null;
+            scheduleReconnect(d);
+        }
     }
 }
 

@@ -6,6 +6,7 @@ const SESSION_DIR = path.resolve('./session');
 const CREDS_FILE = path.join(SESSION_DIR, 'creds.json');
 const PERSIST_DIR = path.resolve(process.env.PERSIST_DIR || '/app/persist');
 const SESSION_BACKUP_DIR = path.join(PERSIST_DIR, 'session-backup');
+const CREDS_SNAPSHOT = path.join(PERSIST_DIR, 'data', 'wa-creds.json');
 
 /** Session sudah pernah scan QR? */
 export function isWaSessionPaired() {
@@ -55,19 +56,38 @@ function copyDirContents(src, dest) {
 /** Backup session ke volume persist (survive redeploy). */
 export function backupWaSession() {
     if (!fs.existsSync(SESSION_DIR)) return 0;
-    return copyDirContents(SESSION_DIR, SESSION_BACKUP_DIR);
+    fs.mkdirSync(SESSION_BACKUP_DIR, { recursive: true });
+    fs.mkdirSync(path.dirname(CREDS_SNAPSHOT), { recursive: true });
+    const n = copyDirContents(SESSION_DIR, SESSION_BACKUP_DIR);
+    if (fs.existsSync(CREDS_FILE)) {
+        fs.copyFileSync(CREDS_FILE, CREDS_SNAPSHOT);
+        fs.copyFileSync(CREDS_FILE, path.join(SESSION_BACKUP_DIR, 'creds.json'));
+    }
+    return n;
 }
 
 /** Restore session dari backup kalau creds hilang setelah redeploy. */
 export function restoreSessionFromBackupIfNeeded() {
     if (isWaSessionPaired()) return false;
+
+    fs.mkdirSync(SESSION_DIR, { recursive: true });
+
     const backupCreds = path.join(SESSION_BACKUP_DIR, 'creds.json');
-    if (!fs.existsSync(backupCreds)) return false;
-    const n = copyDirContents(SESSION_BACKUP_DIR, SESSION_DIR);
-    if (n > 0) {
-        console.log(`\x1b[32m♻️  Session dipulihkan dari backup (${n} file)\x1b[0m`);
+    if (fs.existsSync(backupCreds)) {
+        const n = copyDirContents(SESSION_BACKUP_DIR, SESSION_DIR);
+        if (n > 0) {
+            console.log(`\x1b[32m♻️  Session dipulihkan dari backup (${n} file)\x1b[0m`);
+            return true;
+        }
+    }
+
+    if (fs.existsSync(CREDS_SNAPSHOT)) {
+        fs.copyFileSync(CREDS_SNAPSHOT, CREDS_FILE);
+        copyDirContents(SESSION_BACKUP_DIR, SESSION_DIR);
+        console.log('\x1b[32m♻️  Session dipulihkan dari wa-creds.json\x1b[0m');
         return true;
     }
+
     return false;
 }
 
@@ -91,7 +111,8 @@ export function getSessionDiagnostics() {
         ? (fs.realpathSync?.(SESSION_DIR) || SESSION_DIR)
         : SESSION_DIR;
     const onPersistPath = sessionReal.includes('/app/persist') || sessionReal.includes(String(PERSIST_DIR));
-    const hasBackup = fs.existsSync(path.join(SESSION_BACKUP_DIR, 'creds.json'));
+    const hasBackup = fs.existsSync(path.join(SESSION_BACKUP_DIR, 'creds.json'))
+        || fs.existsSync(CREDS_SNAPSHOT);
 
     return {
         paired,
