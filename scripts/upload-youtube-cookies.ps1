@@ -1,11 +1,39 @@
-# Upload file cookies (dari ekstensi browser) ke Railway — tidak butuh yt-dlp decrypt
+# Upload file cookies (dari ekstensi browser) ke bot — Railway atau PM2 lokal
 param(
     [string]$CookiesFile = "",
-    [string]$ApiBase = "https://luxxbot-production.up.railway.app",
-    [string]$AdminToken = $env:ADMIN_API_TOKEN
+    [string]$ApiBase = "",
+    [string]$AdminToken = $env:ADMIN_API_TOKEN,
+    [switch]$Local
 )
 
 $root = Split-Path $PSScriptRoot -Parent
+
+function Read-DotEnvValue([string]$Name) {
+    $envFile = Join-Path $root ".env"
+    if (-not (Test-Path $envFile)) { return $null }
+    foreach ($line in Get-Content $envFile -Encoding UTF8) {
+        if ($line -match "^\s*$Name\s*=\s*(.+)\s*$") {
+            return $Matches[1].Trim().Trim('"').Trim("'")
+        }
+    }
+    return $null
+}
+
+if (-not $AdminToken) { $AdminToken = Read-DotEnvValue "ADMIN_API_TOKEN" }
+if (-not $ApiBase) {
+    if ($Local) {
+        $port = Read-DotEnvValue "RADIO_PORT"
+        if (-not $port) { $port = "3920" }
+        $ApiBase = "http://localhost:$port"
+    } else {
+        $pub = Read-DotEnvValue "RADIO_PUBLIC_URL"
+        if ($pub -and $pub -notmatch 'trycloudflare|localhost|127\.0\.0\.1') {
+            $ApiBase = $pub.TrimEnd('/')
+        } else {
+            $ApiBase = "https://luxxbot-production.up.railway.app"
+        }
+    }
+}
 if (-not $CookiesFile) {
     $CookiesFile = Join-Path $root "data\youtube-cookies.txt"
 }
@@ -30,10 +58,8 @@ if ($size -lt 80) {
 Write-Host "File OK: $CookiesFile ($size bytes)"
 
 if (-not $AdminToken) {
-    Write-Host ""
-    Write-Host "Set token dulu:" -ForegroundColor Yellow
-    Write-Host '  $env:ADMIN_API_TOKEN = "token-dari-.env"'
-    Write-Host "  .\scripts\upload-youtube-cookies.ps1"
+    Write-Host "ADMIN_API_TOKEN tidak ada di .env / environment." -ForegroundColor Yellow
+    Write-Host "Untuk PM2 lokal: cukup simpan file di data/youtube-cookies.txt lalu pm2 restart luxx"
     exit 1
 }
 

@@ -1,8 +1,10 @@
-# Export cookies YouTube dari Chrome/Edge -> upload ke bot Railway
+# Export cookies YouTube -> simpan data/youtube-cookies.txt -> upload ke bot (Railway atau PM2 lokal)
 param(
     [string]$Browser = "chrome",
-    [string]$ApiBase = "https://luxxbot-production.up.railway.app",
-    [string]$AdminToken = $env:ADMIN_API_TOKEN
+    [string]$ApiBase = "",
+    [string]$AdminToken = $env:ADMIN_API_TOKEN,
+    [switch]$Local,
+    [switch]$UploadOnly
 )
 
 $root = Split-Path $PSScriptRoot -Parent
@@ -10,8 +12,45 @@ $outDir = Join-Path $root "data"
 $outFile = Join-Path $outDir "youtube-cookies.txt"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-if ((Test-Path $outFile) -and ((Get-Item $outFile).Length -gt 80) -and $AdminToken) {
-    Write-Host "File cookies sudah ada - upload saja ..."
+function Read-DotEnvValue([string]$Name) {
+    $envFile = Join-Path $root ".env"
+    if (-not (Test-Path $envFile)) { return $null }
+    foreach ($line in Get-Content $envFile -Encoding UTF8) {
+        if ($line -match "^\s*$Name\s*=\s*(.+)\s*$") {
+            return $Matches[1].Trim().Trim('"').Trim("'")
+        }
+    }
+    return $null
+}
+
+if (-not $AdminToken) {
+    $AdminToken = Read-DotEnvValue "ADMIN_API_TOKEN"
+}
+
+if (-not $ApiBase) {
+    if ($Local) {
+        $port = Read-DotEnvValue "RADIO_PORT"
+        if (-not $port) { $port = "3920" }
+        $ApiBase = "http://localhost:$port"
+    } else {
+        $pub = Read-DotEnvValue "RADIO_PUBLIC_URL"
+        if ($pub -and $pub -notmatch 'trycloudflare|localhost|127\.0\.0\.1') {
+            $ApiBase = $pub.TrimEnd('/')
+        } else {
+            $ApiBase = "https://luxxbot-production.up.railway.app"
+        }
+    }
+}
+
+Write-Host "Target API: $ApiBase"
+
+if ($UploadOnly -or ((Test-Path $outFile) -and ((Get-Item $outFile).Length -gt 80) -and $AdminToken)) {
+    if (-not (Test-Path $outFile) -or (Get-Item $outFile).Length -le 80) {
+        Write-Host "File cookies belum ada di $outFile" -ForegroundColor Red
+        Write-Host "Export dulu pakai ekstensi 'Get cookies.txt LOCALLY' dari youtube.com"
+        exit 1
+    }
+    Write-Host "Upload file cookies yang sudah ada ..."
     & (Join-Path $PSScriptRoot "upload-youtube-cookies.ps1") -CookiesFile $outFile -ApiBase $ApiBase -AdminToken $AdminToken
     exit $LASTEXITCODE
 }
@@ -22,7 +61,8 @@ $locking = @('chrome', 'msedge', 'brave') | Where-Object {
 if ($locking) {
     Write-Host ""
     Write-Host "PERINGATAN: Browser masih jalan ($($locking -join ', '))" -ForegroundColor Yellow
-    Write-Host "  Tutup SEMUA jendela Chrome/Edge/Brave lalu jalankan ulang."
+    Write-Host "  Tutup SEMUA jendela Chrome/Edge/Brave (cek Task Manager)."
+    Write-Host "  Atau pakai: .\scripts\export-youtube-cookies.ps1 -UploadOnly (setelah export via ekstensi)"
     Write-Host ""
 }
 
@@ -39,7 +79,6 @@ foreach ($b in $browsers) {
     if ($out) { $out | ForEach-Object { Write-Host $_ } }
     if ((Test-Path $outFile) -and ((Get-Item $outFile).Length -gt 80)) {
         $exported = $true
-        $Browser = $b
         break
     }
     if ($code -ne 0 -and $out) {
@@ -52,57 +91,39 @@ if (-not $exported) {
     $locked = ($errors | Where-Object { $_ -match 'Could not copy' }).Count -gt 0
 
     Write-Host ""
-    Write-Host "GAGAL export cookies." -ForegroundColor Red
-    if ($errors) {
-        $errors | ForEach-Object { Write-Host "  $_" }
-    }
+    Write-Host "GAGAL export via yt-dlp." -ForegroundColor Red
+    $errors | ForEach-Object { Write-Host "  $_" }
 
-    if ($dpapi) {
-        Write-Host ""
-        Write-Host "PENYEBAB: Chrome 127+ encrypt cookie (DPAPI)." -ForegroundColor Yellow
-        Write-Host "Terminal Cursor/IDE tidak bisa decrypt cookie Chrome." -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "SOLUSI A - pakai ekstensi (browser boleh terbuka):" -ForegroundColor Cyan
-        Write-Host "  1) Install ekstensi Chrome: Get cookies.txt LOCALLY"
-        Write-Host "  2) Buka youtube.com (login), export cookies"
-        Write-Host "  3) Simpan ke: $outFile"
-        Write-Host "  4) Upload:"
-        Write-Host '     $env:ADMIN_API_TOKEN = "token-admin"'
-        Write-Host "     .\scripts\upload-youtube-cookies.ps1"
-        Write-Host "  Atau paste di /admin -> Simpan Cookies"
-        Write-Host ""
-        Write-Host "SOLUSI B - double-click scripts\export-youtube-cookies.bat dari File Explorer"
+    Write-Host ""
+    Write-Host "CARA PALING MUDAH (browser boleh terbuka):" -ForegroundColor Cyan
+    Write-Host "  1) Chrome -> install ekstensi 'Get cookies.txt LOCALLY'"
+    Write-Host "  2) Buka youtube.com (login) -> export -> simpan:"
+    Write-Host "     $outFile"
+    Write-Host "  3) Upload:"
+    if ($Local) {
+        Write-Host "     .\scripts\export-youtube-cookies.ps1 -Local -UploadOnly"
+    } else {
+        Write-Host "     .\scripts\export-youtube-cookies.ps1 -UploadOnly"
     }
-    elseif ($locked) {
+    Write-Host "  Atau paste di /admin -> Simpan Cookies"
+
+    if ($locked) {
         Write-Host ""
-        Write-Host "PENYEBAB: Chrome/Edge masih terbuka." -ForegroundColor Yellow
+        Write-Host "Extra: tutup Chrome/Edge lalu double-click scripts\export-youtube-cookies.bat" -ForegroundColor Yellow
     }
     exit 1
 }
 
 $size = (Get-Item $outFile).Length
-Write-Host "OK: $outFile - $size bytes"
+Write-Host "OK: $outFile - $size bytes" -ForegroundColor Green
 
 if (-not $AdminToken) {
-    Write-Host "Lokal: PM2 restart luxx. Railway: set ADMIN_API_TOKEN lalu jalankan ulang."
+    Write-Host ""
+    Write-Host "Cookies tersimpan lokal. PM2 akan pakai file ini otomatis."
+    Write-Host "Upload ke server (opsional): set ADMIN_API_TOKEN di .env lalu -UploadOnly"
     exit 0
 }
 
 Write-Host "Upload ke $ApiBase ..."
-$content = Get-Content $outFile -Raw -Encoding UTF8
-$body = @{ content = $content } | ConvertTo-Json -Compress
-$headers = @{
-    Authorization = "Bearer $AdminToken"
-    "Content-Type"  = "application/json"
-}
-
-try {
-    $res = Invoke-RestMethod -Uri "$ApiBase/admin/api/youtube-cookies" -Method POST -Headers $headers -Body $body
-    Write-Host "Upload OK: $($res.path) - $($res.bytes) bytes" -ForegroundColor Green
-    Write-Host "Tes: !play multo di WhatsApp"
-}
-catch {
-    $msg = $_.Exception.Message
-    Write-Host "Upload gagal: $msg" -ForegroundColor Red
-    exit 1
-}
+& (Join-Path $PSScriptRoot "upload-youtube-cookies.ps1") -CookiesFile $outFile -ApiBase $ApiBase -AdminToken $AdminToken
+exit $LASTEXITCODE
