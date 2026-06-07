@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { getConfiguredPublicBaseUrl } from '../utils/radio-url.js';
 import { getPairLink } from '../utils/startup-banner.js';
+import { getWaHealth } from '../wa-status.js';
+import { getSessionDiagnostics } from '../utils/wa-session.js';
 
 function isRailwayOrPublicDeploy() {
     if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PUBLIC_DOMAIN) return true;
@@ -129,7 +131,10 @@ let left=${expiresIn};
 const timer=document.getElementById('timer');
 const tick=()=>{if(left<=0){location.reload();return}timer.textContent='QR aktif · '+left+' detik lagi';left--;};
 tick();setInterval(tick,1000);
-setInterval(()=>fetch('/pair/status').then(r=>r.json()).then(d=>{if(!d.ready)location.reload()}).catch(()=>{}),4000);
+setInterval(()=>fetch('/pair/status').then(r=>r.json()).then(d=>{
+  if(d.connected&&d.handlersReady){location.reload();return;}
+  if(!d.ready)location.reload();
+}).catch(()=>{}),4000);
 `;
     return pairPageShell({ title: 'LuxxBot — Scan QR', body, script });
 }
@@ -144,13 +149,28 @@ function pairHtmlWaiting() {
 let s=0;
 const el=document.getElementById('waitSec');
 setInterval(()=>{s++;el.textContent='Menunggu '+s+' detik...';},1000);
-const poll=()=>fetch('/pair/status').then(r=>r.json()).then(d=>{if(d.ready)location.reload()}).catch(()=>{});
+const poll=()=>fetch('/pair/status').then(r=>r.json()).then(d=>{
+  if(d.connected&&d.handlersReady){location.reload();return;}
+  if(d.ready)location.reload();
+  if(d.volumeMounted===false&&el)el.textContent='⚠️ Volume /app/persist belum mount di Railway!';
+}).catch(()=>{});
 poll();setInterval(poll,1500);
 `;
     return pairPageShell({ title: 'LuxxBot — Menunggu QR', body, script });
 }
 
+function pairHtmlConnected() {
+    const body = `<div class="qr-panel" style="text-align:left">
+<p style="font-size:1.25rem;margin:0 0 12px"><b>✅ WhatsApp sudah terhubung</b></p>
+<p style="color:var(--muted);line-height:1.6;margin:0">Bot siap menerima perintah <code>!menu</code> <code>!play</code> <code>!radio</code> di WhatsApp.</p>
+<p style="color:var(--muted);margin:16px 0 0">Session tersimpan — redeploy Railway <b>tanpa</b> scan QR lagi (asalkan volume <code>/app/persist</code> aktif).</p>
+</div>`;
+    return pairPageShell({ title: 'LuxxBot — Terhubung', body });
+}
+
 function pairHtml() {
+    const wa = getWaHealth();
+    if (wa.connected && wa.handlersReady) return pairHtmlConnected();
     return getQrState().ready ? pairHtmlReady() : pairHtmlWaiting();
 }
 
@@ -192,12 +212,19 @@ export function registerWaQrRoutes(app) {
 
     app.get('/pair/status', (_req, res) => {
         const st = getQrState();
+        const wa = getWaHealth();
+        const session = getSessionDiagnostics();
         res.json({
             ok: true,
             ready: st.ready,
             expiresIn: st.expiresIn,
             url: getPairPageUrl(),
-            hasFile: fs.existsSync(QR_FILE)
+            hasFile: fs.existsSync(QR_FILE),
+            connected: wa.connected,
+            handlersReady: wa.handlersReady,
+            sessionPaired: session.paired,
+            volumeMounted: session.volumeMounted,
+            hint: session.pairHint
         });
     });
 

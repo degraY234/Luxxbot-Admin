@@ -4,6 +4,8 @@ import { registerWaQrRoutes } from './src/services/wa-qr.js';
 import { printPairLinkBanner } from './src/utils/startup-banner.js';
 import { getListenPort, isRailwayRuntime } from './src/utils/listen-port.js';
 import { getWaHealth } from './src/wa-status.js';
+import { getSessionDiagnostics } from './src/utils/wa-session.js';
+import { getPairLink } from './src/utils/startup-banner.js';
 
 process.on('uncaughtException', (err) => {
     console.error('❌ uncaughtException (server tetap jalan):', err?.message || err);
@@ -38,14 +40,24 @@ app.get('/health', async (_req, res) => {
         }
     } catch { /* radio belum load */ }
     const wa = getWaHealth();
+    const session = getSessionDiagnostics();
     res.json({
         ok: wa.connected && wa.handlersReady,
         uptime: Math.floor(process.uptime()),
         railway: isRailwayRuntime(),
         port: PORT,
+        pairUrl: getPairLink(),
         wa,
+        session,
         radio,
-        radioMounted: Boolean(global.__luxxRadioMounted)
+        radioMounted: Boolean(global.__luxxRadioMounted),
+        hint: !session.paired
+            ? 'Scan QR di pairUrl — perintah WA tidak balas sebelum paired+connected'
+            : !wa.connected
+                ? 'Session ada tapi WA belum connect — tunggu reconnect'
+                : !wa.handlersReady
+                    ? 'WA connect, handler loading...'
+                    : 'Bot siap'
     });
 });
 

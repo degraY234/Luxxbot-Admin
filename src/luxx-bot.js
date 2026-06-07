@@ -110,6 +110,7 @@ export async function startLuxxBot() {
         teardownSocket();
 
         const { state: authState, saveCreds } = await useMultiFileAuthState('./session');
+        const flushCreds = () => saveCreds().catch((e) => console.error('❌ saveCreds:', e.message));
         const { version } = await fetchLatestBaileysVersion();
 
         sock = makeWASocket({
@@ -124,7 +125,7 @@ export async function startLuxxBot() {
             keepAliveIntervalMs: 30_000
         });
 
-        sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', flushCreds);
 
         sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
@@ -151,7 +152,11 @@ export async function startLuxxBot() {
                 if (shouldReconnect && !isStarting) {
                     const pairedNow = isWaSessionPaired();
                     let delay = pairedNow ? 3000 : 15_000;
-                    if (statusCode === DisconnectReason.restartRequired) delay = 2000;
+                    if (statusCode === DisconnectReason.restartRequired) {
+                        delay = 1500;
+                        console.log('\x1b[36m🔄 Pair berhasil — reconnect otomatis...\x1b[0m');
+                        flushCreds();
+                    }
                     scheduleReconnect(delay);
                 } else if (!shouldReconnect) {
                     teardownSocket();
@@ -162,6 +167,9 @@ export async function startLuxxBot() {
 
             if (connection === 'open') {
                 setWaConnection('open');
+                flushCreds();
+                logSessionDiagnostics();
+                console.log('\x1b[32m✅ WhatsApp TERHUBUNG — perintah !menu !play aktif\x1b[0m');
                 startHandlerWatchdog();
                 loadServicesAndHandlers(sock).catch((e) => console.error('❌ onOpen:', e?.message || e));
                 return;
