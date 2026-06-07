@@ -402,10 +402,6 @@ function registerDiscordHandlers() {
 export function startDiscordRadio() {
     const token = process.env.DISCORD_BOT_TOKEN?.trim();
     if (!token) return;
-    if (process.env.RAILWAY_ENVIRONMENT && process.env.DISCORD_ON_RAILWAY !== 'true') {
-        console.log('\x1b[33m🤖 Discord: skip di Railway (set DISCORD_ON_RAILWAY=true untuk aktifkan)\x1b[0m');
-        return;
-    }
     if (started) return;
     started = true;
 

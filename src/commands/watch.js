@@ -40,13 +40,11 @@ export async function handleWatchCommand({ sock, from, msg }) {
 
         const status = await ensureLivePublicBase();
         if (!status.base || status.source === 'down') {
+            const hint = process.env.RAILWAY_ENVIRONMENT
+                ? 'Cek Railway: service online + `RADIO_PUBLIC_URL=https://domain.up.railway.app` (bukan tunnel lokal).'
+                : 'Owner jalankan `npm run watch:setup` atau `pm2 status` (luxx + luxx-tunnel online).';
             return await sock.sendMessage(from, {
-                text:
-                    '❌ *Luxx Watch belum bisa diakses*\n\n' +
-                    'Bot belum hidup di PC owner.\n\n' +
-                    'Owner jalankan:\n' +
-                    '`npm run watch:setup`\n' +
-                    'atau `pm2 status` (luxx + luxx-tunnel harus online)'
+                text: `❌ *Luxx Watch belum bisa diakses*\n\n${hint}`
             }, { quoted: msg });
         }
 

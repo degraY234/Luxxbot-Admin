@@ -50,7 +50,9 @@ Railway (otomatis / set manual):
   RADIO_PUBLIC_URL=https://<domain-railway-kamu>.up.railway.app
   PERSIST_DIR=/app/persist
 
-Railway biasanya inject PORT otomatis — entrypoint set RADIO_PORT=PORT.
+JANGAN set RADIO_PORT=3920 di Railway (bikin 502).
+JANGAN pakai URL trycloudflare di RADIO_PUBLIC_URL — pakai domain Railway.
+Railway inject PORT otomatis — entrypoint paksa listen di PORT.
 
 BAGIAN E — PUBLIC NETWORKING
 ───────────────────────────────────────────────────────────

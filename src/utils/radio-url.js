@@ -2,8 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import axios from 'axios';
+import { getListenPort, isRailwayRuntime } from './listen-port.js';
 
-const RADIO_PORT = Number(process.env.RADIO_PORT || process.env.PORT || 3920);
+const RADIO_PORT = getListenPort();
 const TUNNEL_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/gi;
 
 let cache = { base: null, at: 0 };
@@ -55,6 +56,9 @@ function getConfiguredBaseUrl() {
     const railway = getRailwayBaseUrl();
     if (railway) return railway;
     const configured = process.env.RADIO_PUBLIC_URL?.trim().replace(/\/$/, '') || '';
+    if (isRailwayRuntime() && /\.trycloudflare\.com/i.test(configured)) {
+        return railway || '';
+    }
     if (configured && !/localhost|127\.0\.0\.1/i.test(configured)) return configured;
     return '';
 }
@@ -135,6 +139,15 @@ export async function discoverLivePublicBase() {
     }
 
     if (localOk) {
+        const railway = getRailwayBaseUrl();
+        if (railway) {
+            try {
+                if (await probeBase(railway)) {
+                    return { base: railway, source: 'railway', localOk };
+                }
+            } catch { /* lanjut */ }
+            return { base: railway, source: 'railway-local', localOk };
+        }
         const configured = getConfiguredPublicBaseUrl();
         if (configured) {
             return { base: configured, source: 'stale', localOk };
