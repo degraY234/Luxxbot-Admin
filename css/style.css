@@ -384,7 +384,19 @@ input:focus, textarea:focus {
   to { opacity: 1; transform: translateY(0); }
 }
 
-.reveal { animation: fadeIn 0.5s ease backwards; }
+/* Jangan animasi panel tersembunyi — isi bisa tetap opacity:0 (bug search radio) */
+.reveal {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.panel:not(.active) .reveal {
+  animation: none !important;
+}
+
+.panel.active .reveal {
+  animation: fadeIn 0.45s ease both;
+}
 
 .grid {
   display: grid;
@@ -556,14 +568,77 @@ input:focus, textarea:focus {
 .watch-card { border-color: rgba(123,97,255,0.3); }
 .player-card { border-color: rgba(0,212,255,0.25); }
 
-.search-card {
-  border-color: rgba(123, 97, 255, 0.28);
-  background: linear-gradient(145deg, rgba(123, 97, 255, 0.06), rgba(0, 212, 255, 0.04));
+.radio-search-hero {
+  margin: -0.25rem -0.25rem 1rem;
+  padding: 1rem 1.1rem 1.1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(123, 97, 255, 0.45);
+  background:
+    radial-gradient(ellipse 90% 80% at 50% 0%, rgba(123, 97, 255, 0.16), transparent),
+    linear-gradient(145deg, rgba(123, 97, 255, 0.1), rgba(0, 212, 255, 0.06));
+  box-shadow: 0 0 28px rgba(123, 97, 255, 0.12), inset 0 0 24px rgba(0, 212, 255, 0.05);
 }
 
-.search-row { display: flex; gap: 0.5rem; margin-top: 0.65rem; }
-.search-row input { flex: 1; }
-.search-row .btn.primary { width: auto; margin: 0; padding: 0.65rem 1.1rem; white-space: nowrap; }
+.radio-search-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.radio-search-head h3 { margin: 0.2rem 0 0; font-size: 1.05rem; }
+
+.search-pill {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 255, 163, 0.35);
+  color: var(--ok);
+  background: rgba(0, 255, 163, 0.08);
+  white-space: nowrap;
+}
+
+.search-row { display: flex; gap: 0.5rem; margin-top: 0.65rem; align-items: center; }
+.search-row-hero {
+  margin-top: 0.75rem;
+  padding: 0.35rem;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  background: rgba(0, 0, 0, 0.35);
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.08);
+}
+
+.search-icon {
+  font-size: 1.1rem;
+  padding: 0 0.15rem 0 0.45rem;
+  opacity: 0.85;
+}
+
+.search-row input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 0.7rem 0.35rem;
+  font-size: 0.95rem;
+  min-width: 0;
+}
+
+.search-row input:focus {
+  box-shadow: none;
+  border-color: transparent;
+}
+
+.search-row .btn.primary {
+  width: auto;
+  margin: 0;
+  padding: 0.65rem 1.15rem;
+  white-space: nowrap;
+  font-weight: 700;
+}
 
 .search-status {
   min-height: 1.1rem;

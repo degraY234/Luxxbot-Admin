@@ -140,7 +140,13 @@ function switchPanel(id) {
   $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.panel === id));
   $$('.panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${id}`));
   safeEl('#panel-title', (el) => { el.textContent = PANEL_TITLES[id] || 'Dashboard'; });
-  if (id === 'radio') requestAnimationFrame(() => $('#beat-canvas')?._resize?.());
+  if (id === 'radio') {
+    requestAnimationFrame(() => {
+      $('#beat-canvas')?._resize?.();
+      $('#radio-search-hero')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      $('#song-search-input')?.focus({ preventScroll: true });
+    });
+  }
 }
 
 function initGridCanvas() {

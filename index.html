@@ -20,7 +20,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=11" />
 </head>
 <body>
   <canvas id="grid-canvas" class="grid-canvas" aria-hidden="true"></canvas>
@@ -68,7 +68,7 @@
       <nav class="sidebar-nav">
         <button type="button" class="nav-item active" data-panel="dashboard">◈ Dashboard</button>
         <button type="button" class="nav-item" data-panel="bot">◈ Bot Health</button>
-        <button type="button" class="nav-item" data-panel="radio">◈ Radio</button>
+        <button type="button" class="nav-item" data-panel="radio">◈ Radio & Cari</button>
         <button type="button" class="nav-item" data-panel="watch">◈ Luxx Watch</button>
         <button type="button" class="nav-item" data-panel="system">◈ System</button>
         <button type="button" class="nav-item" data-panel="tools">◈ Tools</button>
@@ -145,18 +145,25 @@
         <!-- RADIO -->
         <section id="panel-radio" class="panel">
           <div class="grid">
-            <article class="card span-2 search-card reveal">
-              <h3>🔍 Cari & Tambah Lagu</h3>
-              <p class="muted hint">Cari judul atau paste link YouTube — langsung masuk antrian radio bot.</p>
-              <div class="search-row">
-                <input id="song-search-input" type="search" placeholder="Cari lagu... misal: multo sb19" autocomplete="off" />
-                <button id="btn-song-search" class="btn primary" type="button">Cari</button>
-              </div>
-              <p id="search-status" class="search-status muted"></p>
-              <ul id="search-results" class="search-results"></ul>
-            </article>
-
             <article class="card span-2 player-card reveal">
+              <div class="radio-search-hero" id="radio-search-hero">
+                <div class="radio-search-head">
+                  <div>
+                    <p class="eyebrow">YouTube Search</p>
+                    <h3>🔍 Cari & Tambah Lagu</h3>
+                  </div>
+                  <span class="search-pill">Langsung ke antrian bot</span>
+                </div>
+                <p class="muted hint">Ketik judul lagu atau paste link YouTube, lalu pilih <strong>+ Antrian</strong> atau <strong>▶ Putar</strong>.</p>
+                <div class="search-row search-row-hero">
+                  <span class="search-icon" aria-hidden="true">🎵</span>
+                  <input id="song-search-input" type="search" placeholder="Cari lagu... misal: multo sb19" autocomplete="off" />
+                  <button id="btn-song-search" class="btn primary" type="button">Cari</button>
+                </div>
+                <p id="search-status" class="search-status muted"></p>
+                <ul id="search-results" class="search-results"></ul>
+              </div>
+
               <div class="player-head">
                 <h3>Radio Player</h3>
                 <span id="player-badge" class="player-badge idle">IDLE</span>
@@ -281,6 +288,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="js/app.js?v=10"></script>
+  <script src="js/app.js?v=11"></script>
 </body>
 </html>
