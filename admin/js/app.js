@@ -6,6 +6,12 @@ const appScreen = $('#app-screen');
 const toastEl = $('#toast');
 const loginError = $('#login-error');
 
+function safeEl(sel, fn) {
+  const el = $(sel);
+  if (!el) return;
+  fn(el);
+}
+
 const PANEL_TITLES = {
   dashboard: 'Dashboard',
   bot: 'Bot Health',
@@ -31,6 +37,7 @@ let lyricsState = {
 };
 
 function showToast(msg, ms = 3000) {
+  if (!toastEl) return;
   toastEl.textContent = msg;
   toastEl.classList.remove('hidden');
   clearTimeout(showToast._t);
@@ -132,7 +139,7 @@ async function api(path, method = 'GET', body = null) {
 function switchPanel(id) {
   $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.panel === id));
   $$('.panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${id}`));
-  $('#panel-title').textContent = PANEL_TITLES[id] || 'Dashboard';
+  safeEl('#panel-title', (el) => { el.textContent = PANEL_TITLES[id] || 'Dashboard'; });
 }
 
 function initGridCanvas() {
@@ -618,16 +625,16 @@ $$('.nav-item').forEach((btn) => {
   btn.addEventListener('click', () => switchPanel(btn.dataset.panel));
 });
 
-$('#btn-login').addEventListener('click', doLogin);
-$('#btn-local').addEventListener('click', () => {
-  $('#api-base').value = defaultApiBase();
+$('#btn-login')?.addEventListener('click', doLogin);
+$('#btn-local')?.addEventListener('click', () => {
+  safeEl('#api-base', (el) => { el.value = defaultApiBase(); });
   showToast('Diisi: localhost:3920');
 });
-$('#btn-toggle-token').addEventListener('click', () => {
+$('#btn-toggle-token')?.addEventListener('click', () => {
   const inp = $('#api-token');
-  inp.type = inp.type === 'password' ? 'text' : 'password';
+  if (inp) inp.type = inp.type === 'password' ? 'text' : 'password';
 });
-$('#btn-logout').addEventListener('click', () => {
+$('#btn-logout')?.addEventListener('click', () => {
   localStorage.removeItem('luxx_api_base');
   localStorage.removeItem('luxx_api_token');
   appScreen.classList.add('hidden');
@@ -637,8 +644,8 @@ $('#btn-logout').addEventListener('click', () => {
   clearInterval(lyricsPollTimer);
   lyricsPollTimer = null;
 });
-$('#btn-refresh').addEventListener('click', refresh);
-$('#btn-skip').addEventListener('click', async () => {
+$('#btn-refresh')?.addEventListener('click', refresh);
+$('#btn-skip')?.addEventListener('click', async () => {
   resetPlayerState();
   try {
     const r = await api('/skip', 'POST');
@@ -647,7 +654,7 @@ $('#btn-skip').addEventListener('click', async () => {
     await refresh();
   } catch (e) { showToast(e.message); }
 });
-$('#btn-clear').addEventListener('click', async () => {
+$('#btn-clear')?.addEventListener('click', async () => {
   if (!confirm('Kosongkan antrian?')) return;
   resetPlayerState();
   try {
@@ -657,29 +664,29 @@ $('#btn-clear').addEventListener('click', async () => {
     await refresh();
   } catch (e) { showToast(e.message); }
 });
-$('#btn-restart').addEventListener('click', async () => {
+$('#btn-restart')?.addEventListener('click', async () => {
   if (!confirm('Restart bot?')) return;
   try { await api('/restart', 'POST'); showToast('Restart diminta'); }
   catch (e) { showToast(e.message); }
 });
-$('#btn-watch-skip').addEventListener('click', async () => {
+$('#btn-watch-skip')?.addEventListener('click', async () => {
   try {
     const r = await api('/watch/skip', 'POST');
     showToast(r.ok ? 'Skip watch OK' : (r.error || 'Gagal'));
     await refresh();
   } catch (e) { showToast(e.message); }
 });
-$('#btn-watch-stop').addEventListener('click', async () => {
+$('#btn-watch-stop')?.addEventListener('click', async () => {
   if (!confirm('Hentikan film?')) return;
   try { await api('/watch/stop', 'POST'); showToast('Dihentikan'); await refresh(); }
   catch (e) { showToast(e.message); }
 });
-$('#btn-watch-clear-q').addEventListener('click', async () => {
+$('#btn-watch-clear-q')?.addEventListener('click', async () => {
   if (!confirm('Kosongkan antrian watch?')) return;
   try { await api('/watch/clear-queue', 'POST'); showToast('Antrian watch dikosongkan'); await refresh(); }
   catch (e) { showToast(e.message); }
 });
-$('#btn-cookies-save').addEventListener('click', async () => {
+$('#btn-cookies-save')?.addEventListener('click', async () => {
   const content = ($('#cookies-paste').value || '').trim();
   if (!content) return showToast('Paste isi file cookies dulu.');
   try {
@@ -689,7 +696,7 @@ $('#btn-cookies-save').addEventListener('click', async () => {
     await refresh();
   } catch (e) { showToast(e.message); }
 });
-$('#btn-prune-cache').addEventListener('click', async () => {
+$('#btn-prune-cache')?.addEventListener('click', async () => {
   if (!confirm('Bersihkan cache runtime (image + cooldown)?')) return;
   try {
     const r = await api('/cache/prune', 'POST');

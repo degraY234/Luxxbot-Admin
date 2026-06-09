@@ -1,35 +1,18 @@
-# Portfolio pakai REPO TERPISAH — lihat portfolio/.github/workflows/deploy-pages.yml
-# Workflow ini hanya untuk admin panel di repo LuxxBot (opsional).
+# GitHub Pages Luxxbot-Admin memakai branch main (file di root: index.html, css/, js/).
+# Deploy: node scripts/sync-admin-github-pages.mjs
+# Workflow ini hanya pengingat — bukan GitHub Actions artifact (environment github-pages belum diset).
 name: Deploy Admin Panel (LuxxBot repo)
 
 on:
-  push:
-    branches: [main, feature/railway-deploy]
-    paths:
-      - 'admin/**'
-      - '.github/workflows/deploy-github-pages.yml'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages-luxxbot-admin
-  cancel-in-progress: true
-
 jobs:
-  deploy:
+  notice:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: admin
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Petunjuk deploy
+        run: |
+          echo "GitHub Pages Luxxbot-Admin deploy dari branch main (root), bukan folder admin/."
+          echo "Jalankan di PC: node scripts/sync-admin-github-pages.mjs"
+          echo "Live: https://degray234.github.io/Luxxbot-Admin/"
