@@ -18,12 +18,6 @@ export const COMMAND_HELP = {
         desc: 'Sambutan otomatis saat member baru masuk. Gunakan @user untuk mention.',
         example: '!welcome set Halo @user! Selamat di grup 🌸'
     },
-    tts: {
-        title: 'Text to Speech',
-        usage: '!tts <teks>',
-        desc: 'Ubah teks jadi voice note (max ~200 karakter).',
-        example: '!tts Halo semuanya'
-    },
     sp: {
         title: 'Sound Pad',
         usage: '!sp | !sp <kata> | !sp <nama-tersimpan>',
@@ -81,14 +75,8 @@ export const COMMAND_HELP = {
     play: {
         title: 'Musik / Radio',
         usage: '!play <judul/url>',
-        desc: 'Cari lagu, masuk antrian radio WA + Discord.',
+        desc: 'Cari lagu, masuk antrian radio WA + Discord. Link player web dikirim otomatis.',
         example: '!play Alan Walker Faded'
-    },
-    radio: {
-        title: 'Link Radio',
-        usage: '!radio',
-        desc: 'Kirim link dengar radio Luxx.',
-        example: '!radio'
     },
     nowplaying: {
         title: 'Now Playing',
@@ -114,11 +102,47 @@ export const COMMAND_HELP = {
         desc: 'Tanya AI (Gemini/Grok/Groq).',
         example: '!tanya apa itu black hole'
     },
+    translate: {
+        title: 'Translate Kamus Dunia',
+        usage: '!translate <teks> | !translate <dari> <ke> <teks>',
+        desc: 'Terjemahan stabil multi-bahasa (MyMemory + Lingva + LibreTranslate). Auto-detect & notifikasi lengkap.',
+        example: '!translate id en selamat pagi'
+    },
+    berita: {
+        title: 'Berita Dunia',
+        usage: '!berita | !berita <negara>',
+        desc: 'Headline berita real-time dari banyak negara (Indonesia, AS, Jepang, Eropa, dll).',
+        example: '!berita indonesia'
+    },
+    sastra: {
+        title: 'Sastra Dunia',
+        usage: '!sastra <topik>',
+        desc: 'Puisi live dari API (Wikisource ID + PoetryDB dunia). Kutipan asli panjang dari penulis — bukan database statis.',
+        example: '!sastra cinta'
+    },
     buat: {
-        title: 'Gambar AI',
-        usage: '!buat <prompt>',
-        desc: 'Generate gambar dari teks.',
-        example: '!buat kucing astronaut lucu'
+        title: 'Buat Gambar AI',
+        usage: '!buat <deskripsi>',
+        desc: 'Generate gambar HD fotorealistik dari teks (Gemini, FLUX, OpenAI, dll.).',
+        example: '!buat kucing di taman bunga sore hari'
+    },
+    pantun: {
+        title: 'Pantun Live',
+        usage: '!pantun | !pantun <tema>',
+        desc: 'Pantun acak dari Wikisource/puisi dunia — bukan database statis.',
+        example: '!pantun cinta'
+    },
+    guide: {
+        title: 'Panduan Bot',
+        usage: '!guide',
+        desc: 'Tutorial singkat untuk user baru — fitur populer & tips.',
+        example: '!guide'
+    },
+    lapor: {
+        title: 'Lapor / Feedback',
+        usage: '!lapor <pesan>',
+        desc: 'Kirim laporan bug atau request fitur langsung ke owner.',
+        example: '!lapor radio tidak jalan'
     },
     db: {
         title: 'Generator Database',

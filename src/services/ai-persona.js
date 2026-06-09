@@ -3,13 +3,13 @@ import { ABOUT_META } from '../commands/aboutlux.js';
 
 export const LUXX_HIGHLIGHTS = [
     '75+ perintah (!menu)',
-    'AI lengkap: !tanya !q !coding !db !buat !lihat !rangkum',
-    'Musik & radio: !play !radio !queue !skip !lirik',
+    'AI lengkap: !tanya !q !coding !db !lihat !rangkum',
+    'Musik & radio: !play !queue !skip !lirik (link player otomatis dari !play)',
     'Discord voice + slash command',
     'Luxx Watch nonton bareng LK21',
     'Download media !dl, stiker premium !s',
     'Hiburan: anime, meme, pantun, cerpen, voting',
-    'Tools: OCR, TTS, cuaca, kalkulator, QR',
+    'Tools: OCR, cuaca, kalkulator, QR',
     'Admin panel + owner tools',
     `Dibuat ${ABOUT_META.creator} (${ABOUT_META.education})`
 ];

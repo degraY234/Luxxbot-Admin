@@ -4,6 +4,9 @@ import ffmpeg from 'fluent-ffmpeg';
 import axios from 'axios';
 import { ai, openai, GEMINI_API_KEY } from '../config.js';
 
+const STICKER_SIZE = 512;
+const TEXT_BAND_H = 54;
+
 const STYLE_TEXT = {
     premium: { fill: 'white', border: 'black' },
     neon: { fill: 'white', border: '0x00FFFF' },
@@ -31,49 +34,93 @@ function escapeDrawtext(text) {
         .replace(/%/g, '\\%');
 }
 
+/** Bingkai tipis di pinggir — tidak menutupi foto */
 function getBorderFilters(style) {
+    const thin = (color) => [
+        `drawbox=x=0:y=0:w=iw:h=3:color=${color}`,
+        `drawbox=x=0:y=ih-3:w=iw:h=3:color=${color}`,
+        `drawbox=x=0:y=0:w=3:h=ih:color=${color}`,
+        `drawbox=x=iw-3:y=0:w=3:h=ih:color=${color}`
+    ];
     switch (style) {
         case 'waifu':
         case 'love':
-            return ['drawbox=x=0:y=0:w=iw:h=ih:color=0xFF69B4@0.35:t=18'];
+            return thin('0xFF69B4@0.85');
         case 'cyber':
-        case 'vaporwave':
-            return ['drawbox=x=16:y=16:w=iw-32:h=ih-32:color=0x00FFFF@0.5:t=6'];
+        case 'neon':
+            return thin('0x00FFFF@0.9');
         case 'fire':
-            return ['drawbox=x=8:y=8:w=iw-16:h=ih-16:color=0xFF4500@0.6:t=12'];
-        case 'premium':
+            return thin('0xFF4500@0.9');
         case 'gold':
-            return ['drawbox=x=6:y=6:w=iw-12:h=ih-12:color=0xFFD700@0.45:t=10'];
-        case 'dark':
-            return ['drawbox=x=0:y=0:w=iw:h=ih:color=black@0.25:t=9999'];
+        case 'premium':
+            return thin('0xFFD700@0.85');
+        case 'vaporwave':
+            return thin('0xFF71CE@0.8');
         case 'pastel':
-            return ['drawbox=x=0:y=0:w=iw:h=ih:color=0xFFB6C1@0.2:t=9999'];
+            return thin('0xDDA0DD@0.7');
+        case 'dark':
+            return thin('0x444444@0.9');
         default:
             return [];
     }
 }
 
-function buildDrawtext(text, yExpr, style) {
+function fitFontSize(text, bandH) {
+    const len = String(text || '').length;
+    const base = Math.floor(bandH * 0.62);
+    if (len > 28) return Math.max(20, base - 14);
+    if (len > 18) return Math.max(22, base - 8);
+    if (len > 12) return Math.max(24, base - 4);
+    return Math.min(40, base);
+}
+
+function buildDrawtext(text, yPx, style, bandH) {
     const colors = STYLE_TEXT[style] || STYLE_TEXT.premium;
-    const size = Math.min(72, Math.max(36, Math.floor(text.length > 20 ? 40 : 52)));
+    const size = fitFontSize(text, bandH);
     return [
         `drawtext=text='${escapeDrawtext(text)}'`,
         `fontsize=${size}`,
         `fontcolor=${colors.fill}`,
-        'borderw=5',
+        'borderw=3',
         `bordercolor=${colors.border}`,
         'box=1',
-        'boxcolor=black@0.45',
-        'boxborderw=10',
+        'boxcolor=black@0.35',
+        'boxborderw=6',
         'x=(w-text_w)/2',
-        `y=${yExpr}`
+        `y=${yPx}`
     ].join(':');
 }
 
+/** Foto di tengah (contain), teks di jalur atas/bawah — tidak menimpa gambar */
+function buildStickerComposeFilters(topText = '', bottomText = '', style = 'premium') {
+    const topH = topText ? TEXT_BAND_H : 0;
+    const bottomH = bottomText ? TEXT_BAND_H : 0;
+    const contentH = STICKER_SIZE - topH - bottomH;
+    const filters = [
+        `scale=512:${contentH}:force_original_aspect_ratio=decrease`,
+        `pad=512:${contentH}:(ow-iw)/2:(oh-ih)/2:color=0x00000000`,
+        `pad=512:${STICKER_SIZE}:0:${topH}:color=0x00000000`,
+        ...getBorderFilters(style)
+    ];
+
+    if (topText) {
+        const y = Math.max(6, Math.floor((topH - fitFontSize(topText, topH)) / 2));
+        filters.push(buildDrawtext(topText, y, style, topH));
+    }
+    if (bottomText) {
+        const fs = fitFontSize(bottomText, bottomH);
+        const y = STICKER_SIZE - bottomH + Math.max(6, Math.floor((bottomH - fs) / 2));
+        filters.push(buildDrawtext(bottomText, y, style, bottomH));
+    }
+
+    return filters.join(',');
+}
+
 export function videoToSticker(inputPath, outputPath) {
+    const vf = `scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000,fps=15`;
     return new Promise((resolve, reject) => {
         ffmpeg(inputPath)
-            .outputOptions(['-vf', 'scale=512:512:force_original_aspect_ratio=cover,fps=15', '-loop', '0', '-ss', '0', '-t', '6'])
+            .outputOptions(['-vf', vf, '-loop', '0', '-ss', '0', '-t', '6'])
             .toFormat('webp')
             .save(outputPath)
             .on('end', () => resolve(outputPath))
@@ -81,13 +128,11 @@ export function videoToSticker(inputPath, outputPath) {
     });
 }
 
-export function videoToStickerWithText(inputPath, outputPath, text) {
+export function videoToStickerWithText(inputPath, outputPath, topText = '', bottomText = '') {
+    const vf = `${buildStickerComposeFilters(topText, bottomText, 'premium')},fps=15`;
     return new Promise((resolve, reject) => {
         ffmpeg(inputPath)
-            .outputOptions([
-                '-vf',
-                `scale=512:512:force_original_aspect_ratio=cover,fps=15,drawtext=text='${text.replace(/'/g, "\\'")}':fontcolor=white:fontsize=28:box=1:boxcolor=black@0.5:boxborderw=5:x=(w-text_w)/2:y=h-80`
-            ])
+            .outputOptions(['-vf', vf, '-loop', '0', '-ss', '0', '-t', '6'])
             .toFormat('webp')
             .save(outputPath)
             .on('end', () => resolve(outputPath))
@@ -97,32 +142,37 @@ export function videoToStickerWithText(inputPath, outputPath, text) {
 
 export const STICKER_STYLES = {
     premium: { label: 'Premium', pack: '🌸 Luxx Premium', defaultBottom: '' },
-    neon: { label: 'Neon', pack: '💠 Neon Luxx', defaultBottom: 'NEON VIBES' },
-    gold: { label: 'Gold', pack: '👑 Gold Edition', defaultBottom: 'GOLDEN' },
-    anime: { label: 'Anime', pack: '🎌 Anime Luxx', defaultBottom: 'ANIME MODE' },
-    waifu: { label: 'Waifu', pack: '💖 Waifu Pack', defaultBottom: 'BEST WAIFU' },
-    manga: { label: 'Manga', pack: '📖 Manga Panel', defaultBottom: 'MANGA PANEL' },
-    meme: { label: 'Meme', pack: '😂 Meme Lord', defaultBottom: 'LUXX MEME' },
-    glow: { label: 'Glow', pack: '✨ Glow Effect', defaultBottom: 'GLOW UP' },
-    cyber: { label: 'Cyber', pack: '🤖 Cyber Luxx', defaultBottom: 'SYSTEM ONLINE' },
-    vaporwave: { label: 'Vaporwave', pack: '🌴 Vaporwave', defaultBottom: 'A E S T H E T I C' },
-    retro: { label: 'Retro', pack: '📼 Retro Wave', defaultBottom: 'RETRO 90s' },
-    love: { label: 'Love', pack: '💕 Love Sticker', defaultBottom: 'SEND LOVE' },
-    fire: { label: 'Fire', pack: '🔥 Fire Mode', defaultBottom: 'TOO HOT' },
-    pastel: { label: 'Pastel', pack: '🧁 Pastel Soft', defaultBottom: 'SOFT VIBES' },
-    dark: { label: 'Dark', pack: '🖤 Dark Luxx', defaultBottom: 'DARK MODE' },
+    neon: { label: 'Neon', pack: '💠 Neon Luxx', defaultBottom: '' },
+    gold: { label: 'Gold', pack: '👑 Gold Edition', defaultBottom: '' },
+    anime: { label: 'Anime', pack: '🎌 Anime Luxx', defaultBottom: '' },
+    waifu: { label: 'Waifu', pack: '💖 Waifu Pack', defaultBottom: '' },
+    manga: { label: 'Manga', pack: '📖 Manga Panel', defaultBottom: '' },
+    meme: { label: 'Meme', pack: '😂 Meme Lord', defaultBottom: '' },
+    glow: { label: 'Glow', pack: '✨ Glow Effect', defaultBottom: '' },
+    cyber: { label: 'Cyber', pack: '🤖 Cyber Luxx', defaultBottom: '' },
+    vaporwave: { label: 'Vaporwave', pack: '🌴 Vaporwave', defaultBottom: '' },
+    retro: { label: 'Retro', pack: '📼 Retro Wave', defaultBottom: '' },
+    love: { label: 'Love', pack: '💕 Love Sticker', defaultBottom: '' },
+    fire: { label: 'Fire', pack: '🔥 Fire Mode', defaultBottom: '' },
+    pastel: { label: 'Pastel', pack: '🧁 Pastel Soft', defaultBottom: '' },
+    dark: { label: 'Dark', pack: '🖤 Dark Luxx', defaultBottom: '' },
     minimal: { label: 'Minimal', pack: '⚪ Minimal', defaultBottom: '' }
 };
 
 export const STYLE_KEYS = Object.keys(STICKER_STYLES);
 
 export function getStickerHelpText() {
-    let t = `🎨 *STICKER LUXX* — reply gambar/video\n\n`;
-    t += `📝 *Teks:*\n`;
-    t += `\`!s atas|Teks atas\`\n\`!s bawah|Teks bawah\`\n\`!s dua|Atas|Bawah\`\n\n`;
-    t += `✨ *Tema (${STYLE_KEYS.length} style):*\n`;
-    t += `\`!s random|caption acak\`\n`;
-    t += STYLE_KEYS.map((k) => `\`!s ${k}|caption\``).join('\n');
+    let t = `🎨 *!s — STICKER* (reply gambar/video)\n`;
+    t += `━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    t += `📌 Foto tetap utuh di tengah, teks di jalur atas/bawah.\n\n`;
+    t += `\`!s\` → polos (tanpa teks)\n`;
+    t += `\`!s love|Kawaii\` → tema + teks bawah\n`;
+    t += `\`!s neon|Halo\` · \`!s gold|Luxx\`\n\n`;
+    t += `📝 *Posisi teks:*\n`;
+    t += `\`!s atas|Teks\` · \`!s bawah|Teks\`\n`;
+    t += `\`!s dua|Atas|Bawah\` · \`!s meme|TOP|BOTTOM\`\n\n`;
+    t += `✨ *Tema:* ${STYLE_KEYS.join(', ')}\n`;
+    t += `_Format: \`!s <tema>|<teks>\`_`;
     return t;
 }
 
@@ -149,19 +199,27 @@ export function parseStickerArgs(args) {
     } else if (firstLower === 'random') {
         const pool = STYLE_KEYS.filter((k) => k !== 'minimal');
         style = pool[Math.floor(Math.random() * pool.length)];
-        bottomText = parts[1]?.trim() || STICKER_STYLES[style].defaultBottom || '';
+        bottomText = parts[1]?.trim() || '';
+    } else if (firstLower === 'caption' || firstLower === 'teks') {
+        bottomText = parts.slice(1).join('|').trim() || parts[1]?.trim() || '';
     } else if (STYLE_KEYS.includes(firstLower)) {
         style = firstLower;
         if (style === 'meme' && parts.length >= 3) {
             topText = parts[1]?.trim() || 'TOP TEXT';
             bottomText = parts[2]?.trim() || 'BOTTOM TEXT';
+        } else if (parts.length >= 3 && !parts[1]?.includes(' ')) {
+            topText = parts[1]?.trim() || '';
+            bottomText = parts.slice(2).join('|').trim() || parts[2]?.trim() || '';
         } else {
-            bottomText = parts[1]?.trim() || STICKER_STYLES[style].defaultBottom || '';
+            bottomText = parts.slice(1).join('|').trim() || '';
             if (style === 'meme' && !parts[1]) {
                 topText = 'TOP TEXT';
                 bottomText = 'BOTTOM TEXT';
             }
         }
+    } else if (parts.length >= 2) {
+        topText = parts[0]?.trim() || '';
+        bottomText = parts.slice(1).join('|').trim() || '';
     } else {
         bottomText = rawText;
     }
@@ -169,11 +227,12 @@ export function parseStickerArgs(args) {
     return { style, topText, bottomText, help: false };
 }
 
-/** Render teks + border tema via ffmpeg (tanpa canvas — aman di PM2 Windows) */
 export async function addTextToImageV3(buffer, topText = '', bottomText = '', style = 'premium') {
     const hasText = Boolean(topText || bottomText);
     const hasBorder = getBorderFilters(style).length > 0;
-    if (!hasText && !hasBorder) return buffer;
+    if (!hasText && !hasBorder) {
+        return composePlainSticker(buffer);
+    }
 
     if (!fs.existsSync('./temp')) fs.mkdirSync('./temp', { recursive: true });
 
@@ -182,11 +241,35 @@ export async function addTextToImageV3(buffer, topText = '', bottomText = '', st
     const outPath = path.join('./temp', `st-out-${id}.png`);
     fs.writeFileSync(inPath, buffer);
 
-    const filters = [...getBorderFilters(style)];
-    if (topText) filters.push(buildDrawtext(topText, '48', style));
-    if (bottomText) filters.push(buildDrawtext(bottomText, 'h-th-72', style));
+    const vf = buildStickerComposeFilters(topText, bottomText, style);
 
-    const vf = filters.join(',');
+    return new Promise((resolve, reject) => {
+        ffmpeg(inPath)
+            .outputOptions(['-vf', vf, '-frames:v', '1'])
+            .output(outPath)
+            .on('end', () => {
+                try {
+                    resolve(fs.readFileSync(outPath));
+                } finally {
+                    try { fs.unlinkSync(inPath); fs.unlinkSync(outPath); } catch (_) {}
+                }
+            })
+            .on('error', (err) => {
+                try { fs.unlinkSync(inPath); } catch (_) {}
+                reject(err);
+            })
+            .run();
+    });
+}
+
+/** Stiker polos 512×512 — foto contain, tidak crop wajah */
+function composePlainSticker(buffer) {
+    if (!fs.existsSync('./temp')) fs.mkdirSync('./temp', { recursive: true });
+    const id = Date.now();
+    const inPath = path.join('./temp', `st-plain-${id}.jpg`);
+    const outPath = path.join('./temp', `st-plain-out-${id}.png`);
+    fs.writeFileSync(inPath, buffer);
+    const vf = 'scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000';
 
     return new Promise((resolve, reject) => {
         ffmpeg(inPath)

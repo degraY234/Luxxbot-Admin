@@ -54,7 +54,7 @@ export async function handlePlayCommand({ sock, from, msg, args }) {
                 statusText:
                     `✅ *${title}* masuk antrian radio!\n\n` +
                     `${getDiscordRadioStatus()}\n\n` +
-                    `📋 \`!queue\` · ⏭️ \`!skip\` · 📻 \`!radio\``,
+                    `📋 \`!queue\` · ⏭️ \`!skip\` · 🔗 _Link player dikirim di bawah_`,
                 quoted: msg
             });
         } catch (e) {
@@ -78,7 +78,7 @@ export async function handlePlayCommand({ sock, from, msg, args }) {
             listText += `*${i + 1}.* ${v.title}\n👨‍🎤 ${v.author.name} | ⏱️ ${v.timestamp}\n\n`;
         });
         listText += `_Balas angka 1-${videos.length} → masuk antrian radio_\n`;
-        listText += `_Dengar: \`!radio\`_`;
+        listText += `_Setelah pilih, link player radio dikirim otomatis_`;
 
         global.playSession = global.playSession || {};
         global.playSession[from] = {
@@ -122,7 +122,7 @@ export async function handleStreamCommand({ sock, from, msg, getOrCreateRoom }) 
                 `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                 `🔗 *Link room:*\n${room.url}\n\n` +
                 `_Ini untuk nonton video bareng, bukan radio musik._\n` +
-                `📻 Dengar musik: \`!radio\` · Tambah lagu: \`!play\``
+                `📻 Dengar musik: \`!play\` (link player otomatis) · Tambah lagu: \`!play\``
         }, { quoted: msg });
     } catch (e) {
         await sock.sendMessage(from, { text: '❌ Gagal ambil link W2G. Cek STREAM_TOKEN di .env' }, { quoted: msg });
@@ -138,7 +138,7 @@ export async function handleQueueCommand({ sock, from, msg }) {
 
     if (!cur && !q.length) {
         return await sock.sendMessage(from, {
-            text: '📭 Antrian kosong.\n\n🎵 Tambah: `!play judul lagu`\n📻 Dengar: `!radio`'
+            text: '📭 Antrian kosong.\n\n🎵 Tambah: `!play judul lagu` _(link player dikirim otomatis)_'
         }, { quoted: msg });
     }
 

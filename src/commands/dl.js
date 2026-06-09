@@ -64,12 +64,12 @@ export async function handleDlCommand({ sock, from, msg, args }) {
         await sock.sendMessage(from, {
             text:
                 `❌ Gagal unduh media.\n\n` +
-                `💡 *Tips:*\n` +
-                `• YouTube video: \`!dl <link>\` atau \`!dl mp4hd <link>\`\n` +
-                `• YouTube MP3: \`!dl mp3 <link>\`\n` +
-                `• Video besar? Coba versi lebih pendek atau \`!dl mp3\`\n` +
-                `• IG/TikTok: \`!dl <link>\`\n` +
-                `• Error: _${(e.message || 'unknown').slice(0, 150)}_`
+                `💡 *Format:*\n` +
+                `• \`!dl <link>\` → MP4 (YT/IG/TikTok)\n` +
+                `• \`!dl mp3 <link yt>\` → MP3\n` +
+                `• \`!dl mp4hd <link yt>\` → 1080p\n\n` +
+                `_IG/TikTok: kirim link langsung. YouTube biasanya tanpa cookies._\n` +
+                `_${(e.message || 'unknown').slice(0, 220)}_`
         }, { quoted: msg });
     }
 }

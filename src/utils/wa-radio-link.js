@@ -8,10 +8,13 @@ import {
 const PREVIEW_MS = 6000;
 
 async function getLinkBody() {
-    const { radio } = await import('../services/radio-server.js');
+    const { radio, isRadioPlaying } = await import('../services/radio-server.js');
     if (radio.isPreparing) return '⏳ Sedang memuat lagu...';
-    if (radio.current) {
+    if (isRadioPlaying()) {
         return `▶️ ${radio.current.title} — ${radio.current.author}`;
+    }
+    if (radio.queue.length) {
+        return `⏸️ ${radio.queue[0].title} — klik Putar di web`;
     }
     return 'Ketuk link untuk buka player & dengar musik';
 }
@@ -52,7 +55,7 @@ export async function sendWaRadioLink(sock, from, options = {}) {
     invalidateRadioUrlCache();
     const status = await discoverLivePublicBase();
     const base = (status.base || `http://127.0.0.1:3920`).replace(/\/$/, '');
-    const url = `${base}/radio`;
+    const url = `${base}/portfolio/radio`;
     const title = '📻 LuxxBot Radio';
     const body = await getLinkBody();
     const hint = getRadioUrlHint(base, status);
@@ -70,6 +73,6 @@ export async function sendWaRadioLink(sock, from, options = {}) {
 export async function formatRadioUrlLine() {
     const url = await getRadioListenUrlAsync();
     const status = await discoverLivePublicBase();
-    const base = status.base || url.replace(/\/radio$/, '');
+    const base = status.base || url.replace(/\/portfolio\/radio$/, '').replace(/\/radio$/, '');
     return `🔗 ${url}${getRadioUrlHint(base, status)}`;
 }

@@ -13,17 +13,94 @@ import { mountPortfolioServer } from './portfolio-server.js';
 import { getRadioPublicUrl as resolvePublicUrl } from '../utils/radio-url.js';
 import { getListenPort } from '../utils/listen-port.js';
 import { registerWaQrRoutes } from './wa-qr.js';
+import {
+    getCachedLyricsForTrack,
+    getLyricsPrefetchStatus,
+    prefetchQueueLyrics,
+    scheduleLyricsPrefetch
+} from './radio-lyrics.js';
+
+/** Lazy — hindari circular import dengan discord-radio */
+let discordRadioApi = null;
+import('./discord-radio.js')
+    .then((m) => { discordRadioApi = m; })
+    .catch(() => {});
+
+function getDiscordRadioBlock() {
+    if (!discordRadioApi?.isDiscordRadioEnabled?.()) {
+        return { enabled: false, inVoice: false, voiceChannel: null };
+    }
+    const d = discordRadioApi.getDiscordDiagnostics();
+    return { enabled: true, inVoice: d.inVoice, voiceChannel: d.voiceChannel };
+}
 
 const RADIO_PORT = getListenPort();
 const RADIO_DIR = './temp/radio';
-const CURRENT_MP3 = path.join(RADIO_DIR, 'current.mp3');
 
 let trackIdCounter = 0;
 let serverStarted = false;
 let advanceTimer = null;
 let radioGeneration = 0;
 let loadMutex = Promise.resolve();
+let activeMp3Path = null;
 const trackChangeListeners = new Set();
+
+function ensureDirs() {
+    if (!fs.existsSync(RADIO_DIR)) fs.mkdirSync(RADIO_DIR, { recursive: true });
+}
+
+function getActiveMp3Path() {
+    return activeMp3Path && fs.existsSync(activeMp3Path) ? activeMp3Path : null;
+}
+
+function parkMp3File(filePath) {
+    if (!filePath || !fs.existsSync(filePath)) return;
+    try {
+        fs.unlinkSync(filePath);
+        return;
+    } catch {
+        /* Windows: file masih dibuka player/stream */
+    }
+    try {
+        const parked = path.join(RADIO_DIR, `parked-${Date.now()}-${path.basename(filePath)}`);
+        fs.renameSync(filePath, parked);
+    } catch {
+        /* biarkan — dibersihkan nanti */
+    }
+}
+
+function pruneOldRadioFiles(keepPath = null) {
+    try {
+        ensureDirs();
+        const now = Date.now();
+        for (const name of fs.readdirSync(RADIO_DIR)) {
+            const full = path.join(RADIO_DIR, name);
+            if (full === keepPath) continue;
+            if (!/^(play-|parked-|track-|current\.mp3)/.test(name)) continue;
+            try {
+                const age = now - fs.statSync(full).mtimeMs;
+                if (age > 30 * 60 * 1000) parkMp3File(full);
+            } catch { /* ignore */ }
+        }
+    } catch { /* ignore */ }
+}
+
+function promoteTmpToPlayFile(tmpPath, gen, trackId) {
+    ensureDirs();
+    const dest = path.join(RADIO_DIR, `play-${gen}-${trackId}.mp3`);
+    if (fs.existsSync(dest)) parkMp3File(dest);
+    try {
+        fs.renameSync(tmpPath, dest);
+    } catch (e) {
+        if (e?.code === 'EPERM' || e?.code === 'EBUSY') {
+            fs.copyFileSync(tmpPath, dest);
+            try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+        } else {
+            throw e;
+        }
+    }
+    return dest;
+}
 
 export function getRadioStreamEpoch() {
     return radioGeneration;
@@ -48,14 +125,16 @@ function withLoadLock(fn) {
 function stopCurrentPlayback() {
     clearAdvanceTimer();
     radio.current = null;
-    if (fs.existsSync(CURRENT_MP3)) {
-        try { fs.unlinkSync(CURRENT_MP3); } catch (_) {}
+    radio.playbackActive = false;
+    if (activeMp3Path) {
+        parkMp3File(activeMp3Path);
+        activeMp3Path = null;
     }
     emitTrackChange();
 }
 
 export function getCurrentMp3Path() {
-    return CURRENT_MP3;
+    return getActiveMp3Path() || path.join(RADIO_DIR, 'current.mp3');
 }
 
 export function onRadioTrackChange(fn) {
@@ -74,10 +153,24 @@ export const radio = {
     queue: [],
     current: null,
     isPreparing: false,
+    playbackActive: false,
     listeners: 0,
     lastPrepareError: null,
     lastPrepareAt: null
 };
+
+export function isRadioPlaying() {
+    return Boolean(radio.current?.preparedAt);
+}
+
+function getUpNextTrack() {
+    return radio.queue[0] || null;
+}
+
+function getDisplayTrack() {
+    if (isRadioPlaying()) return radio.current;
+    return getUpNextTrack();
+}
 
 function nextId() {
     trackIdCounter += 1;
@@ -92,6 +185,7 @@ function syncGlobalQueue() {
         requestedBy: t.requestedBy,
         thumbnail: t.thumbnail
     }));
+    prefetchQueueLyrics(radio.queue, radio.current || radio.queue[0] || null);
 }
 
 function clearAdvanceTimer() {
@@ -118,18 +212,28 @@ export function isCurrentTrackFinished() {
 
 export function getRadioPlayback() {
     const cur = radio.current;
+    const display = getDisplayTrack();
     if (!cur?.preparedAt) {
-        return { positionSec: 0, durationSec: 0, progress: 0, elapsedLabel: '0:00', durationLabel: '0:00' };
+        const dur = display?.durationSec || 0;
+        return {
+            positionSec: 0,
+            durationSec: dur,
+            progress: 0,
+            preparedAt: 0,
+            elapsedLabel: '0:00',
+            durationLabel: dur > 0 ? formatDurationSec(dur) : (display?.duration || '0:00')
+        };
     }
     const durationSec = cur.durationSec || 0;
     const positionSec = durationSec > 0
-        ? Math.min(durationSec, Math.max(0, Math.floor((Date.now() - cur.preparedAt) / 1000)))
-        : Math.max(0, Math.floor((Date.now() - cur.preparedAt) / 1000));
+        ? Math.min(durationSec, Math.max(0, (Date.now() - cur.preparedAt) / 1000))
+        : Math.max(0, (Date.now() - cur.preparedAt) / 1000);
     const progress = durationSec > 0 ? Math.min(100, (positionSec / durationSec) * 100) : 0;
     return {
         positionSec,
         durationSec,
         progress,
+        preparedAt: cur.preparedAt,
         elapsedLabel: formatDurationSec(positionSec),
         durationLabel: formatDurationSec(durationSec) || cur.duration || '-'
     };
@@ -142,26 +246,21 @@ function scheduleAutoAdvance() {
 
     const remainingMs = (cur.durationSec * 1000) - (Date.now() - cur.preparedAt) + 600;
     if (remainingMs <= 0) {
-        finishCurrentAndPlayNext().catch((e) => console.error('📻 Radio auto-advance:', e.message));
+        handleTrackEnded().catch((e) => console.error('📻 Radio track ended:', e.message));
         return;
     }
 
     advanceTimer = setTimeout(() => {
-        finishCurrentAndPlayNext().catch((e) => console.error('📻 Radio auto-advance:', e.message));
+        handleTrackEnded().catch((e) => console.error('📻 Radio track ended:', e.message));
     }, remainingMs);
 }
 
-async function finishCurrentAndPlayNext() {
+/** Lagu selesai — berhenti, antrian berikutnya tunggu tombol Putar di web */
+async function handleTrackEnded() {
     if (radio.isPreparing) return;
     clearAdvanceTimer();
-    if (fs.existsSync(CURRENT_MP3)) {
-        try { fs.unlinkSync(CURRENT_MP3); } catch (_) {}
-    }
-    radio.current = null;
-    emitTrackChange();
-    if (radio.queue.length) {
-        await withLoadLock(() => startQueueHead(radioGeneration));
-    }
+    console.log('📻 Radio: lagu selesai — tunggu Putar untuk lagu berikutnya');
+    stopCurrentPlayback();
 }
 
 export function getRadioPublicUrl() {
@@ -169,11 +268,7 @@ export function getRadioPublicUrl() {
 }
 
 export function getRadioListenUrl() {
-    return `${getRadioPublicUrl()}/radio`;
-}
-
-function ensureDirs() {
-    if (!fs.existsSync(RADIO_DIR)) fs.mkdirSync(RADIO_DIR, { recursive: true });
+    return `${getRadioPublicUrl()}/portfolio/radio`;
 }
 
 const PREPARE_TIMEOUT_MS = Number(process.env.RADIO_PREPARE_TIMEOUT_MS || 300_000);
@@ -198,21 +293,26 @@ async function prepareTrack(track, gen) {
         return false;
     }
 
-    if (fs.existsSync(CURRENT_MP3)) fs.unlinkSync(CURRENT_MP3);
-    fs.renameSync(tmpPath, CURRENT_MP3);
+    if (activeMp3Path) parkMp3File(activeMp3Path);
 
+    const playPath = promoteTmpToPlayFile(tmpPath, gen, track.id);
     if (gen !== radioGeneration) {
-        if (fs.existsSync(CURRENT_MP3)) try { fs.unlinkSync(CURRENT_MP3); } catch (_) {}
+        parkMp3File(playPath);
         return false;
     }
 
-    const fileDuration = await getMp3DurationSec(CURRENT_MP3);
+    activeMp3Path = playPath;
+    pruneOldRadioFiles(playPath);
+
+    const fileDuration = await getMp3DurationSec(playPath);
     const durationSec = fileDuration || track.durationSec || 0;
+    radio.playbackActive = true;
     radio.current = {
         ...track,
         durationSec,
         duration: formatDurationSec(durationSec) || track.duration || '-',
-        preparedAt: Date.now()
+        preparedAt: Date.now(),
+        filePath: playPath
     };
     emitTrackChange();
     scheduleAutoAdvance();
@@ -259,10 +359,40 @@ async function startQueueHead(gen) {
     }
 }
 
-function kickPlaybackIfIdle() {
-    if (radio.current || radio.isPreparing || !radio.queue.length) return;
-    withLoadLock(() => startQueueHead(radioGeneration))
-        .catch((e) => console.error('📻 kickPlayback:', e.message));
+/** Mulai lagu dari antrian — hanya dipanggil saat tombol Putar di web */
+export async function startRadioPlayback() {
+    if (radio.isPreparing) {
+        return { ok: false, preparing: true, message: '⏳ Sedang mengunduh lagu...' };
+    }
+    if (!radio.queue.length) {
+        return { ok: false, message: 'Antrian kosong — tambah via !play dulu.' };
+    }
+    if (isRadioPlaying()) {
+        radio.current.preparedAt = Date.now();
+        bumpRadioGeneration();
+        scheduleAutoAdvance();
+        return {
+            ok: true,
+            restarted: true,
+            message: `▶️ ${radio.current.title} — mulai dari awal`,
+            streamEpoch: radioGeneration
+        };
+    }
+
+    return withLoadLock(async () => {
+        const gen = radioGeneration;
+        const ok = await startQueueHead(gen);
+        return {
+            ok,
+            preparing: false,
+            restarted: false,
+            message: ok
+                ? `▶️ Memutar: ${radio.current?.title || 'lagu'}`
+                : (radio.lastPrepareError?.message || 'Gagal memuat lagu'),
+            streamEpoch: radioGeneration,
+            queueLength: radio.queue.length
+        };
+    });
 }
 
 export async function addTrackToRadio(track, requestedBy = 'user') {
@@ -279,47 +409,52 @@ export async function addTrackToRadio(track, requestedBy = 'user') {
         requestedBy
     };
     radio.queue.push(entry);
+    scheduleLyricsPrefetch(entry);
     syncGlobalQueue();
-
-    kickPlaybackIfIdle();
-    if (isCurrentTrackFinished() && !radio.isPreparing) {
-        await finishCurrentAndPlayNext();
-    }
+    console.log(`📻 Antrian +1: ${entry.title} (total ${radio.queue.length}) — tunggu Putar di web`);
     return entry;
 }
 
 export async function skipRadioTrack() {
-    const skipped = radio.current?.title;
+    const preparingTitle = radio.isPreparing ? radio.queue[0]?.title : null;
+    const skipped = radio.current?.title || preparingTitle;
     const hadSomething = Boolean(radio.current || radio.queue.length || radio.isPreparing);
     if (!hadSomething) {
         return { ok: false, message: 'Tidak ada lagu yang diputar.' };
     }
 
+    const wasPreparingOnly = !radio.current && radio.isPreparing;
     const queueBefore = radio.queue.length;
-    console.log(`📻 Skip diminta: "${skipped || '—'}" · antrian ${queueBefore}`);
+    console.log(`📻 Skip diminta: "${skipped || '—'}" · antrian ${queueBefore}${wasPreparingOnly ? ' (batalkan unduhan)' : ''}`);
 
     return withLoadLock(async () => {
         resetPlayPipeline();
         const gen = radioGeneration;
-        stopCurrentPlayback();
 
-        if (!radio.queue.length) {
-            console.log('📻 Skip: antrian kosong setelah hentikan lagu sekarang');
-            return {
-                ok: true,
-                message: `⏭️ Skip: *${skipped || '—'}* · Antrian kosong.`,
-                streamEpoch: gen,
-                queueLength: 0
-            };
+        if (radio.isPreparing) {
+            radio.isPreparing = false;
         }
 
-        await startQueueHead(gen);
+        const wasPlaying = isRadioPlaying();
+        stopCurrentPlayback();
 
-        const nextTitle = radio.current?.title || radio.queue[0]?.title || 'lagu berikutnya';
-        console.log(`📻 Skip selesai → "${nextTitle}" · sisa antrian ${radio.queue.length}`);
+        if (wasPlaying) {
+            /* lagu yang diputar sudah di-shift saat startQueueHead — tidak perlu shift lagi */
+        } else if (wasPreparingOnly && radio.queue.length) {
+            radio.queue.shift();
+            syncGlobalQueue();
+        } else if (radio.queue.length) {
+            radio.queue.shift();
+            syncGlobalQueue();
+        }
+
+        const nextTitle = radio.queue[0]?.title;
+        console.log(`📻 Skip selesai · sisa antrian ${radio.queue.length}${nextTitle ? ` · berikutnya: ${nextTitle}` : ''}`);
         return {
             ok: true,
-            message: `⏭️ Skip: *${skipped || '—'}* → *${nextTitle}*`,
+            message: nextTitle
+                ? `⏭️ Skip: *${skipped || '—'}* · Berikutnya: *${nextTitle}* — klik Putar di web`
+                : `⏭️ Skip: *${skipped || '—'}* · Antrian kosong.`,
             streamEpoch: gen,
             queueLength: radio.queue.length
         };
@@ -335,11 +470,13 @@ export function clearRadioQueue() {
 }
 
 export function getRadioStatusText() {
-    const now = radio.current
+    const now = isRadioPlaying()
         ? `🎶 *Sedang diputar:*\n${radio.current.title}\n👤 ${radio.current.author}\n🙋 ${radio.current.requestedBy}`
         : radio.isPreparing
             ? '⏳ Sedang memuat lagu...'
-            : '_Belum ada lagu diputar._';
+            : radio.queue.length
+                ? `⏸️ *Siap diputar:*\n${radio.queue[0].title}\n👤 ${radio.queue[0].author}\n🙋 ${radio.queue[0].requestedBy}\n_Klik Putar di web untuk mulai._`
+                : '_Belum ada lagu di antrian._';
 
     const queueLines = radio.queue.length
         ? radio.queue.slice(0, 8).map((t, i) => `${i + 1}. ${t.title} — ${t.requestedBy}`).join('\n')
@@ -381,10 +518,11 @@ export function attachRadioServer(app) {
     });
 
     app.get('/radio/live.mp3', (req, res) => {
-        if (!fs.existsSync(CURRENT_MP3)) {
+        const streamPath = getActiveMp3Path();
+        if (!streamPath) {
             return res.status(404).send('No track');
         }
-        const stat = fs.statSync(CURRENT_MP3);
+        const stat = fs.statSync(streamPath);
         const fileSize = stat.size;
         const range = req.headers.range;
 
@@ -404,98 +542,110 @@ export function attachRadioServer(app) {
             res.status(206);
             res.setHeader('Content-Range', `bytes ${start}-${safeEnd}/${fileSize}`);
             res.setHeader('Content-Length', safeEnd - start + 1);
-            fs.createReadStream(CURRENT_MP3, { start, end: safeEnd }).pipe(res);
+            fs.createReadStream(streamPath, { start, end: safeEnd }).pipe(res);
             return;
         }
 
         res.setHeader('Content-Length', fileSize);
-        fs.createReadStream(CURRENT_MP3).pipe(res);
+        fs.createReadStream(streamPath).pipe(res);
     });
 
-    app.get('/radio/api/now', (req, res) => {
+    function resolveRadioTrackById(id) {
+        if (!id) return null;
+        if (radio.current?.id === id) return radio.current;
+        return radio.queue.find((t) => t.id === id) || null;
+    }
+
+    app.get('/radio/api/lyrics', (req, res) => {
+        const wantId = Number(req.query.id);
+        const track = wantId
+            ? resolveRadioTrackById(wantId)
+            : (isRadioPlaying() ? radio.current : getUpNextTrack());
+        if (!track) {
+            return res.json({ found: false, loading: false, lyrics: null, trackId: wantId || null });
+        }
+        const lyrics = getCachedLyricsForTrack(track);
+        res.json({ ...lyrics, trackId: track.id });
+    });
+
+    app.post('/radio/api/play', async (req, res) => {
+        const result = await startRadioPlayback();
         res.json({
-            current: radio.current,
+            ...result,
             queueLength: radio.queue.length,
-            isPreparing: radio.isPreparing,
-            lastPrepareError: radio.lastPrepareError,
-            hasStream: fs.existsSync(CURRENT_MP3),
-            playback: getRadioPlayback(),
-            streamEpoch: radioGeneration
+            hasStream: Boolean(getActiveMp3Path() && isRadioPlaying())
         });
     });
 
-    app.get('/radio', (req, res) => {
-        const title = radio.current?.title || 'LuxxBot Radio';
-        const artist = radio.current?.author || '—';
-        const thumb = radio.current?.thumbnail || '';
-        const streamUrl = '/radio/live.mp3';
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.send(`<!DOCTYPE html>
-<html lang="id"><head>
-<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>LuxxBot Radio</title>
-<style>
-  body{font-family:system-ui;background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center}
-  .card{background:rgba(255,255,255,.08);backdrop-filter:blur(12px);border-radius:20px;padding:1.4rem;max-width:440px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1)}
-  .row{display:flex;gap:1rem;align-items:center}
-  .thumb{width:88px;height:66px;border-radius:10px;object-fit:cover;background:#222;border:1px solid rgba(255,255,255,.12)}
-  h1{margin:0 0 .35rem;font-size:1.2rem} p{opacity:.85;margin:.2rem 0}
-  audio{width:100%;margin-top:1rem;height:36px}
-  .badge{display:inline-block;background:#ff69b4;padding:.2rem .6rem;border-radius:8px;font-size:.75rem;margin-bottom:.6rem}
-</style></head><body>
-<div class="card">
-  <span class="badge">LIVE</span>
-  <div class="row">
-    <img id="thumb" class="thumb" src="${thumb}" alt="" onerror="this.style.display='none'"/>
-    <div><h1>📻 LuxxBot Radio</h1><p id="track"><b>${title}</b><br/>${artist}</p></div>
-  </div>
-  <audio id="player" controls autoplay src="${streamUrl}"></audio>
-  <p style="font-size:.8rem;margin-top:1rem">Antrian: <span id="q">0</span></p>
-</div>
-<script>
-let lastKey = null;
-const player = document.getElementById('player');
-function stopPlayer() {
-  player.pause();
-  player.removeAttribute('src');
-  player.load();
-}
-async function poll() {
-  try {
-    const r = await fetch('/radio/api/now');
-    const d = await r.json();
-    document.getElementById('q').textContent = d.queueLength;
-    const key = (d.streamEpoch || 0) + ':' + (d.current?.id || 'idle');
-    if (d.isPreparing && !d.current) {
-      const next = d.queueLength ? 'Memuat lagu berikutnya...' : 'Tunggu sebentar';
-      document.getElementById('track').innerHTML = '<b>Memuat lagu...</b><br/>' + next;
-      document.getElementById('thumb').style.display = 'none';
-      if (lastKey !== key) { lastKey = key; stopPlayer(); }
-    } else if (d.current) {
-      document.getElementById('track').innerHTML = '<b>' + d.current.title + '</b><br/>' + d.current.author;
-      const t = document.getElementById('thumb');
-      if (d.current.thumbnail) {
-        if (lastKey !== key) { t.style.display = 'block'; t.src = d.current.thumbnail + '?v=' + d.current.id; }
-      } else t.style.display = 'none';
-      if (lastKey !== key) {
-        lastKey = key;
-        stopPlayer();
-        player.src = '${streamUrl}?epoch=' + d.streamEpoch + '&id=' + d.current.id + '&t=' + Date.now();
-        player.play().catch(() => {});
-      }
-    } else {
-      lastKey = null;
-      const err = d.lastPrepareError?.message;
-      document.getElementById('track').innerHTML = err
-        ? '<b>Gagal memuat lagu</b><br/>' + (d.lastPrepareError.title || '') + ': ' + err.slice(0, 100)
-        : '<b>Belum ada lagu</b><br/>Tambah via !play';
-      document.getElementById('thumb').style.display = 'none';
-      stopPlayer();
-    }
-  } catch (e) {}
-}
-setInterval(poll, 3000); poll();
-</script></body></html>`);
+    app.get('/radio/api/now', (req, res) => {
+        const playing = isRadioPlaying();
+        const upNext = !playing ? getUpNextTrack() : null;
+        const lyricsTrack = playing ? radio.current : upNext;
+        const lyrics = lyricsTrack
+            ? { ...getCachedLyricsForTrack(lyricsTrack), trackId: lyricsTrack.id }
+            : { found: false, loading: false, lyrics: null, trackId: null };
+
+        const mapTrack = (t) => t ? {
+            id: t.id,
+            title: t.title,
+            author: t.author,
+            requestedBy: t.requestedBy,
+            thumbnail: t.thumbnail,
+            duration: t.duration,
+            durationSec: t.durationSec
+        } : null;
+
+        res.json({
+            current: playing ? mapTrack(radio.current) : null,
+            upNext: mapTrack(upNext),
+            playbackActive: playing,
+            waitingPlay: Boolean(!playing && radio.queue.length),
+            queue: radio.queue.map((t) => {
+                const ls = getLyricsPrefetchStatus(t);
+                return {
+                    id: t.id,
+                    title: t.title,
+                    author: t.author,
+                    requestedBy: t.requestedBy,
+                    duration: t.duration,
+                    lyricsReady: ls.ready,
+                    lyricsLoading: ls.loading
+                };
+            }),
+            queueLength: radio.queue.length,
+            isPreparing: radio.isPreparing,
+            lastPrepareError: radio.lastPrepareError,
+            hasStream: Boolean(getActiveMp3Path() && playing),
+            playback: getRadioPlayback(),
+            streamEpoch: radioGeneration,
+            lyrics,
+            discord: getDiscordRadioBlock(),
+            serverTime: Date.now()
+        });
+    });
+
+    app.post('/radio/api/skip', async (req, res) => {
+        const result = await skipRadioTrack();
+        res.json({
+            ok: result.ok,
+            message: result.message,
+            streamEpoch: result.streamEpoch ?? radioGeneration,
+            queueLength: result.queueLength ?? radio.queue.length
+        });
+    });
+
+    app.post('/radio/api/stop', (req, res) => {
+        clearRadioQueue();
+        res.json({
+            ok: true,
+            message: 'Radio dihentikan dan antrian dikosongkan.',
+            streamEpoch: radioGeneration,
+            queueLength: 0
+        });
+    });
+
+    app.get('/radio', (_req, res) => {
+        res.redirect(302, '/portfolio/radio');
     });
 
 }

@@ -12,7 +12,13 @@
       var t = localStorage.getItem('portfolio-theme');
       if (!t && matchMedia('(prefers-color-scheme: light)').matches) t = 'light';
       if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
-      var base = location.pathname.startsWith('/portfolio') ? '/portfolio/' : '/';
+      var p = location.pathname;
+      var base = '/';
+      if (p.indexOf('/portfolio') === 0) base = '/portfolio/';
+      else if (location.hostname.endsWith('github.io')) {
+        var seg = p.split('/').filter(Boolean)[0];
+        if (seg && !seg.includes('.')) base = '/' + seg + '/';
+      }
       var el = document.createElement('base');
       el.href = base;
       document.head.appendChild(el);
@@ -21,23 +27,24 @@
   <title>DoxxBorx — Portfolio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Syne:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Orbitron:wght@500;600;700&family=Syne:wght@500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
+  <canvas id="network-canvas" class="network-canvas" aria-hidden="true"></canvas>
   <div class="grain" aria-hidden="true"></div>
   <div class="bg-mesh" aria-hidden="true">
     <div class="mesh-orb mesh-1"></div>
     <div class="mesh-orb mesh-2"></div>
     <div class="mesh-orb mesh-3"></div>
-    <div class="grid-lines"></div>
+    <div class="grid-lines robot-grid"></div>
   </div>
 
   <div class="scroll-progress" id="scroll-progress" aria-hidden="true"></div>
 
   <header class="nav" id="nav">
     <a class="nav-logo" href="#top" data-scroll>
-      <span class="logo-mark">DB</span>
+      <span class="logo-mark robot-mark">🤖</span>
       <span class="logo-text">DoxxBorx</span>
     </a>
     <nav class="nav-links" id="nav-links">
@@ -238,20 +245,26 @@
       <div class="section-head reveal">
         <span class="section-num">03</span>
         <h2>Pengalaman</h2>
-        <p>Perjalanan coding & project yang sudah aku jalani</p>
+        <p>Bukan genius — cuma orang biasa yang nekat, sering stuck, tapi tetap gas 🔥</p>
       </div>
       <div class="timeline">
         <article class="timeline-item reveal">
           <div class="timeline-marker"></div>
           <div class="timeline-card card">
             <span class="timeline-date">2025 — Sekarang</span>
-            <h3>Founder & Lead Developer · LuxxBot</h3>
-            <p class="timeline-org">LuxxBot Premium · Remote</p>
+            <h3>Ngebangun LuxxBot · (sambil ngopi & ngeluh)</h3>
+            <p class="timeline-org">Project pribadi · Node.js · WhatsApp & Discord</p>
+            <p class="timeline-story">
+              Awalnya cuma pengen bikin bot WA simpel. Eh malah berkembang jadi 75+ perintah.
+              Belajar Node.js sambil trial-error — error 429, API ke-block, dokumentasi dibaca ulang
+              terus sampai pusing. Telusuri satu-satu API yang bisa dipakai, kadang jalan, kadang
+              nangis diam-diam. Banyak kopi habis tiap malam. Bukan karena jenius, tapi karena bandel
+              nggak mau nyerah ☕😵‍💫
+            </p>
             <ul>
-              <li>Membangun & maintain bot WhatsApp 75+ perintah multi-platform</li>
-              <li>Integrasi AI, Discord voice, radio streaming, Luxx Watch</li>
-              <li>Deploy production: PM2, Cloudflare tunnel, admin panel</li>
-              <li>Handle user support, update fitur, dan optimasi performa</li>
+              <li>Bot WA + Discord — dari nol, tanpa tim</li>
+              <li>Fitur AI, radio, nonton bareng — lahir dari “coba dulu ah”</li>
+              <li>Deploy, crash, fix, repeat — cycle harian</li>
             </ul>
           </div>
         </article>
@@ -259,39 +272,64 @@
           <div class="timeline-marker"></div>
           <div class="timeline-card card">
             <span class="timeline-date">2024 — Sekarang</span>
-            <h3>Mahasiswa · Teknik Komputer</h3>
-            <p class="timeline-org">Perguruan Tinggi · Indonesia</p>
-            <ul>
-              <li>Fokus pemrograman, jaringan, dan sistem terdistribusi</li>
-              <li>Menerapkan teori kuliah ke project nyata (LuxxBot ecosystem)</li>
-              <li>Aktif eksplorasi full-stack, database, dan DevOps</li>
-            </ul>
+            <h3>Mahasiswa Teknik Komputer</h3>
+            <p class="timeline-org">Kuliah + ngoding di kamar · Indonesia 🇮🇩</p>
+            <p class="timeline-story">
+              Teori di kelas, praktik di laptop sendiri. Kadang tugas kuliah, kadang debug bot
+              sampai subuh. Dua-duanya ngantuk, tapi yang satu lebih seru.
+            </p>
           </div>
         </article>
         <article class="timeline-item reveal" data-delay="2">
           <div class="timeline-marker"></div>
           <div class="timeline-card card">
-            <span class="timeline-date">2024</span>
-            <h3>Freelance · Bot & Automation Developer</h3>
-            <p class="timeline-org">Independent · WhatsApp & Discord</p>
+            <span class="timeline-date">Magang</span>
+            <h3>Fotografer · Acara Pengantin & Event</h3>
+            <p class="timeline-org">Lapangan · Wedding & acara seremonial</p>
+            <p class="timeline-story">
+              Pegang kamera, kejar momen, jangan sampai miss sang pengantin senyum atau air mata
+              keluar. Belajar sabar, timing, dan tetap tenang walau ruangan rame banget.
+              Dulu mikirnya “fotografi doang” — ternyata ngajarin fokus & detail yang kepake juga
+              pas ngoding UI dan desain.
+            </p>
             <ul>
-              <li>Custom bot untuk grup komunitas & bisnis kecil</li>
-              <li>Automasi download media, moderasi grup, dan fitur AI</li>
-              <li>Konsultasi arsitektur bot & deployment server</li>
+              <li>Dokumentasi pernikahan & acara adat</li>
+              <li>Koordinasi cepat dengan tuan rumah & vendor</li>
+              <li>Hasil rapi walau tekanan waktu mepet</li>
             </ul>
           </div>
         </article>
         <article class="timeline-item reveal" data-delay="3">
           <div class="timeline-marker"></div>
           <div class="timeline-card card">
-            <span class="timeline-date">2023</span>
-            <h3>Mulai Journey · Full-Stack Developer</h3>
-            <p class="timeline-org">Self-taught · Indonesia</p>
+            <span class="timeline-date">Magang</span>
+            <h3>Operator Mesin Cetak Spanduk</h3>
+            <p class="timeline-org">Percetakan · Produksi spanduk & banner</p>
+            <p class="timeline-story">
+              Di sini pertama kali kenal mesin cetak besar, tinta, ukuran material, dan deadline
+              klien yang nggak kenal ampun. Spanduk miring dikit? Cetak ulang. File salah ukuran?
+              Semua orang liat. Pelajaran keras soal presisi — sekarang kalau pixel UI meleset,
+              otak langsung inget era spanduk 😅
+            </p>
             <ul>
-              <li>Belajar JavaScript, Node.js, dan REST API dari nol</li>
-              <li>Project pertama: bot WhatsApp sederhana → berkembang jadi LuxxBot</li>
-              <li>Eksplor frontend, database SQL, dan Git workflow</li>
+              <li>Operasikan mesin cetak & finishing banner</li>
+              <li>Cek file, ukuran, dan warna sebelum produksi</li>
+              <li>Tanggung jawab output yang dilihat publik</li>
             </ul>
+          </div>
+        </article>
+        <article class="timeline-item reveal" data-delay="1">
+          <div class="timeline-marker"></div>
+          <div class="timeline-card card">
+            <span class="timeline-date">Awal mulai</span>
+            <h3>Belajar Bot & Node.js dari NOL</h3>
+            <p class="timeline-org">Google, YouTube, Stack Overflow · 24/7</p>
+            <p class="timeline-story">
+              Nggak ada background coding keren. Cuma penasaran: “bisa nggak ya botnya jawab sendiri?”
+              Copy-paste kode, error, baca error, error lagi. Node.js awalnya intimidating,
+              lama-lama jadi teman sekaligus musuh. LuxxBot nggak lahir dalam semalam —
+              lahir dari malam-malam panjang + kopi yang terlalu banyak.
+            </p>
           </div>
         </article>
       </div>
@@ -368,7 +406,7 @@
             dengan slash commands.
           </p>
           <ul class="project-features">
-            <li>AI: !tanya !q !coding !db !buat !lihat</li>
+            <li>AI: !tanya !q !coding !db !lihat</li>
             <li>Musik W2G + radio streaming live</li>
             <li>Luxx Watch — nonton bareng LK21</li>
             <li>Admin panel + Cloudflare tunnel</li>
@@ -402,7 +440,7 @@
           </div>
         </article>
 
-        <article class="project-card reveal" data-delay="3">
+        <article class="project-card reveal project-card-radio" data-delay="3">
           <span class="project-tag">📻 Streaming</span>
           <h3>LuxxBot Radio</h3>
           <p class="project-desc">
@@ -459,5 +497,6 @@
   </footer>
 
   <script src="js/app.js" defer></script>
+  <script src="js/network-bg.js" defer></script>
 </body>
 </html>

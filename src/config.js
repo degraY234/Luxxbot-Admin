@@ -15,10 +15,9 @@ export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 export const W2G_API_KEY = process.env.STREAM_TOKEN;
 export const W2G_ROOM_FILE = './w2g_room.json';
 export const MAX_MEMORY = 18;
-export const bratStyles = ['cute', 'dark', 'neon', 'anime', 'glitch', 'minimal'];
-
-/** Model teks — urutan prioritas (lite dulu, kuota free tier masih ada) */
+/** Model teks — flash utama (lite sering 429 di free tier) */
 export const GEMINI_TEXT_MODELS = [
+    'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
     'gemini-2.0-flash-lite'
 ];
@@ -49,3 +48,5 @@ console.log('Gemini Key Loaded:', !!process.env.GEMINI_API_KEY);
 console.log('OpenAI Key Loaded:', !!process.env.OPENAI_API_KEY);
 console.log('Grok (xAI) Key Loaded:', !!getXaiApiKey());
 console.log('Groq.com Key Loaded:', !!getGroqApiKey());
+console.log('Pollinations Key Loaded:', !!(process.env.POLLINATIONS_KEY || process.env.POLLINATIONS_API_KEY));
+console.log('ModelArk Key Loaded:', !!(process.env.MODEL_ARK_API_KEY || process.env.MODELARK_API_KEY || process.env.MODEL_ARK || process.env.MODEL_ARk));

@@ -228,7 +228,7 @@ export async function resolveRadioBaseUrl() {
 
 export async function getRadioListenUrlAsync() {
     const base = await resolveShareBaseUrl();
-    return `${base}/radio`;
+    return `${base}/portfolio/radio`;
 }
 
 export function getRadioUrlHint(baseUrl, status = null) {

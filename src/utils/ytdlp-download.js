@@ -8,6 +8,11 @@ import {
     resolveYoutubeCookiesPath,
     getYoutubePoTokenArg
 } from './youtube-cookies.js';
+import {
+    parseVttSyncedLyrics,
+    mergeVttSyncedLines,
+    syncedLinesToLrc
+} from './lyrics-sync.js';
 
 const COOKIE_BROWSERS = (process.env.YTDLP_COOKIES_BROWSER || 'chrome,edge,firefox')
     .split(',')
@@ -61,7 +66,7 @@ function isYoutubeUrl(url) {
     return /youtube\.com|youtu\.be|music\.youtube/i.test(url);
 }
 
-function commonFlags(template) {
+function commonFlags(template, { youtubeCookies = false } = {}) {
     const ffmpegLoc = resolveFfmpegPath();
     const flags = [
         '-o', template,
@@ -74,63 +79,80 @@ function commonFlags(template) {
         '--remote-components', 'ejs:github',
         '--js-runtimes', process.env.YTDLP_JS_RUNTIME || 'node'
     ];
-    const cookiesFile = resolveYoutubeCookiesPath();
-    if (cookiesFile && fs.existsSync(cookiesFile) && fs.statSync(cookiesFile).size > 80) {
-        flags.push('--cookies', cookiesFile);
+    if (youtubeCookies) {
+        const cookiesFile = resolveYoutubeCookiesPath();
+        if (cookiesFile && fs.existsSync(cookiesFile) && fs.statSync(cookiesFile).size > 80) {
+            flags.push('--cookies', cookiesFile);
+        }
+        flags.push(...getYoutubePoTokenArg());
     }
-    flags.push(...getYoutubePoTokenArg());
     const proxy = process.env.YTDLP_PROXY?.trim();
     if (proxy) flags.push('--proxy', proxy);
     return flags;
 }
+
+const YT_CLIENT_FALLBACKS = [
+    [],
+    ['--extractor-args', 'youtube:player_client=android,web'],
+    ['--extractor-args', 'youtube:player_client=ios,web'],
+    ['--extractor-args', 'youtube:player_client=tv_embedded,web'],
+    ['--extractor-args', 'youtube:player_client=mweb,web']
+];
 
 function isBotBlockError(msg = '') {
     return /sign in to confirm|not a bot|cookies-from-browser|confirm you.?re not/i.test(msg);
 }
 
 function buildYoutubeBotHint() {
-    if (hasYoutubeCookies()) {
-        return 'Cookies YouTube kedaluwarsa — export ulang: scripts/export-youtube-cookies.ps1 lalu upload di /admin';
-    }
-    return 'YouTube butuh cookies di server. Jalankan di PC: scripts/export-youtube-cookies.ps1 (upload otomatis ke Railway)';
+    return 'YouTube menolak tanpa login — coba link lain atau export cookies (opsional): scripts/export-youtube-cookies.ps1';
 }
 
 async function runYtDlpWithFallback(url, buildArgsList) {
     const list = Array.isArray(buildArgsList) ? buildArgsList : [buildArgsList];
     let lastErr;
-    for (const item of list) {
-        const attempts = [];
-        const ytCookies = isYoutubeUrl(url) && hasYoutubeCookies();
+    let sawBotBlock = false;
 
-        if (isInstagramUrl(url) || (isYoutubeUrl(url) && process.platform === 'win32')) {
+    for (const item of list) {
+        if (typeof item !== 'function') {
+            throw new Error('yt-dlp internal: builder bukan fungsi');
+        }
+
+        const attempts = [{ label: 'default', args: item(url, false) }];
+
+        if (isYoutubeUrl(url) && hasYoutubeCookies()) {
+            attempts.push({ label: 'yt-cookies', args: item(url, true) });
+        }
+
+        if (isInstagramUrl(url)) {
             for (const browser of COOKIE_BROWSERS) {
                 attempts.push({
-                    label: `cookies-${browser}`,
-                    args: ['--cookies-from-browser', browser, ...item(url)]
+                    label: `ig-${browser}`,
+                    args: ['--cookies-from-browser', browser, ...item(url, false)]
                 });
             }
         }
-        if (ytCookies) {
-            attempts.push({ label: 'cookies-file', args: item(url) });
-        }
-        attempts.push({ label: 'default', args: item(url) });
 
         for (const { label, args } of attempts) {
+            if (!Array.isArray(args)) {
+                lastErr = new Error(`yt-dlp builder mengembalikan args invalid (${label})`);
+                continue;
+            }
             try {
                 return await runYtDlp(args, label);
             } catch (e) {
                 lastErr = e;
                 const msg = e.message || '';
+                if (isBotBlockError(msg)) sawBotBlock = true;
                 console.error(`yt-dlp ${label} gagal:`, msg.slice(0, 200));
-                const retryable = /instagram|login|cookie|empty media|sign in|not a bot/i.test(msg);
+                const retryable = /instagram|login|cookie|empty media|sign in|not a bot|could not copy/i.test(msg);
                 if (!retryable && label === 'default') break;
             }
         }
     }
 
     const errMsg = lastErr?.message || 'yt-dlp gagal';
-    if (isYoutubeUrl(url) && isBotBlockError(errMsg)) {
-        throw new Error(`${errMsg.slice(-300)}\n\n💡 ${buildYoutubeBotHint()}`);
+    if (isYoutubeUrl(url) && sawBotBlock) {
+        throw new Error(`${errMsg.slice(-280)}\n\n💡 ${buildYoutubeBotHint()}`);
     }
     throw lastErr || new Error('yt-dlp gagal');
 }
@@ -148,23 +170,16 @@ export async function downloadAudioToMp3(url, outputPath) {
         if (fs.existsSync(f)) try { fs.unlinkSync(f); } catch (_) {}
     }
 
-    const buildAudioArgs = (extra = []) => (targetUrl) => [
+    const buildAudioArgs = (extra = []) => (targetUrl, youtubeCookies = false) => [
         '-x', '--audio-format', 'mp3', '--audio-quality', '0',
-        ...commonFlags(template),
+        ...commonFlags(template, { youtubeCookies }),
         ...extra,
         targetUrl
     ];
 
-    const builders = [buildAudioArgs()];
-    if (isYoutubeUrl(url)) {
-        builders.push(
-            buildAudioArgs(['--extractor-args', 'youtube:player_client=android,web']),
-            buildAudioArgs(['--extractor-args', 'youtube:player_client=ios,web']),
-            buildAudioArgs(['--extractor-args', 'youtube:player_client=tv_embedded,web']),
-            buildAudioArgs(['--extractor-args', 'youtube:player_client=mweb,web']),
-            buildAudioArgs(['--extractor-args', 'youtube:player_client=web_creator,web'])
-        );
-    }
+    const builders = isYoutubeUrl(url)
+        ? YT_CLIENT_FALLBACKS.map((extra) => buildAudioArgs(extra))
+        : [buildAudioArgs()];
 
     await runYtDlpWithFallback(url, builders);
 
@@ -220,15 +235,20 @@ async function downloadVideoRaw(url, outputPath, maxHeight = 1080) {
             'best[ext=mp4]/best'
         ].join('/');
 
-    const buildArgs = () => (targetUrl) => [
+    const buildVideoArgs = (extra = []) => (targetUrl, youtubeCookies = false) => [
         '-f', format,
         '--merge-output-format', 'mp4',
         '--postprocessor-args', 'ffmpeg:-movflags +faststart',
-        ...commonFlags(template),
+        ...commonFlags(template, { youtubeCookies }),
+        ...extra,
         targetUrl
     ];
 
-    await runYtDlpWithFallback(url, buildArgs);
+    const builders = isYoutubeUrl(url)
+        ? YT_CLIENT_FALLBACKS.map((extra) => buildVideoArgs(extra))
+        : [buildVideoArgs()];
+
+    await runYtDlpWithFallback(url, builders);
 
     const file = resolveOutputFile(base, ['mp4', 'mkv', 'webm']);
     if (!file) throw new Error('File video tidak ditemukan setelah unduhan');
@@ -241,6 +261,58 @@ async function downloadVideoRaw(url, outputPath, maxHeight = 1080) {
 
 export async function downloadYoutubeToMp3(url, outputPath) {
     return downloadAudioToMp3(url, outputPath);
+}
+
+/** Ambil lirik dari subtitle YouTube (auto/manual) via yt-dlp */
+export async function fetchYoutubeSubtitleLyrics(url, timeoutMs = 28_000) {
+    if (!isYoutubeUrl(url)) return null;
+
+    const dir = path.join('./temp', 'lyrics-subs');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const base = path.join(dir, `sub-${Date.now()}`);
+    const template = `${base}.%(ext)s`;
+
+    for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+        if (f.startsWith('sub-')) {
+            try { fs.unlinkSync(path.join(dir, f)); } catch (_) {}
+        }
+    }
+
+    const buildSubArgs = (extra = []) => (targetUrl, youtubeCookies = false) => [
+        '--write-auto-sub', '--write-sub',
+        '--sub-lang', 'en,id',
+        '--sub-format', 'vtt',
+        '--skip-download',
+        ...commonFlags(template, { youtubeCookies }),
+        ...extra,
+        targetUrl
+    ];
+
+    const builders = isYoutubeUrl(url)
+        ? YT_CLIENT_FALLBACKS.map((extra) => buildSubArgs(extra))
+        : [buildSubArgs()];
+
+    try {
+        await runYtDlpWithFallback(url, builders);
+        const vtt = resolveOutputFile(base, ['vtt']);
+        if (!vtt || !fs.existsSync(vtt)) return null;
+        const raw = fs.readFileSync(vtt, 'utf8');
+        try { fs.unlinkSync(vtt); } catch (_) {}
+        const syncedLines = mergeVttSyncedLines(parseVttSyncedLyrics(raw));
+        if (!syncedLines.length) return null;
+        const plain = syncedLines.map((l) => l.text).join('\n');
+        if (plain.length < 40) return null;
+        return {
+            plain,
+            syncedLines,
+            syncedLyrics: syncedLinesToLrc(syncedLines),
+            realSync: true,
+            vttSync: true
+        };
+    } catch (e) {
+        console.log('yt subs lyrics:', (e.message || '').slice(0, 120));
+        return null;
+    }
 }
 
 export async function getYtDlpTitle(url) {
@@ -265,8 +337,14 @@ export async function getYtDlpTitle(url) {
         ]
         : [[]];
     const attempts = [];
+    if (cookiesFile && fs.existsSync(cookiesFile) && fs.statSync(cookiesFile).size > 80) {
+        for (const extra of ytClients) {
+            attempts.push([...baseMeta, ...extra, url]);
+        }
+    }
     for (const extra of ytClients) {
-        attempts.push([...baseMeta, ...extra, url]);
+        const row = [...baseMeta, ...extra, url];
+        if (!attempts.some((a) => a.join('|') === row.join('|'))) attempts.push(row);
     }
     for (const browser of COOKIE_BROWSERS) {
         attempts.push(['--cookies-from-browser', browser, ...baseMeta, url]);

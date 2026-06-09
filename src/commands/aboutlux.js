@@ -63,18 +63,18 @@ function buildFullText(meta, version) {
         `├ Base · ${meta.region}\n` +
         `└ Role · ${meta.role}\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `📦 *FITUR* _(75+ perintah)_\n\n` +
+        `📦 *FITUR* _(80+ perintah)_\n\n` +
         `🎮 *Umum*\n` +
-        `\`!halo\` \`!ping\` \`!status\` \`!help\` \`!menu\` \`!notes\` \`!reminder\` \`!welcome\` \`!tagall\` \`!tanggal\` \`!server\`\n\n` +
+        `\`!guide\` \`!halo\` \`!ping\` \`!status\` \`!help\` \`!menu\` \`!berita\` \`!lapor\` \`!notes\` \`!reminder\` \`!welcome\` \`!tagall\` \`!tanggal\` \`!server\`\n\n` +
         `🧠 *AI & Chat*\n` +
-        `\`!tanya\` \`!coding\` \`!db\` \`!code\` \`!rangkum\` \`!brainstorm\` \`!translate\` \`!buat\` \`!lihat\` \`!q\` \`!fact\` \`!resetai\`\n\n` +
+        `\`!tanya\` \`!coding\` \`!db\` \`!code\` \`!rangkum\` \`!brainstorm\` \`!translate\` \`!lihat\` \`!q\` \`!fact\` \`!resetai\`\n\n` +
         `🎵 *Musik & Radio*\n` +
-        `\`!play\` \`!nowplaying\` \`!radio\` \`!discord\` \`!queue\` \`!skip\` \`!lirik\` \`!watch\`\n` +
+        `\`!play\` \`!nowplaying\` \`!discord\` \`!queue\` \`!skip\` \`!lirik\` \`!watch\`\n` +
         `_Luxx Watch — nonton bareng via web_\n\n` +
-        `🎌 *Hiburan*\n` +
-        `\`!simi\` \`!anime\` \`!football\` \`!character\` \`!waifu\` \`!quotesanime\` \`!darkjokes\` \`!pantun\` \`!cerpen\` \`!meme\`\n\n` +
+        `🎌 *Hiburan & Sastra*\n` +
+        `\`!sastra\` \`!anime\` \`!football\` \`!character\` \`!waifu\` \`!quotesanime\` \`!darkjokes\` \`!pantun\` \`!cerpen\` \`!meme\`\n\n` +
         `🎨 *Media & Tools*\n` +
-        `\`!sp\` \`!tts\` \`!quote\` \`!s\` \`!anomali\` \`!dl\` \`!ocr\` \`!qr\` \`!kalkulator\` \`!cuaca\` \`!stalk\`\n\n` +
+        `\`!buat\` \`!sp\` \`!quote\` \`!s\` \`!dl\` \`!ocr\` \`!qr\` \`!kalkulator\` \`!cuaca\` \`!stalk\`\n\n` +
         `🎲 *Fun & Games*\n` +
         `\`!apakah\` \`!gacha\` \`!voting\` \`!pilih\` \`!endvoting\`\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━\n` +

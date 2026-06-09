@@ -17,6 +17,7 @@
     "tunnel:start": "pm2 start ecosystem.config.cjs --only luxx-tunnel --update-env",
     "tunnel:restart": "pm2 restart luxx-tunnel --update-env",
     "oracle:checklist": "type scripts\\oracle-setup-checklist.txt",
+    "zelpstore:checklist": "type scripts\\zelpstore-setup-checklist.txt",
     "railway:checklist": "type scripts\\railway-setup-checklist.txt",
     "build:pages": "node scripts/build-pages.mjs",
     "export:portfolio": "node scripts/export-portfolio-repo.mjs",

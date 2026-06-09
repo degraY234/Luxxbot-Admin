@@ -28,10 +28,17 @@ config/cloudflared-credentials.json
 
 # Runtime / local
 data/sounds/
+data/youtube-cookies.txt
 temp/
 terminals/
 backup/
 dasu.response
+persist/
+
+# Script probe/diag lokal (jangan commit)
+scripts/_*
+scripts/probe-*
+scripts/test-*
 
 # Logs
 *.log

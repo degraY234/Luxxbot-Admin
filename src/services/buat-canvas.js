@@ -230,16 +230,53 @@ export async function generateFfmpegBuatImage(userPrompt) {
     return { buffer, source: 'luxx-ffmpeg', meta };
 }
 
+export async function generateBuatArtCard(userPrompt, enginePrompt) {
+    const idLines = (userPrompt.replace(/\s+/g, ' ').trim().match(/.{1,34}/g) || [userPrompt]).slice(0, 3);
+    const enLines = (enginePrompt.replace(/\s+/g, ' ').trim().match(/.{1,40}/g) || [enginePrompt]).slice(0, 6);
+    const lines = [
+        '✨ LUXXBOT !buat',
+        '━━━━━━━━━━━━━━━━',
+        '📝 Prompt kamu:',
+        ...idLines,
+        '',
+        '🤖 Diterjemahkan AI:',
+        ...enLines,
+        '',
+        '⏳ Mesin gambar sedang sibuk.',
+        'Prompt sudah dioptimalkan —',
+        'coba lagi 1–2 menit untuk',
+        'hasil gambar AI penuh.',
+        '',
+        '💎 LuxxBot'
+    ];
+
+    const buffer = await renderTextCard({
+        width: 1024,
+        height: 1024,
+        bg: '0x0a1420',
+        lines,
+        accent: '0x1E90FF'
+    });
+
+    return { buffer, source: 'luxx-artcard' };
+}
+
 export function translatePromptLocal(userInput) {
     let t = userInput.trim();
     const pairs = [
-        [/kucing/gi, 'cat'], [/anjing/gi, 'dog'], [/oranye/gi, 'orange'], [/biru/gi, 'blue'],
-        [/sofa/gi, 'sofa'], [/kartun/gi, 'cartoon'], [/cahaya lembut/gi, 'soft lighting'],
-        [/duduk/gi, 'sitting'], [/gaya/gi, 'style'], [/lucu/gi, 'cute'], [/di /gi, 'on ']
+        [/kucing/gi, 'cat'], [/anjing/gi, 'dog'], [/burung/gi, 'bird'], [/panda/gi, 'panda'],
+        [/oranye/gi, 'orange'], [/merah/gi, 'red'], [/biru/gi, 'blue'], [/hijau/gi, 'green'],
+        [/ungu/gi, 'purple'], [/kuning/gi, 'yellow'], [/putih/gi, 'white'], [/hitam/gi, 'black'],
+        [/kacamata/gi, 'glasses'], [/topi/gi, 'hat'], [/mobil/gi, 'car'], [/motor/gi, 'motorcycle'],
+        [/pemandangan/gi, 'landscape'], [/gunung/gi, 'mountain'], [/pantai/gi, 'beach'],
+        [/kartun/gi, 'cartoon'], [/anime/gi, 'anime'], [/realistis/gi, 'photorealistic'],
+        [/cahaya lembut/gi, 'soft lighting'], [/malam/gi, 'night'], [/siang/gi, 'daytime'],
+        [/duduk/gi, 'sitting'], [/berdiri/gi, 'standing'], [/lucu/gi, 'cute'], [/keren/gi, 'cool'],
+        [/pakai/gi, 'wearing'], [/dengan/gi, 'with'], [/di /gi, 'on ']
     ];
     for (const [re, rep] of pairs) t = t.replace(re, rep);
     return (
-        `A single ${t}, highly detailed, faithful to description, ` +
-        'clean composition, no watermark, no text labels, professional digital art.'
+        `${t}, photorealistic photograph, natural lighting, ` +
+        'sharp focus, realistic textures, DSLR 85mm, ultra HD 8K, no watermark, no text, not cartoon, not illustration.'
     );
 }

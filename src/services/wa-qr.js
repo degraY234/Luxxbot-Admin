@@ -3,7 +3,7 @@ import path from 'path';
 import { getConfiguredPublicBaseUrl } from '../utils/radio-url.js';
 import { getPairLink } from '../utils/startup-banner.js';
 import { getWaHealth } from '../wa-status.js';
-import { getSessionDiagnostics } from '../utils/wa-session.js';
+import { getSessionDiagnostics, clearWaSession } from '../utils/wa-session.js';
 
 function isRailwayOrPublicDeploy() {
     if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PUBLIC_DOMAIN) return true;
@@ -139,8 +139,12 @@ setInterval(()=>fetch('/pair/status').then(r=>r.json()).then(d=>{
     return pairPageShell({ title: 'LuxxBot — Scan QR', body, script });
 }
 
-function pairHtmlWaiting() {
-    const body = `<div class="grid">
+function pairHtmlWaiting({ staleSession = false } = {}) {
+    const staleNote = staleSession
+        ? `<div class="tip" style="margin-bottom:20px"><b>Session lama tidak valid</b> (logout dari HP/Railway). Bot sedang reset — QR muncul dalam ~10 detik. Kalau lama, klik <b>Reset &amp; QR baru</b> di bawah.</div>
+<button type="button" id="resetBtn" style="margin-bottom:20px;background:transparent;border:1px solid var(--line);color:var(--text);font:inherit;padding:12px 18px;border-radius:12px;cursor:pointer">🔄 Reset &amp; QR baru</button>`
+        : '';
+    const body = `${staleNote}<div class="grid">
 <div class="qr-panel">
 <div class="qr-wait"><div class="spinner"></div><p><b>Menunggu QR dari bot...</b></p><p id="waitSec" style="font-size:.9rem">Memuat bot WhatsApp...</p></div>
 </div>
@@ -149,6 +153,10 @@ function pairHtmlWaiting() {
 let s=0;
 const el=document.getElementById('waitSec');
 setInterval(()=>{s++;el.textContent='Menunggu '+s+' detik...';},1000);
+document.getElementById('resetBtn')?.addEventListener('click',()=>{
+  el.textContent='Reset session...';
+  fetch('/pair/reset',{method:'POST'}).then(()=>setTimeout(()=>location.reload(),2000)).catch(()=>{el.textContent='Gagal reset — restart PM2';});
+});
 const poll=()=>fetch('/pair/status').then(r=>r.json()).then(d=>{
   if(d.connected&&d.handlersReady){location.reload();return;}
   if(d.ready)location.reload();
@@ -171,7 +179,10 @@ function pairHtmlConnected() {
 function pairHtml() {
     const wa = getWaHealth();
     if (wa.connected && wa.handlersReady) return pairHtmlConnected();
-    return getQrState().ready ? pairHtmlReady() : pairHtmlWaiting();
+    if (getQrState().ready) return pairHtmlReady();
+    const session = getSessionDiagnostics();
+    const stale = session.paired && !wa.connected && wa.connection === 'close';
+    return pairHtmlWaiting({ staleSession: stale });
 }
 
 /** Simpan QR PNG + meta (dibaca proses HTTP terpisah) */
@@ -226,6 +237,17 @@ export function registerWaQrRoutes(app) {
             volumeMounted: session.volumeMounted,
             hint: session.pairHint
         });
+    });
+
+    app.post('/pair/reset', async (_req, res) => {
+        clearWaSession({ includeBackup: true });
+        try {
+            const { startLuxxBot } = await import('../luxx-bot.js');
+            startLuxxBot().catch((e) => console.error('❌ pair/reset:', e?.message || e));
+        } catch (e) {
+            console.error('❌ pair/reset import:', e?.message || e);
+        }
+        res.json({ ok: true, message: 'Session dihapus — tunggu QR di /pair' });
     });
 
     app.get('/pair/qr.png', (_req, res) => {

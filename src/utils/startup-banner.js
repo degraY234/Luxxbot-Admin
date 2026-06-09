@@ -97,7 +97,7 @@ export function getServiceLinks() {
         base,
         pair: `${base}/pair`,
         admin: `${base}/admin`,
-        radio: `${base}/radio`,
+        radio: `${base}/portfolio/radio`,
         watch: `${base}/watch`,
         health: `${base}/health`
     };

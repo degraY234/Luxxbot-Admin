@@ -8,6 +8,52 @@ const PERSIST_DIR = path.resolve(process.env.PERSIST_DIR || '/app/persist');
 const SESSION_BACKUP_DIR = path.join(PERSIST_DIR, 'session-backup');
 const CREDS_SNAPSHOT = path.join(PERSIST_DIR, 'data', 'wa-creds.json');
 
+/** Hapus session lokal (+ backup) — dipakai setelah logout 401 agar QR muncul lagi */
+export function clearWaSession({ includeBackup = true } = {}) {
+    let removed = 0;
+    try {
+        if (fs.existsSync(SESSION_DIR)) {
+            for (const name of fs.readdirSync(SESSION_DIR)) {
+                const p = path.join(SESSION_DIR, name);
+                try {
+                    if (fs.statSync(p).isFile()) {
+                        fs.unlinkSync(p);
+                        removed += 1;
+                    }
+                } catch { /* ignore */ }
+            }
+        }
+        if (includeBackup) {
+            if (fs.existsSync(SESSION_BACKUP_DIR)) {
+                for (const name of fs.readdirSync(SESSION_BACKUP_DIR)) {
+                    const p = path.join(SESSION_BACKUP_DIR, name);
+                    try {
+                        if (fs.statSync(p).isFile()) fs.unlinkSync(p);
+                    } catch { /* ignore */ }
+                }
+            }
+            try {
+                if (fs.existsSync(CREDS_SNAPSHOT)) fs.unlinkSync(CREDS_SNAPSHOT);
+            } catch { /* ignore */ }
+        }
+        for (const f of [
+            path.resolve('./temp/wa-qr.png'),
+            path.resolve('./temp/wa-qr-meta.json')
+        ]) {
+            try {
+                if (fs.existsSync(f)) fs.unlinkSync(f);
+            } catch { /* ignore */ }
+        }
+        if (removed > 0) {
+            console.log(`\x1b[33m🗑️  Session WA dihapus (${removed} file) — scan QR baru di /pair\x1b[0m`);
+        }
+        return removed > 0;
+    } catch (e) {
+        console.error('❌ clearWaSession:', e.message);
+        return false;
+    }
+}
+
 /** Session sudah pernah scan QR? */
 export function isWaSessionPaired() {
     try {

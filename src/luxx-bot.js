@@ -15,7 +15,8 @@ import {
     isWaSessionPaired,
     logSessionDiagnostics,
     backupWaSession,
-    restoreSessionFromBackupIfNeeded
+    restoreSessionFromBackupIfNeeded,
+    clearWaSession
 } from './utils/wa-session.js';
 
 const BOT_NAME = process.env.BOT_NAME || 'LuxxBot';
@@ -50,13 +51,17 @@ async function loadServicesAndHandlers(activeSock) {
             { registerMessageHandler },
             { registerGroupEventHandler },
             { setDailyFactSocket, startDailyFactScheduler },
-            { getOrCreateRoom }
+            { getOrCreateRoom },
+            { syncChangelogIfNeeded }
         ] = await Promise.all([
             import('./handlers/messages.js'),
             import('./handlers/group-events.js'),
             import('./services/daily-fact.js'),
-            import('./services/w2g.js')
+            import('./services/w2g.js'),
+            import('./services/changelog.js')
         ]);
+
+        syncChangelogIfNeeded();
 
         const { state } = await import('./state.js');
         state.isSleeping = false;
@@ -158,7 +163,7 @@ export async function startLuxxBot() {
         sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
 
-            if (qr && !isWaSessionPaired()) {
+            if (qr) {
                 setWaConnection('qr');
                 publishWaQr(qr).catch((e) => console.error('❌ QR:', e.message));
             }
@@ -188,7 +193,9 @@ export async function startLuxxBot() {
                     scheduleReconnect(delay);
                 } else if (!shouldReconnect) {
                     teardownSocket();
-                    console.error('\x1b[31m❌ WA logout — scan /pair sekali\x1b[0m');
+                    console.error('\x1b[31m❌ WA logout — hapus session, scan /pair\x1b[0m');
+                    clearWaSession({ includeBackup: true });
+                    scheduleReconnect(3000);
                 }
                 return;
             }

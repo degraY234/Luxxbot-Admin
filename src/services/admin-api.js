@@ -24,6 +24,7 @@ import { state } from '../state.js';
 import { runtime } from '../utils/runtime.js';
 import { getYoutubeCookiesStatus, saveYoutubeCookies } from '../utils/youtube-cookies.js';
 import { getSessionDiagnostics } from '../utils/wa-session.js';
+import { getCachedLyricsForTrack } from './radio-lyrics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const adminStaticDir = path.resolve(__dirname, '../../admin');
@@ -99,7 +100,8 @@ function buildStatusPayload() {
             listenUrl: getRadioListenUrl(),
             streamPath: '/radio/live.mp3',
             playback: getRadioPlayback(),
-            streamEpoch: getRadioStreamEpoch()
+            streamEpoch: getRadioStreamEpoch(),
+            lyrics: null
         },
         discord: {
             guildCount: discord.guildCount,
@@ -124,7 +126,22 @@ export function mountAdminApi(app) {
     });
 
     app.get('/admin/api/status', (req, res) => {
-        res.json(buildStatusPayload());
+        const payload = buildStatusPayload();
+        payload.radio.lyrics = payload.radio?.current
+            ? getCachedLyricsForTrack(payload.radio.current)
+            : { found: false, loading: false, lyrics: null };
+        res.json(payload);
+    });
+
+    app.get('/admin/api/radio-lyrics', (req, res) => {
+        res.json({
+            ok: true,
+            currentId: radio.current?.id ?? null,
+            playback: getRadioPlayback(),
+            lyrics: radio.current
+                ? getCachedLyricsForTrack(radio.current)
+                : { found: false, loading: false, lyrics: null }
+        });
     });
 
     app.get('/admin/api/queue', (req, res) => {
@@ -138,7 +155,12 @@ export function mountAdminApi(app) {
 
     app.post('/admin/api/skip', async (req, res) => {
         const result = await skipRadioTrack();
-        res.json({ ok: result.ok, message: result.message });
+        res.json({
+            ok: result.ok,
+            message: result.message,
+            streamEpoch: result.streamEpoch ?? getRadioStreamEpoch(),
+            queueLength: result.queueLength ?? radio.queue.length
+        });
     });
 
     app.post('/admin/api/clear', (req, res) => {

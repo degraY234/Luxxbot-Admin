@@ -11,9 +11,11 @@ import {
 } from '../utils/ytdlp-download.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+const IG_APP_ID = '936619743392459';
+const IG_GRAPHQL_DOC_IDS = ['8845758582119845', '23826011839236744'];
 
 export function parseDlArgs(args) {
-    const parts = [...args];
+    const parts = args.join(' ').trim().split(/\s+/).filter(Boolean);
     let mode = 'video';
     let quality = 'wa';
 
@@ -62,13 +64,80 @@ function pickBestMediaUrl(candidates) {
     return scored[0].url;
 }
 
-async function fetchBufferFromUrl(mediaUrl, maxMb = 64) {
+function extractIgShortcode(url) {
+    const m = url.match(/instagram\.com\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/i)
+        || url.match(/instagr\.am\/(?:p|reel)\/([A-Za-z0-9_-]+)/i);
+    return m?.[1] || null;
+}
+
+function normalizeIgReferer(url) {
+    const sc = extractIgShortcode(url);
+    return sc ? `https://www.instagram.com/reel/${sc}/` : url.split('?')[0];
+}
+
+function igCaptionFromMedia(media) {
+    const text = media?.edge_media_to_caption?.edges?.[0]?.node?.text;
+    return text?.trim().slice(0, 80) || 'Instagram';
+}
+
+function pickBestIgVideoUrl(node) {
+    if (!node?.is_video) return null;
+    const versions = [...(node.video_versions || [])];
+    if (node.video_url) {
+        versions.push({
+            url: node.video_url,
+            width: node.dimensions?.width || 0,
+            height: node.dimensions?.height || 0
+        });
+    }
+    if (!versions.length) return null;
+    versions.sort((a, b) => ((b.width || 0) * (b.height || 0)) - ((a.width || 0) * (a.height || 0)));
+    return versions[0].url;
+}
+
+function pickIgVideoMedia(media) {
+    if (!media) return null;
+    const children = media.edge_sidecar_to_children?.edges || [];
+    for (const edge of children) {
+        const url = pickBestIgVideoUrl(edge.node);
+        if (url) return { url, title: igCaptionFromMedia(media) };
+    }
+    const url = pickBestIgVideoUrl(media);
+    if (url) return { url, title: igCaptionFromMedia(media) };
+    return null;
+}
+
+async function fetchInstagramGraphqlMedia(shortcode, referer, docId) {
+    const res = await axios.get('https://www.instagram.com/graphql/query/', {
+        params: {
+            doc_id: docId,
+            variables: JSON.stringify({ shortcode })
+        },
+        headers: {
+            'User-Agent': UA,
+            'X-IG-App-ID': IG_APP_ID,
+            'X-ASBD-ID': '129477',
+            Referer: referer,
+            Accept: '*/*'
+        },
+        timeout: 35000,
+        validateStatus: () => true
+    });
+    if (res.status >= 400) throw new Error(`GraphQL HTTP ${res.status}`);
+    return res.data?.data?.xdt_shortcode_media || null;
+}
+
+async function fetchBufferFromUrl(mediaUrl, maxMb = 64, referer) {
     const res = await axios.get(mediaUrl, {
         responseType: 'arraybuffer',
         timeout: 180000,
         maxContentLength: maxMb * 1024 * 1024,
         maxRedirects: 5,
-        headers: { 'User-Agent': UA, Referer: mediaUrl, Accept: '*/*' }
+        headers: {
+            'User-Agent': UA,
+            Referer: referer || mediaUrl,
+            Accept: '*/*'
+        }
     });
     return Buffer.from(res.data);
 }
@@ -184,6 +253,41 @@ async function downloadSaveig(url) {
     return { buffer, title: 'Instagram', mimetype: 'video/mp4', fileName: 'instagram_hd.mp4' };
 }
 
+async function downloadInstagramGraphql(url) {
+    const shortcode = extractIgShortcode(url);
+    if (!shortcode) throw new Error('Link Instagram tidak valid');
+
+    const referer = normalizeIgReferer(url);
+    let media = null;
+    const gqlErrors = [];
+
+    for (const docId of IG_GRAPHQL_DOC_IDS) {
+        try {
+            media = await fetchInstagramGraphqlMedia(shortcode, referer, docId);
+            if (media) break;
+        } catch (e) {
+            gqlErrors.push(e.message);
+        }
+    }
+
+    const picked = pickIgVideoMedia(media);
+    if (!picked?.url) {
+        throw new Error(
+            gqlErrors.at(-1) ||
+            (media ? 'Postingan Instagram bukan video' : 'Video tidak ditemukan (privat atau link salah)')
+        );
+    }
+
+    const buffer = await fetchBufferFromUrl(picked.url, 64, 'https://www.instagram.com/');
+    return {
+        buffer,
+        title: picked.title,
+        mimetype: 'video/mp4',
+        fileName: 'instagram_hd.mp4',
+        qualityLabel: 'MP4 HD'
+    };
+}
+
 async function downloadInstagram(url, mode) {
     const errors = [];
     const tryApi = async (name, fn) => {
@@ -196,18 +300,21 @@ async function downloadInstagram(url, mode) {
     };
 
     if (mode === 'video') {
+        const gql = await tryApi('IG', () => downloadInstagramGraphql(url));
+        if (gql) return gql;
+
         for (const [name, fn] of [
-            ['SnapInsta', () => downloadSnapinsta(url)],
+            ['SaveIG', () => downloadSaveig(url)],
             ['SaveInsta', () => downloadSaveinsta(url)],
-            ['SaveIG', () => downloadSaveig(url)]
+            ['SnapInsta', () => downloadSnapinsta(url)]
         ]) {
             const r = await tryApi(name, fn);
-            if (r) return r;
+            if (r) return { ...r, qualityLabel: 'MP4 HD' };
         }
     }
 
     try {
-        return await downloadViaYtDlp(url, mode, path.join('./temp/dl', `ig-${Date.now()}`), 'wa');
+        return await downloadViaYtDlp(url, mode, path.join('./temp/dl', `ig-${Date.now()}`), mode === 'video' ? 'hd' : 'wa');
     } catch (e) {
         errors.push(`yt-dlp: ${e.message}`);
     }
@@ -298,6 +405,7 @@ export function getDlHelpText() {
         `🎵 *Audio MP3* kualitas tinggi:\n` +
         `\`!dl mp3 <link yt>\`\n\n` +
         `✅ YouTube · TikTok · Instagram · Facebook\n` +
+        `_IG/TikTok: kirim link langsung, video HD tanpa login_\n` +
         `_Video YT dioptimasi H.264+AAC biar lancar di WhatsApp mobile_`
     );
 }

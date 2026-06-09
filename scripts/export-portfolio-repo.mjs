@@ -9,7 +9,6 @@ import { fileURLToPath } from 'url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const src = path.join(root, 'portfolio');
-const out = path.resolve(process.argv[2] || path.join(root, '..', 'doxxborx-portfolio'));
 const photoSrc = path.join(root, 'assets', 'aboutlux-creator.jpg');
 
 function cpDir(from, to) {
@@ -23,11 +22,18 @@ function cpDir(from, to) {
     }
 }
 
-if (fs.existsSync(out)) {
-    console.error(`❌ Folder sudah ada: ${out}`);
-    console.error('   Hapus dulu atau tentukan path lain.');
+const force = process.argv.includes('--force');
+const extraArgs = process.argv.slice(2).filter((a) => !a.startsWith('-'));
+const resolvedOut = path.resolve(extraArgs[0] || path.join(root, '..', 'doxxborx-portfolio'));
+
+if (fs.existsSync(resolvedOut) && !force) {
+    console.error(`❌ Folder sudah ada: ${resolvedOut}`);
+    console.error('   Pakai: npm run sync:portfolio  (update PortoDoxxborx)');
+    console.error('   Atau:  node scripts/export-portfolio-repo.mjs --force [folder]');
     process.exit(1);
 }
+
+const out = resolvedOut;
 
 cpDir(src, out);
 
@@ -43,12 +49,16 @@ console.log('');
 console.log('✅ Portfolio siap di folder:');
 console.log(`   ${out}`);
 console.log('');
-console.log('Langkah berikutnya:');
-console.log('  1. Buat repo baru di GitHub (public)');
-console.log('  2. cd ke folder di atas');
-console.log('  3. git init && git add . && git commit -m "init portfolio"');
-console.log('  4. git remote add origin https://github.com/USER/REPO.git');
-console.log('  5. git branch -M main && git push -u origin main');
-console.log('  6. GitHub → Settings → Pages → Source: GitHub Actions');
-console.log('  7. Edit CNAME kalau domain kamu beda dari doxxborx.dev');
+console.log('⚠️  JANGAN git init di folder "Project Bot Wa" — itu repo LuxxBot!');
+console.log('');
+console.log('PowerShell (jalankan di folder export di atas):');
+console.log('  cd "' + out + '"');
+console.log('  git init');
+console.log('  git add .');
+console.log('  git commit -m "init portfolio"');
+console.log('  git remote add origin https://github.com/degraY234/PortoDoxxborx.git');
+console.log('  git branch -M main');
+console.log('  git push -u origin main');
+console.log('');
+console.log('Atau dari Project Bot Wa cukup:  npm run sync:portfolio');
 console.log('');

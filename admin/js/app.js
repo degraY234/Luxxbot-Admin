@@ -232,6 +232,108 @@ function radioPreparingLabel(r) {
   return next ? `Berikutnya: ${next.title}` : 'Tunggu sebentar';
 }
 
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+let lyricsState = {
+  trackKey: null,
+  contentKey: null,
+  data: null,
+  playback: { positionSec: 0, durationSec: 0, progress: 0, preparedAt: 0 },
+  fetchedAt: 0
+};
+
+
+function lyricTrackKey(cur) {
+  return cur ? `${cur.id ?? ''}:${cur.title}` : null;
+}
+
+function lyricContentKey(lyrics) {
+  if (!lyrics?.lyrics) return null;
+  return `${lyrics.trackId ?? ''}:${lyrics.lyrics.length}`;
+}
+
+function renderLyrics(r = {}) {
+  const cur = r.current;
+  const lyrics = r.lyrics;
+  const body = $('#lyrics-body');
+  const empty = $('#lyrics-empty');
+  const meta = $('#lyrics-meta');
+  const badge = $('#lyrics-source');
+  const progress = $('#lyrics-progress-fill');
+  const trackKey = lyricTrackKey(cur);
+
+  if (!cur) {
+    lyricsState = { trackKey: null, contentKey: null, data: null, playback: { positionSec: 0, durationSec: 0, progress: 0, preparedAt: 0 }, fetchedAt: 0 };
+
+    meta.textContent = 'Belum ada lagu';
+    badge.textContent = '—';
+    empty.hidden = false;
+    body.classList.add('hidden');
+    body.innerHTML = '';
+    progress.style.width = '0%';
+    return;
+  }
+
+  meta.textContent = `${cur.title} — ${cur.author || 'Unknown'} · 🙋 ${cur.requestedBy || '-'}`;
+  lyricsState.playback = {
+    positionSec: r.playback?.positionSec ?? 0,
+    durationSec: r.playback?.durationSec ?? 0,
+    progress: r.playback?.progress ?? 0,
+    preparedAt: r.playback?.preparedAt ?? 0
+  };
+  lyricsState.fetchedAt = Date.now();
+
+  const lyricsStale = lyrics?.trackId != null && cur.id != null && lyrics.trackId !== cur.id;
+  const loading = lyrics?.loading || lyricsStale;
+
+  if (loading) {
+    lyricsState.data = null;
+    badge.textContent = 'Memuat...';
+    empty.textContent = 'Mencari lirik lagu...';
+    empty.hidden = false;
+    body.classList.add('hidden');
+    body.innerHTML = '';
+    progress.style.width = `${r.playback?.progress ?? 0}%`;
+    return;
+  }
+
+  if (!lyrics?.found || !lyrics?.lyrics) {
+    lyricsState.data = null;
+
+    badge.textContent = 'Tidak ditemukan';
+    empty.textContent = lyrics?.retryInSec
+      ? `Mencari lirik lagi dalam ${lyrics.retryInSec}s...`
+      : 'Mencari lirik — retry otomatis...';
+    empty.hidden = false;
+    body.classList.add('hidden');
+    body.innerHTML = '';
+    progress.style.width = `${r.playback?.progress ?? 0}%`;
+    return;
+  }
+
+  badge.textContent = lyrics.source || 'LRCLIB';
+  empty.hidden = true;
+  body.classList.remove('hidden');
+
+  const contentKey = lyricContentKey(lyrics);
+  const rebuild = trackKey !== lyricsState.trackKey || contentKey !== lyricsState.contentKey;
+  lyricsState.trackKey = trackKey;
+  lyricsState.contentKey = contentKey;
+  lyricsState.data = lyrics;
+
+  if (rebuild) {
+    body.innerHTML = `<pre class="lyric-plain">${escapeHtml(lyrics.lyrics)}</pre>`;
+    body.scrollTop = 0;
+  }
+
+  if (progress) progress.style.width = '0%';
+}
+
 function renderStatus(d) {
   $('#conn-badge').textContent = 'online';
   $('#conn-badge').className = 'badge online';
@@ -286,7 +388,9 @@ function renderStatus(d) {
   }
 
   const r = d.radio || {};
+  lastAdminRadio = r;
   renderPlayer(r, cfg().base);
+  renderLyrics(r);
 
   const q = r.queue || [];
   $('#queue-list').innerHTML = q.length
@@ -297,6 +401,21 @@ function renderStatus(d) {
         return `<li>${thumb}<div><strong>${i + 1}.</strong> ${t.title}<br><span class="muted">🙋 ${t.requestedBy}</span></div></li>`;
       }).join('')
     : '<li class="muted">Antrian kosong</li>';
+}
+
+let lyricsPollTimer = null;
+let lastAdminRadio = null;
+
+async function pollAdminLyrics() {
+  try {
+    const d = await api('/radio-lyrics');
+    if (!lastAdminRadio?.current && !d?.currentId) return;
+    renderLyrics({
+      ...lastAdminRadio,
+      playback: d.playback || lastAdminRadio?.playback,
+      lyrics: d.lyrics
+    });
+  } catch (_) { /* ignore */ }
 }
 
 async function refresh() {
@@ -342,7 +461,8 @@ async function doLogin() {
     loginScreen.classList.add('hidden');
     appScreen.classList.remove('hidden');
     refresh();
-    if (!window._poll) window._poll = setInterval(refresh, 5000);
+    if (!window._poll) window._poll = setInterval(refresh, 4000);
+    if (!lyricsPollTimer) lyricsPollTimer = setInterval(pollAdminLyrics, 2000);
   } catch (e) {
     showLoginError(e.message);
   } finally {
@@ -367,7 +487,8 @@ $('#btn-logout').addEventListener('click', () => {
   loginScreen.classList.remove('hidden');
   clearInterval(window._poll);
   window._poll = null;
-
+  clearInterval(lyricsPollTimer);
+  lyricsPollTimer = null;
 });
 $('#btn-refresh').addEventListener('click', refresh);
 $('#btn-skip').addEventListener('click', async () => {

@@ -1,0 +1,83 @@
+═══════════════════════════════════════════════════════════
+  LUXXBOT — GITHUB + ZELPSTORE (VPS) — CHECKLIST
+═══════════════════════════════════════════════════════════
+
+BAGIAN A — GITHUB (sudah disiapkan di repo ini)
+───────────────────────────────────────────────────────────
+Repo : https://github.com/degraY234/Luxxbot-Admin
+Branch deploy : feature/railway-deploy
+
+Yang TIDAK di-push (aman):
+  - .env (API key)
+  - session/ (login WhatsApp)
+  - persist/ (backup session & cookies)
+  - node_modules/
+
+Yang ADA di GitHub:
+  - Semua source bot (src/, commands, services)
+  - admin/, portfolio/, radio
+  - ecosystem.config.cjs (PM2 — sama seperti PC)
+  - scripts/zelpstore-deploy.sh
+
+BAGIAN B — ZELPSTORE: BUAT VPS
+───────────────────────────────────────────────────────────
+1. Buat VPS Ubuntu 22/24 di Zelpstore
+2. Buka port:
+   - TCP 22  (SSH)
+   - TCP 3920 (radio, admin, pair WA)
+3. Catat IP publik VPS
+
+BAGIAN C — DEPLOY PERTAMA (SSH ke VPS)
+───────────────────────────────────────────────────────────
+ssh root@IP_VPS   (atau user yang diberikan Zelpstore)
+
+git clone -b feature/railway-deploy \
+  https://github.com/degraY234/Luxxbot-Admin.git ~/luxxbot
+
+cd ~/luxxbot
+chmod +x scripts/zelpstore-deploy.sh
+./scripts/zelpstore-deploy.sh
+
+BAGIAN D — ISI .env DI VPS (copy dari PC, jangan commit)
+───────────────────────────────────────────────────────────
+nano ~/luxxbot/.env
+
+Paste isi .env dari PC kamu, lalu pastikan:
+  PERSIST_DIR=/root/luxxbot/persist   (sesuaikan path)
+  RADIO_PUBLIC_URL=http://IP_VPS:3920
+  RADIO_BIND_HOST=0.0.0.0
+
+pm2 restart luxx --update-env
+
+BAGIAN E — SESSION WHATSAPP
+───────────────────────────────────────────────────────────
+Opsi 1 — Copy dari PC (tanpa scan QR lagi):
+  scp -r "session" root@IP_VPS:~/luxxbot/session
+
+Opsi 2 — Scan baru:
+  Buka http://IP_VPS:3920/pair di browser
+  Scan QR dari HP
+
+BAGIAN F — UPDATE NANTI (sama mudahnya)
+───────────────────────────────────────────────────────────
+Di PC: edit kode → git push
+
+Di VPS:
+  cd ~/luxxbot
+  ./scripts/luxx-ctl.sh update
+
+Atau manual:
+  git pull
+  npm install --omit=dev
+  pm2 restart luxx --update-env
+
+BAGIAN G — KONTROL SEHARI-HARI
+───────────────────────────────────────────────────────────
+./scripts/luxx-ctl.sh status
+./scripts/luxx-ctl.sh restart
+./scripts/luxx-ctl.sh logs
+
+Semua fitur (!menu, !buat, !play, radio, admin) jalan
+sama seperti PM2 di PC — hanya beda cara deploy & update.
+
+═══════════════════════════════════════════════════════════

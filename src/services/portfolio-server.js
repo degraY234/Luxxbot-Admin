@@ -25,6 +25,10 @@ function sendPortfolio(_req, res) {
     res.sendFile(path.join(portfolioDir, 'index.html'));
 }
 
+function sendRadioPage(_req, res) {
+    res.sendFile(path.join(portfolioDir, 'radio.html'));
+}
+
 export function mountPortfolioServer(app) {
     app.get('/portfolio/img/profile.jpg', (req, res) => {
         const photo = resolveProfilePhoto();
@@ -35,6 +39,8 @@ export function mountPortfolioServer(app) {
 
     app.get('/portfolio', sendPortfolio);
     app.get('/portfolio/', sendPortfolio);
+    app.get('/portfolio/radio', sendRadioPage);
+    app.get('/portfolio/radio/', sendRadioPage);
     app.use('/portfolio', express.static(portfolioDir, { index: false, redirect: false }));
 
     console.log(`\x1b[36m🌐 Portfolio: ${portfolioPublicUrl()}\x1b[0m`);

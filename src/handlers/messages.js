@@ -5,9 +5,9 @@ import os from 'os';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { minify } from 'terser';
-import { Sticker, StickerTypes } from 'wa-sticker-formatter';
+
 import { buildMenuText } from '../../menu.js';
-import { BOT_NAME, OWNER_NUMBER, PM2_APP_NAME, ai, GEMINI_API_KEY, GEMINI_VISION_MODEL, startTime, W2G_ROOM_FILE, bratStyles } from '../config.js';
+import { BOT_NAME, OWNER_NUMBER, PM2_APP_NAME, ai, GEMINI_API_KEY, GEMINI_VISION_MODEL, startTime, W2G_ROOM_FILE } from '../config.js';
 import { state, aiConversationMemory, userAIContext } from '../state.js';
 import { checkCooldown, checkCommandCooldown, getRemainingCooldown } from '../utils/cooldown.js';
 import { runtime } from '../utils/runtime.js';
@@ -18,8 +18,7 @@ import { buildChangelogText } from '../services/changelog.js';
 import { groqAI, tanyakanAI, tryCreatorReply } from '../services/ai.js';
 import { askLuxxAI } from '../services/ai-context.js';
 import { trackGroupBotActivity } from '../services/group-bot-context.js';
-import { generateFallbackImage, polishText } from '../services/media.js';
-import { generateBuatImage } from '../services/buat-image.js';
+
 import { fetchFootballSchedule } from '../services/football.js';
 import {
     handlePlayCommand,
@@ -34,7 +33,7 @@ import { handleStickerCommand } from '../commands/sticker.js';
 import { handleStatusCommand } from '../commands/status.js';
 import { handleHelpCommand } from '../commands/help-cmd.js';
 import { handleWelcomeCommand } from '../commands/welcome.js';
-import { handleTtsCommand } from '../commands/tts.js';
+
 import { handleQuoteCommand } from '../commands/quote.js';
 import { handleQuotesAnimeCommand } from '../commands/quotes-anime.js';
 import { handleDarkJokesCommand } from '../commands/darkjokes.js';
@@ -44,6 +43,13 @@ import { handleWatchCommand } from '../commands/watch.js';
 import { handleSpCommand, handleSpPick, getSpSession } from '../commands/sp.js';
 import { handleJoinCommand } from '../commands/join.js';
 import { handleDbCommand } from '../commands/db.js';
+import { handleTranslateCommand } from '../commands/translate-cmd.js';
+import { handleBeritaCommand } from '../commands/berita.js';
+import { handleSastraCommand, getSastraSession, handleSastraPick } from '../commands/sastra.js';
+import { handleBuatCommand } from '../commands/buat.js';
+import { handlePantunCommand } from '../commands/pantun.js';
+import { handleGuideCommand } from '../commands/guide.js';
+import { handleLaporCommand } from '../commands/lapor.js';
 
 let boundMessageSock = null;
 
@@ -54,6 +60,11 @@ const COMMAND_ALIASES = {
     ply: 'play',
     wath: 'watch'
 };
+
+/** Perintah yang pakai `|` — argumen disatukan (bukan split spasi) */
+const PHRASE_COMMANDS = new Set([
+    's', 'sticker', 'dl', 'quote', 'lirik', 'lyrics'
+]);
 
 export function registerMessageHandler(sock) {
     if (boundMessageSock === sock) return;
@@ -87,18 +98,24 @@ export function registerMessageHandler(sock) {
             let command = null;
             let args = [];
             if (text.startsWith('!')) {
-                const parts = text.slice(1).split(' ');
-                command = parts[0].toLowerCase();
+                const raw = text.slice(1).trim();
+                const sp = raw.indexOf(' ');
+                command = (sp === -1 ? raw : raw.slice(0, sp)).toLowerCase();
                 if (COMMAND_ALIASES[command]) command = COMMAND_ALIASES[command];
-                args = parts.slice(1);
+                const rest = sp === -1 ? '' : raw.slice(sp + 1).trim();
+                args = rest
+                    ? (PHRASE_COMMANDS.has(command) ? [rest] : rest.split(/\s+/))
+                    : [];
             }
 
             const playPickMatch = text.match(/^(?:!)?(\d{1,2})(?:[.,)\s]|$)/);
             const playSession = global.playSession?.[from];
             const playSessionFresh = playSession && (Date.now() - (playSession.at || 0) < 5 * 60 * 1000);
             const spSession = getSpSession(from);
+            const sastraSession = getSastraSession(from);
             const isSpPick = Boolean(spSession && playPickMatch);
             const isPlayPick = Boolean(playSessionFresh && playPickMatch && !isSpPick);
+            const isSastraPick = Boolean(sastraSession && playPickMatch && !isSpPick && !isPlayPick);
 
             // =======================================================
             // 🔊 PILIHAN SOUND !sp → kirim audio + simpan library
@@ -106,6 +123,15 @@ export function registerMessageHandler(sock) {
             if (isSpPick) {
                 const selectedIndex = parseInt(playPickMatch[1], 10) - 1;
                 const handled = await handleSpPick({ sock, from, msg, selectedIndex, sender });
+                if (handled) return;
+            }
+
+            // =======================================================
+            // 📜 PILIHAN NEGARA !sastra → puisi dunia
+            // =======================================================
+            if (isSastraPick) {
+                const selectedIndex = playPickMatch[1];
+                const handled = await handleSastraPick({ sock, from, msg, pick: selectedIndex });
                 if (handled) return;
             }
 
@@ -132,7 +158,7 @@ export function registerMessageHandler(sock) {
                             statusText:
                                 `✅ *${chosenTrack.title}* masuk antrian!\n\n` +
                                 `${getDiscordRadioStatus()}\n\n` +
-                                `📋 \`!queue\` · ⏭️ \`!skip\` · 📝 \`!lirik\` · 📻 \`!radio\``,
+                                `📋 \`!queue\` · ⏭️ \`!skip\` · 📝 \`!lirik\` · 🔗 _Link player dikirim di bawah_`,
                             quoted: msg
                         });
                     } catch (e) {
@@ -209,7 +235,7 @@ export function registerMessageHandler(sock) {
             }
 
             if (state.isSelfMode && !isAdmin) return;
-            const wakeCommands = ['bangun', 'menu', 'help', 'status', 'ping', 'halo', 'aboutlux'];
+            const wakeCommands = ['bangun', 'menu', 'help', 'guide', 'status', 'ping', 'halo', 'aboutlux'];
             if (state.isSleeping && !wakeCommands.includes(command)) {
                 if (isAdmin) {
                     return await sock.sendMessage(from, {
@@ -249,10 +275,6 @@ export function registerMessageHandler(sock) {
 
             if (command === 'welcome') {
                 return handleWelcomeCommand({ sock, from, msg, args, isGroup, isAdmin: isLocalGroupAdmin || isAdmin });
-            }
-
-            if (command === 'tts' || command === 'speak') {
-                return handleTtsCommand({ sock, from, msg, args });
             }
 
             if (command === 'sp' || command === 'sound' || command === 'soundpad') {
@@ -602,28 +624,6 @@ export function registerMessageHandler(sock) {
                 return await handleLyricsCommand({ sock, from, msg, args });
             }
 
-            if (command === 'simi') {
-                const simiText = args.join(' ');
-                if (!simiText) return await sock.sendMessage(from, { text: '⚠️ Format: `!simi pertanyaan_kamu`' }, { quoted: msg });
-                const simiCreator = tryCreatorReply(simiText);
-                if (simiCreator) {
-                    return await sock.sendMessage(from, { text: `🤖 *Simi:*\n\n${simiCreator}` }, { quoted: msg });
-                }
-                const simiDeep = /bot|wabot|luxx|banding|lebih bagus|fitur|menurutmu|menurut mu|siapa yang/i.test(simiText);
-                if (simiDeep) {
-                    const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, simiText, 'chat_context');
-                    return await sock.sendMessage(from, { text: `🤖 *LuxxBot:*\n\n${res}` }, { quoted: msg });
-                }
-                try {
-                    const res = await axios.get(`https://api.simsimi.vn/requestapi`, {
-                        params: { text: simiText, lc: 'id' }, timeout: 5000
-                    });
-                    await sock.sendMessage(from, { text: `🤖 *Simi:*\n\n${res.data?.message || 'Simi tidak bisa menjawab.'}` }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(from, { text: '❌ Simi sedang offline.' }, { quoted: msg });
-                }
-            }
-
             if (command === 'darkjokes') {
                 if (!checkCooldown(sender, 'darkjokes', 8000)) {
                     return await sock.sendMessage(from, { text: '⏳ Tunggu sebentar sebelum dark joke berikutnya.' }, { quoted: msg });
@@ -639,18 +639,7 @@ export function registerMessageHandler(sock) {
             }
 
             if (command === 'pantun') {
-                const tema = (args[0] || 'lucu').toLowerCase();
-                const pantunData = {
-                    lucu: ['Buah apel di atas meja\nDimakan adik yang cantik jelita\nKalau kamu nggak mau kerja\nJadi pengangguran seumur hidup lah kita 😂'],
-                    cinta: ['Pergi ke taman memetik bunga\nBunganya indah berwarna merah\nSejak bertemu senyummu\nHatiku selalu memanggil namamu ❤️'],
-                    nasihat: ['Kalau ada sumur di ladang\nBoleh kita menumpang mandi\nKalau ada umur yang panjang\nBoleh kita berjumpa lagi 🌸'],
-                    semangat: ['Burung merpati terbang tinggi\nMelintas awan di langit biru\nJangan pernah berhenti bermimpi\nKarena mimpi adalah awal majumu 🚀']
-                };
-                const list = pantunData[tema] || pantunData.lucu;
-                const hasil = list[Math.floor(Math.random() * list.length)];
-                await sock.sendMessage(from, {
-                    text: `╭━━━〔 🎭 PANTUN NUSANTARA 🎭 〕━━━\n\n${hasil}\n\n━━━━━━━━━━━━━━━━━━\n🌷 Powered By ${BOT_NAME}`
-                }, { quoted: msg });
+                return handlePantunCommand({ sock, from, msg, args });
             }
 
             if (command === 'meme') {
@@ -674,49 +663,6 @@ export function registerMessageHandler(sock) {
                     } catch (_) {
                         await sock.sendMessage(from, { text: '❌ Gagal dapet meme, coba lagi nanti.' }, { quoted: msg });
                     }
-                }
-            }
-
-            // =======================================================
-            // 🎨 AI & IMAGE GENERATION
-            // =======================================================
-            if (command === 'buat') {
-                const deskripsi = args.join(' ').trim();
-                if (!deskripsi) return await sock.sendMessage(from, { text: '⚠️ Kasih deskripsi gambar! Contoh: `!buat kucing pakai kacamata`' }, { quoted: msg });
-
-                const loadingMsg = await sock.sendMessage(from, {
-                    text: '🎨 Menggambar...\n_(biasanya 5–15 detik)_'
-                }, { quoted: msg });
-                try {
-                    const { buffer, source, seed, enginePrompt, aiGenerated } = await generateBuatImage(deskripsi);
-
-                    try {
-                        await sock.sendMessage(from, {
-                            text: source === 'cache' ? '✨ Dari cache...' : '🎨 Hampir selesai...',
-                            edit: loadingMsg.key
-                        });
-                    } catch (_) { /* edit tidak didukung di semua client */ }
-
-                    const waktu = new Date().toLocaleString('id-ID', {
-                        timeZone: 'Asia/Jakarta',
-                        day: 'numeric', month: 'short', year: 'numeric',
-                        hour: '2-digit', minute: '2-digit'
-                    });
-                    let caption =
-                        `💎 *${aiGenerated ? 'Gambar AI' : 'Ilustrasi LuxxBot'}*\n\n` +
-                        `📝 *Prompt:* ${deskripsi}\n`;
-                    if (!aiGenerated) {
-                        caption += `_Layanan gambar AI sibuk — ilustrasi dibuat sesuai prompt kamu._\n`;
-                    }
-                    caption += `🕐 *Dibuat:* ${waktu} WIB`;
-                    if (seed != null) caption += `\n🎲 *Seed:* ${seed}`;
-
-                    await sock.sendMessage(from, { image: buffer, caption }, { quoted: msg });
-                } catch (err) {
-                    console.error('!buat error:', err.message);
-                    await sock.sendMessage(from, {
-                        text: `❌ Gagal membuat gambar.\n\n💡 Tips: deskripsi spesifik (subjek, warna, gaya).\n_${(err.message || '').slice(0, 120)}_`
-                    }, { quoted: msg });
                 }
             }
 
@@ -790,11 +736,28 @@ export function registerMessageHandler(sock) {
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
             }
 
-            if (command === 'translate') {
-                const query = args.join(' ');
-                if (!query) return await sock.sendMessage(from, { text: '⚠️ Teksnya mana yang mau ditranslate? 🌐' }, { quoted: msg });
-                const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'translate');
-                await sock.sendMessage(from, { text: res }, { quoted: msg });
+            if (command === 'translate' || command === 'tr') {
+                return handleTranslateCommand({ sock, from, msg, args });
+            }
+
+            if (command === 'berita' || command === 'news') {
+                return handleBeritaCommand({ sock, from, msg, args });
+            }
+
+            if (command === 'sastra' || command === 'puisi') {
+                return handleSastraCommand({ sock, from, msg, args });
+            }
+
+            if (command === 'buat' || command === 'generate') {
+                return handleBuatCommand({ sock, from, msg, args });
+            }
+
+            if (command === 'guide' || command === 'start' || command === 'panduan') {
+                return handleGuideCommand({ sock, from, msg });
+            }
+
+            if (command === 'lapor' || command === 'report' || command === 'feedback') {
+                return handleLaporCommand({ sock, from, msg, args, sender, isGroup });
             }
 
             if (command === 'q') {
@@ -925,26 +888,6 @@ export function registerMessageHandler(sock) {
                     return sock.sendMessage(from, { text: '⏳ Sabar ya, jangan spam 😤' }, { quoted: msg });
                 }
                 return handleStickerCommand({ sock, from, msg, args });
-            }
-
-            if (command === 'anomali') {
-                if (!checkCooldown(sender, 'anomali', 10000)) return sock.sendMessage(from, { text: '⏳ Tunggu dulu ya, jangan spam 😤' }, { quoted: msg });
-                let teksAnomali = args.join(' ');
-                if (!teksAnomali) return sock.sendMessage(from, { text: '⚠️ Contoh: !anomali aku capek banget' }, { quoted: msg });
-                teksAnomali = await polishText(teksAnomali);
-                await sock.sendMessage(from, { text: '🎨 bikin stiker dulu ya...' }, { quoted: msg });
-                try {
-                    const style = bratStyles[Math.floor(Math.random() * bratStyles.length)];
-                    const bratUrl = `https://brat.caliph.dev/api/brat?text=${encodeURIComponent(teksAnomali + ' | ' + style)}`;
-                    const resBrat = await axios.get(bratUrl, { responseType: 'arraybuffer', timeout: 10000 });
-                    const bufBrat = Buffer.from(resBrat.data);
-                    const stiker = new Sticker(bufBrat, { pack: `Anomali ${style} 🎭`, author: 'zetbot premium', type: StickerTypes.FULL, quality: 80 });
-                    await sock.sendMessage(from, { sticker: await stiker.toBuffer() }, { quoted: msg });
-                } catch (e) {
-                    const fallback = await generateFallbackImage(teksAnomali);
-                    const stiker = new Sticker(fallback, { pack: 'AI fallback 🎨', author: 'zetbot', type: StickerTypes.FULL, quality: 80 });
-                    await sock.sendMessage(from, { sticker: await stiker.toBuffer() }, { quoted: msg });
-                }
             }
 
             // =======================================================

@@ -8,7 +8,6 @@ import {
     addTextToImageV3,
     parseStickerArgs,
     getStickerHelpText,
-    polishText,
     STICKER_STYLES
 } from '../services/media.js';
 
@@ -39,25 +38,12 @@ export async function handleStickerCommand({ sock, from, msg, args }) {
         }, { quoted: msg });
     }
 
-    let { style, topText, bottomText } = parsed;
+    const { style, topText, bottomText } = parsed;
     const meta = STICKER_STYLES[style] || STICKER_STYLES.premium;
 
-    if (topText) topText = await polishText(topText);
-    if (bottomText && bottomText !== meta.defaultBottom) {
-        bottomText = await polishText(bottomText);
-    } else if (!bottomText && meta.defaultBottom) {
-        bottomText = meta.defaultBottom;
-    }
-
-    const captionPreview =
-        `🎨 *Luxx Sticker Studio*\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `🎭 Tema: *${meta.label}*\n` +
-        `📝 Atas: ${topText || '—'}\n` +
-        `📝 Bawah: ${bottomText || '—'}\n` +
-        `⚡ Rendering premium...`;
-
-    await sock.sendMessage(from, { text: captionPreview }, { quoted: msg });
+    await sock.sendMessage(from, {
+        text: `🎨 Membuat stiker *${meta.label}*${topText || bottomText ? ' + teks' : ''}...`
+    }, { quoted: msg });
 
     try {
         ensureTemp();
@@ -70,18 +56,13 @@ export async function handleStickerCommand({ sock, from, msg, args }) {
             const inputPath = path.join(TEMP_DIR, `input-${Date.now()}.mp4`);
             const outputPath = path.join(TEMP_DIR, `output-${Date.now()}.webp`);
             fs.writeFileSync(inputPath, buffer);
-            const videoText = [topText, bottomText].filter(Boolean).join(' | ');
-            if (videoText) await videoToStickerWithText(inputPath, outputPath, videoText);
+            if (topText || bottomText) await videoToStickerWithText(inputPath, outputPath, topText, bottomText);
             else await videoToSticker(inputPath, outputPath);
             const stickerBuffer = fs.readFileSync(outputPath);
             await sock.sendMessage(from, { sticker: stickerBuffer }, { quoted: msg });
             try { fs.unlinkSync(inputPath); fs.unlinkSync(outputPath); } catch (_) {}
             await sock.sendMessage(from, {
-                text:
-                    `✨ *Sticker video siap!*\n` +
-                    `🎭 ${meta.label} · 📦 ${meta.pack}\n` +
-                    (videoText ? `💬 _${videoText}_\n` : '') +
-                    `_Ketik \`!s help\` untuk 16+ tema_`
+                text: `✅ Stiker video *${meta.label}* siap!`
             });
             return;
         }
@@ -92,20 +73,13 @@ export async function handleStickerCommand({ sock, from, msg, args }) {
         });
         const stiker = new Sticker(finalBuffer, {
             pack: meta.pack,
-            author: '👑 LuxxBot',
-            type: StickerTypes.FULL,
-            quality: 100
+            author: 'LuxxBot',
+            type: StickerTypes.CROPPED,
+            quality: 90
         });
         await sock.sendMessage(from, { sticker: await stiker.toBuffer() }, { quoted: msg });
         await sock.sendMessage(from, {
-            text:
-                `✨ *Sticker siap dikirim!*\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `🎭 Tema: *${meta.label}*\n` +
-                `📦 Pack: ${meta.pack}\n` +
-                (topText ? `⬆️ Atas: _${topText}_\n` : '') +
-                (bottomText ? `⬇️ Bawah: _${bottomText}_\n` : '') +
-                `💡 Coba: \`!s neon|caption keren\` · \`!s meme|TOP|BOTTOM\``
+            text: `✅ Stiker *${meta.label}* siap! _\`!s help\` untuk tema & teks_`
         });
     } catch (e) {
         console.error('STICKER ERROR:', e);

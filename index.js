@@ -81,8 +81,11 @@ server.on('error', (err) => {
 async function bootRadioAndDiscord() {
     try {
         if (!global.__luxxRadioMounted) {
-            const { startRadioServer } = await import('./src/services/radio-server.js');
+            const { startRadioServer, onRadioTrackChange, radio } = await import('./src/services/radio-server.js');
             startRadioServer(global.__luxxApp);
+            const { bindRadioLyricsWatcher, prefetchQueueLyrics } = await import('./src/services/radio-lyrics.js');
+            bindRadioLyricsWatcher(onRadioTrackChange);
+            prefetchQueueLyrics(radio.queue, radio.current);
             global.__luxxRadioMounted = true;
             console.log('\x1b[32m✅ Radio / admin / watch aktif\x1b[0m');
         }
