@@ -77,7 +77,7 @@ function isSelfHostedAdmin() {
 
 function defaultApiBase() {
   if (isSelfHostedAdmin()) return location.origin.replace(/\/$/, '');
-  return 'http://localhost:3920';
+  return 'https://healing-java-searched-continues.trycloudflare.com';
 }
 
 function resolveApiBase() {
