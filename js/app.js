@@ -101,7 +101,7 @@ function setupLoginForm() {
     if (baseInput) baseInput.readOnly = false;
     if (baseField) baseField.style.display = '';
     if (localBtn) localBtn.style.display = '';
-    if (hint) hint.textContent = 'Isi URL bot/tunnel (tanpa /admin). Bukan link GitHub Pages.';
+    if (hint) hint.textContent = 'LuxxBot: WA + Discord + web GitHub. Isi URL server bot (tunnel/VPS/localhost) — tanpa /admin.';
   }
 }
 
@@ -111,12 +111,12 @@ function friendlyError(err, base) {
     const tunnelHint = base.includes('trycloudflare.com')
       ? '\n• URL trycloudflare MATI kalau tunnel ditutup — jalankan ulang scripts\\radio-tunnel.ps1'
       : '';
-    return `Tidak bisa hubungi bot di ${base}.\n• Bot jalan? (pm2 status)\n• Tunnel hidup?${tunnelHint}\n• API Base URL = alamat bot, BUKAN GitHub Pages.`;
+    return `Tidak bisa hubungi bot di ${base}.\n• Bot jalan? (pm2 status / cek proses Node)\n• Tunnel/VPS hidup?${tunnelHint}\n• API Base = RADIO_PUBLIC_URL server bot, BUKAN link GitHub Pages.`;
   }
   if (msg.includes('Unauthorized')) return 'Token salah. Harus sama dengan ADMIN_API_TOKEN di .env bot.';
   if (msg.includes('Admin API disabled')) return 'ADMIN_API_TOKEN belum diset. Restart: pm2 restart luxx --update-env';
   if (msg.includes('404') || msg.includes('Not Found')) {
-    return 'Endpoint bot belum terbaru (HTTP 404). Redeploy/restart bot di Railway, lalu hard refresh admin.';
+    return 'Endpoint bot belum terbaru (HTTP 404). Restart bot (pm2 restart luxx), lalu hard refresh admin.';
   }
   return msg;
 }
@@ -1211,8 +1211,8 @@ function renderSystem(sys) {
     Node <strong>${sys.node || '—'}</strong> · PID <strong>${sys.pid ?? '—'}</strong><br>
     Platform: <strong>${sys.platform || '—'}</strong> · CPUs: <strong>${sys.cpus ?? '—'}</strong><br>
     Load: <strong>${(sys.loadAvg || []).join(', ') || '—'}</strong><br>
-    Railway: <strong>${sys.runtime?.railway ? 'Yes' : 'No'}</strong><br>
-    Radio URL: <span class="muted">${sys.runtime?.radioUrl || '—'}</span>`;
+    Bot URL: <span class="muted">${sys.runtime?.radioUrl || cfg().base || '—'}</span><br>
+    <span class="muted">Stack: WhatsApp · Discord · GitHub Admin</span>`;
 }
 
 function renderStatus(d) {
@@ -1276,7 +1276,7 @@ function renderStatus(d) {
 
   $('#cookies-box').innerHTML = yt.ready
     ? `✅ Cookies aktif · <strong>${yt.bytes || 0}</strong> bytes<br><span class="muted">${yt.path || ''}</span>`
-    : `❌ Cookies belum ada — !play gagal di Railway<br><span class="muted">${yt.hint || ''}</span>`;
+    : `❌ Cookies belum ada — !play & radio gagal unduh<br><span class="muted">${yt.hint || ''}</span>`;
 
   const r = d.radio || {};
   lastAdminRadio = r;
@@ -1342,7 +1342,7 @@ async function doLogin() {
 
   const typedBase = ($('#api-base').value || '').trim().replace(/\/$/, '');
   if (!isSelfHostedAdmin() && typedBase.includes('github.io')) {
-    showLoginError('API Base URL salah — itu link Pages. Isi URL Railway atau localhost:3920.');
+    showLoginError('API Base URL salah — itu link GitHub Pages. Isi URL server bot (tunnel/VPS/localhost:3920).');
     return;
   }
 
@@ -1376,7 +1376,7 @@ $$('.nav-item').forEach((btn) => {
 $('#btn-login')?.addEventListener('click', doLogin);
 $('#btn-local')?.addEventListener('click', () => {
   safeEl('#api-base', (el) => { el.value = defaultApiBase(); });
-  showToast('Diisi: localhost:3920');
+  showToast('Diisi: localhost bot (port 3920)');
 });
 $('#btn-toggle-token')?.addEventListener('click', () => {
   const inp = $('#api-token');

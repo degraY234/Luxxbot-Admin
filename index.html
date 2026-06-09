@@ -38,8 +38,8 @@
 
       <div class="field">
         <label for="api-base">API Base URL</label>
-        <input id="api-base" type="url" placeholder="https://luxxbot-production.up.railway.app" autocomplete="url" />
-        <span class="field-hint">Railway: buka /admin langsung — cukup token. GitHub Pages: isi URL bot (tanpa /admin).</span>
+        <input id="api-base" type="url" placeholder="https://bot-kamu.trycloudflare.com" autocomplete="url" />
+        <span class="field-hint">GitHub Pages: isi URL server bot (RADIO_PUBLIC_URL / tunnel / VPS) — tanpa /admin. Bukan link github.io.</span>
       </div>
 
       <div class="field">
@@ -51,7 +51,7 @@
       </div>
 
       <button id="btn-login" class="btn primary">Masuk Dashboard</button>
-      <button type="button" id="btn-local" class="btn secondary">⚡ Isi localhost:3920</button>
+      <button type="button" id="btn-local" class="btn secondary">⚡ Isi localhost bot</button>
       <p id="login-error" class="login-error hidden"></p>
     </div>
   </div>
@@ -277,7 +277,7 @@
             <article class="card span-2 reveal">
               <h3>🍪 YouTube Cookies</h3>
               <div id="cookies-box" class="info-box muted">Memuat...</div>
-              <p class="muted hint">Railway butuh cookies sekali — tersimpan di volume <code>/app/persist</code>.</p>
+              <p class="muted hint">Simpan sekali di server bot — dipakai untuk <code>!play</code>, radio web & Discord.</p>
               <textarea id="cookies-paste" class="cookies-paste" rows="5" placeholder="Paste isi file youtube-cookies.txt (format Netscape) lalu klik Simpan"></textarea>
               <div class="btn-row" style="margin-top:.6rem">
                 <button id="btn-cookies-save" class="btn primary" type="button">💾 Simpan Cookies</button>
@@ -292,6 +292,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="js/app.js?v=16"></script>
+  <script src="js/app.js?v=17"></script>
 </body>
 </html>
