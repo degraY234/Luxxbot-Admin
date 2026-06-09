@@ -27,6 +27,8 @@ let lastStreamEpoch = null;
 let lastAdminRadio = null;
 let lastSystem = null;
 let lyricsPollTimer = null;
+let progressTickTimer = null;
+let audioLoadGen = 0;
 
 let lyricsState = {
   trackKey: null,
@@ -318,6 +320,9 @@ function beatLoop() {
       const n = Math.min(14, freq.length);
       for (let i = 0; i < n; i++) bass += freq[i];
       bass /= n * 255;
+      if (lastAdminRadio?.current) {
+        updatePlayerProgress(lastAdminRadio.playback || {}, $('#radio-audio'));
+      }
     } else {
       bass = 0.15 + Math.sin(BEAT.phase) * 0.08;
     }
@@ -438,10 +443,41 @@ function beatLoop() {
 }
 
 function formatPlayerTime(sec) {
-  if (!sec || !Number.isFinite(sec) || sec < 0) return '0:00';
+  if (!Number.isFinite(sec) || sec < 0) return '0:00';
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60).toString().padStart(2, '0');
   return `${m}:${s}`;
+}
+
+function resolvePlaybackPosition(playback = {}, audioEl = null) {
+  const serverDur = playback.durationSec || 0;
+
+  if (audioEl?.src && !audioEl.paused && !audioEl.ended) {
+    const audioTime = audioEl.currentTime || 0;
+    const audioDur = audioEl.duration;
+    if (Number.isFinite(audioDur) && audioDur > 0 && audioTime >= 0) {
+      return {
+        position: Math.min(audioDur, audioTime),
+        duration: audioDur
+      };
+    }
+  }
+
+  if (playback.preparedAt > 0) {
+    const position = Math.max(0, (Date.now() - playback.preparedAt) / 1000);
+    if (serverDur > 0) {
+      return {
+        position: Math.min(serverDur, position),
+        duration: serverDur
+      };
+    }
+    return { position, duration: serverDur };
+  }
+
+  return {
+    position: playback.positionSec || 0,
+    duration: serverDur
+  };
 }
 
 function updatePlayerProgress(playback = {}, audioEl = null) {
@@ -449,27 +485,93 @@ function updatePlayerProgress(playback = {}, audioEl = null) {
   const glowEl = $('#player-progress-glow');
   const elapsedEl = $('#player-time-elapsed');
   const durationEl = $('#player-time-duration');
+  const lyricsProgress = $('#lyrics-progress-fill');
   if (!fill) return;
 
-  let position = playback.positionSec ?? 0;
-  let duration = playback.durationSec ?? 0;
+  const { position, duration } = resolvePlaybackPosition(playback, audioEl);
+  const pct = duration > 0
+    ? Math.min(100, (position / duration) * 100)
+    : (playback.progress ?? 0);
 
-  if (audioEl?.duration && Number.isFinite(audioEl.duration) && audioEl.duration > 0) {
-    duration = audioEl.duration;
-    position = audioEl.currentTime || 0;
-  } else if (playback.preparedAt && playback.durationSec > 0) {
-    position = (playback.positionSec ?? 0) + (Date.now() - playback.preparedAt) / 1000;
-    if (position > playback.durationSec) position = playback.durationSec;
-  }
-
-  const pct = duration > 0 ? Math.min(100, (position / duration) * 100) : (playback.progress ?? 0);
   fill.style.width = `${pct}%`;
   if (glowEl) {
     glowEl.style.left = `${pct}%`;
     glowEl.classList.toggle('active', pct > 0 && pct < 100);
   }
   if (elapsedEl) elapsedEl.textContent = formatPlayerTime(position);
-  if (durationEl) durationEl.textContent = formatPlayerTime(duration);
+  if (durationEl) {
+    durationEl.textContent = duration > 0
+      ? formatPlayerTime(duration)
+      : (playback.durationLabel || '0:00');
+  }
+  if (lyricsProgress && lastAdminRadio?.current) {
+    lyricsProgress.style.width = `${pct}%`;
+  }
+}
+
+function ensureProgressTick() {
+  if (progressTickTimer) return;
+  progressTickTimer = setInterval(() => {
+    const audio = $('#radio-audio');
+    if (lastAdminRadio?.current) {
+      updatePlayerProgress(lastAdminRadio.playback || {}, audio);
+      return;
+    }
+    stopProgressTick();
+  }, 200);
+}
+
+function stopProgressTick() {
+  if (!progressTickTimer) return;
+  clearInterval(progressTickTimer);
+  progressTickTimer = null;
+}
+
+function attachAndPlayStream(audio, url) {
+  if (!audio || !url) return;
+  const gen = ++audioLoadGen;
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
+
+  const cleanup = () => {
+    audio.removeEventListener('canplay', onReady);
+    audio.removeEventListener('loadedmetadata', onReady);
+    audio.removeEventListener('error', onErr);
+  };
+
+  const onReady = () => {
+    if (gen !== audioLoadGen) return;
+    cleanup();
+    audio.play().catch(() => {});
+    resumeBeatCtx();
+  };
+
+  const onErr = () => {
+    if (gen !== audioLoadGen) return;
+    cleanup();
+    setTimeout(() => {
+      if (gen !== audioLoadGen || !url) return;
+      audio.addEventListener('canplay', onReady, { once: true });
+      audio.addEventListener('error', onErr, { once: true });
+      audio.src = `${url}&retry=${Date.now()}`;
+      audio.load();
+    }, 1800);
+  };
+
+  audio.addEventListener('canplay', onReady);
+  audio.addEventListener('loadedmetadata', onReady);
+  audio.addEventListener('error', onErr);
+  audio.src = url;
+  audio.load();
+}
+
+async function burstRefreshWhilePreparing(times = 8, intervalMs = 1500) {
+  for (let i = 0; i < times; i++) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    if (!lastAdminRadio?.isPreparing && lastAdminRadio?.current) break;
+    await refresh().catch(() => {});
+  }
 }
 
 let searchBusy = false;
@@ -552,10 +654,11 @@ async function addSongFromSearch(index, playNow = false) {
       playNow
     });
     if (r.streamEpoch != null) lastStreamEpoch = r.streamEpoch;
-    resetPlayerState();
+    invalidatePlayerReload();
     showToast(r.message || 'Lagu ditambahkan');
     if (status) status.textContent = r.message || 'Berhasil.';
     await refresh();
+    if (playNow || lastAdminRadio?.isPreparing) burstRefreshWhilePreparing();
   } catch (e) {
     if (status) status.textContent = e.message;
     showToast(e.message);
@@ -564,6 +667,7 @@ async function addSongFromSearch(index, playNow = false) {
 
 function stopAudio(audio) {
   if (!audio) return;
+  audioLoadGen += 1;
   audio.pause();
   audio.removeAttribute('src');
   audio.load();
@@ -572,7 +676,13 @@ function stopAudio(audio) {
 function resetPlayerState() {
   lastTrackId = null;
   lastThumbTrackId = null;
+  stopProgressTick();
   stopAudio($('#radio-audio'));
+}
+
+function invalidatePlayerReload() {
+  lastTrackId = null;
+  lastThumbTrackId = null;
 }
 
 function updatePlayerThumbnail(cur, thumb, fallback) {
@@ -612,35 +722,43 @@ function renderPlayer(r = {}, base = '') {
     stopAudio(audio);
   }
 
-  if (r.isPreparing && !cur) {
-    badge.textContent = 'LOADING';
-    badge.className = 'player-badge load';
-    $('#player-title').textContent = 'Memuat lagu...';
-    $('#player-artist').textContent = radioPreparingLabel(r);
-    $('#player-requester').textContent = '🙋 —';
-    lastThumbTrackId = null;
-    thumb.classList.remove('visible');
-    thumb.removeAttribute('src');
-    fallback.style.display = 'flex';
-    stopAudio(audio);
-    updatePlayerProgress({}, audio);
-    return;
-  }
-
   if (!cur) {
-    badge.textContent = 'IDLE';
-    badge.className = 'player-badge idle';
+    const next = r.queue?.[0];
     const err = r.lastPrepareError?.message;
-    $('#player-title').textContent = err ? 'Gagal memuat lagu' : 'Belum ada lagu';
-    $('#player-artist').textContent = err ? `${r.lastPrepareError.title || ''}: ${err.slice(0, 120)}` : '—';
-    $('#player-requester').textContent = '🙋 —';
-    thumb.classList.remove('visible');
-    thumb.removeAttribute('src');
-    fallback.style.display = 'flex';
+    stopProgressTick();
+
+    if (r.isPreparing && next) {
+      badge.textContent = 'LOADING';
+      badge.className = 'player-badge load';
+      $('#player-title').textContent = next.title || 'Memuat lagu...';
+      $('#player-artist').textContent = next.author || 'Mengunduh...';
+      $('#player-requester').textContent = `🙋 ${next.requestedBy || '-'}`;
+      updatePlayerThumbnail(next, thumb, fallback);
+      stopAudio(audio);
+      lastTrackId = null;
+      updatePlayerProgress(r.playback, audio);
+      return;
+    }
+
+    badge.textContent = next ? 'READY' : 'IDLE';
+    badge.className = next ? 'player-badge load' : 'player-badge idle';
+    $('#player-title').textContent = err
+      ? 'Gagal memuat lagu'
+      : (next ? next.title : 'Belum ada lagu');
+    $('#player-artist').textContent = err
+      ? `${r.lastPrepareError.title || ''}: ${err.slice(0, 120)}`
+      : (next ? `${next.author || 'Unknown'} · klik Putar atau tunggu` : '—');
+    $('#player-requester').textContent = next ? `🙋 ${next.requestedBy || '-'}` : '🙋 —';
+    if (next?.thumbnail) updatePlayerThumbnail(next, thumb, fallback);
+    else {
+      thumb.classList.remove('visible');
+      thumb.removeAttribute('src');
+      fallback.style.display = 'flex';
+    }
     stopAudio(audio);
     lastTrackId = null;
     lastThumbTrackId = null;
-    updatePlayerProgress({}, audio);
+    updatePlayerProgress(r.playback, audio);
     return;
   }
 
@@ -656,9 +774,12 @@ function renderPlayer(r = {}, base = '') {
   if (lastTrackId !== reloadKey) {
     lastTrackId = reloadKey;
     stopAudio(audio);
-    audio.src = `${stream}?epoch=${epoch ?? 0}&id=${cur.id}&t=${Date.now()}`;
-    audio.play().catch(() => {});
+    attachAndPlayStream(
+      audio,
+      `${stream}?epoch=${epoch ?? 0}&id=${cur.id}&t=${Date.now()}`
+    );
   }
+  ensureProgressTick();
   updatePlayerProgress(r.playback, audio);
 }
 
@@ -1001,12 +1122,13 @@ $('#btn-logout')?.addEventListener('click', () => {
 });
 $('#btn-refresh')?.addEventListener('click', refresh);
 $('#btn-skip')?.addEventListener('click', async () => {
-  resetPlayerState();
   try {
     const r = await api('/skip', 'POST');
     if (r.streamEpoch != null) lastStreamEpoch = r.streamEpoch;
+    invalidatePlayerReload();
     showToast(r.message || 'OK');
     await refresh();
+    if (r.started || lastAdminRadio?.isPreparing) burstRefreshWhilePreparing();
   } catch (e) { showToast(e.message); }
 });
 $('#btn-clear')?.addEventListener('click', async () => {
