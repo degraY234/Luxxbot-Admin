@@ -687,14 +687,28 @@ function prepareLocalStream(audio, url, { autoplay = false } = {}) {
 }
 
 async function postRadioPlay() {
+  const { base, token } = cfg();
+  let lastErr = null;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await api('/play', 'POST');
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e.message || '');
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+        await new Promise((r) => setTimeout(r, 600 + attempt * 400));
+        continue;
+      }
+      if (!msg.includes('404') && !msg.includes('Not Found')) throw e;
+      break;
+    }
+  }
+
   try {
-    return await api('/play', 'POST');
-  } catch (e) {
-    const msg = String(e.message || '');
-    if (!msg.includes('404') && !msg.includes('Not Found')) throw e;
-    const { base } = cfg();
     const res = await fetch(`${base}/radio/api/play`, {
       method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       cache: 'no-store'
     });
     const data = await res.json().catch(() => ({}));
@@ -702,19 +716,38 @@ async function postRadioPlay() {
       throw new Error(data.message || data.error || `HTTP ${res.status}`);
     }
     return data;
+  } catch (e) {
+    throw lastErr || e;
   }
 }
 
-async function waitForRadioCurrent(maxMs = 36000) {
+async function fetchRadioStatus() {
+  const d = await api('/status');
+  lastAdminRadio = d.radio || lastAdminRadio;
+  renderPlayer(lastAdminRadio, cfg().base);
+  return lastAdminRadio;
+}
+
+async function waitForRadioCurrent(maxMs = 120000) {
   const started = Date.now();
+  let netFails = 0;
+
   while (Date.now() - started < maxMs) {
-    await new Promise((r) => setTimeout(r, 450));
+    await new Promise((r) => setTimeout(r, 700));
     try {
-      const d = await api('/status');
-      lastAdminRadio = d.radio || lastAdminRadio;
+      await fetchRadioStatus();
+      netFails = 0;
       if (lastAdminRadio?.current) return true;
-      if (!lastAdminRadio?.isPreparing && Date.now() - started > 4000) break;
-    } catch (_) { /* retry */ }
+      if (lastAdminRadio?.isPreparing) {
+        playBusy = true;
+        updatePlayBtn();
+        continue;
+      }
+      if (Date.now() - started > 6000) break;
+    } catch (e) {
+      netFails += 1;
+      if (netFails >= 8) throw e;
+    }
   }
   return Boolean(lastAdminRadio?.current);
 }
@@ -724,12 +757,16 @@ async function requestAdminServerPlay() {
   if (!body.ok && !body.preparing) {
     throw new Error(body.message || 'Gagal memulai radio');
   }
+  if (body.preparing) {
+    playBusy = true;
+    updatePlayBtn();
+  }
   return waitForRadioCurrent();
 }
 
 async function startLocalRadioPlayback() {
   const base = cfg().base;
-  const r = lastAdminRadio || {};
+  let r = lastAdminRadio || {};
   const hasQueue = (r.queue?.length || 0) > 0;
 
   if (!r.current && !hasQueue) {
@@ -742,21 +779,35 @@ async function startLocalRadioPlayback() {
   armLocalPlayback();
 
   try {
-    if (!lastAdminRadio?.current) {
-      const ok = await requestAdminServerPlay();
-      if (!ok) throw new Error('Gagal memuat lagu dari antrian');
+    if (!r.current) {
+      try {
+        await fetchRadioStatus();
+        r = lastAdminRadio || r;
+      } catch (_) { /* lanjut coba play */ }
     }
 
-    if (!lastAdminRadio?.current) throw new Error('Lagu belum siap — coba lagi');
+    if (!r.current) {
+      const ok = await requestAdminServerPlay();
+      if (!ok) {
+        throw new Error(
+          lastAdminRadio?.lastPrepareError?.message
+            || 'Gagal memuat lagu — cek koneksi bot & cookies YouTube'
+        );
+      }
+    }
+
+    if (!lastAdminRadio?.current) {
+      throw new Error('Lagu belum siap — coba klik Putar lagi');
+    }
 
     loadedStreamKey = null;
     invalidatePlayerReload();
     renderPlayer(lastAdminRadio, base);
-    ensureProgressTick();
     return true;
   } catch (e) {
     disarmLocalPlayback();
-    showToast(e.message);
+    const msg = String(e.message || 'Gagal memutar');
+    showToast(msg.split('\n')[0]);
     return false;
   } finally {
     playBusy = false;
