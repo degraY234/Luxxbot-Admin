@@ -33,6 +33,7 @@ let loadedStreamKey = null;
 let playbackArmed = false;
 let userPaused = false;
 let playBusy = false;
+let pendingAutoPlay = false;
 
 let lyricsState = {
   trackKey: null,
@@ -101,7 +102,7 @@ function setupLoginForm() {
     if (baseInput) baseInput.readOnly = false;
     if (baseField) baseField.style.display = '';
     if (localBtn) localBtn.style.display = '';
-    if (hint) hint.textContent = 'LuxxBot: WA + Discord + web GitHub. Isi URL server bot (tunnel/VPS/localhost) — tanpa /admin.';
+    if (hint) hint.textContent = 'Isi URL tunnel bot. Tips: buka admin langsung di https://healing-java-searched-continues.trycloudflare.com/admin untuk audio lebih stabil.';
   }
 }
 
@@ -327,9 +328,6 @@ function beatLoop() {
       const n = Math.min(14, freq.length);
       for (let i = 0; i < n; i++) bass += freq[i];
       bass /= n * 255;
-      if (lastAdminRadio?.current) {
-        updatePlayerProgress(lastAdminRadio.playback || {}, $('#radio-audio'));
-      }
     } else {
       bass = 0.15 + Math.sin(BEAT.phase) * 0.08;
     }
@@ -562,37 +560,20 @@ function armLocalPlayback() {
 
 function resolvePlaybackPosition(playback = {}, audioEl = null) {
   const serverDur = playback.durationSec || 0;
-
-  if (!playbackArmed) {
+  if (!playbackArmed || !isPlayerPlaying()) {
     return { position: 0, duration: serverDur };
   }
 
-  if (audioEl?.src && !audioEl.paused && !audioEl.ended) {
-    const audioTime = audioEl.currentTime || 0;
-    const audioDur = audioEl.duration;
-    if (Number.isFinite(audioDur) && audioDur > 0 && audioTime >= 0) {
-      return {
-        position: Math.min(audioDur, audioTime),
-        duration: audioDur
-      };
-    }
+  const a = audioEl || $('#radio-audio');
+  const audioTime = a?.currentTime || 0;
+  const audioDur = a?.duration;
+  if (Number.isFinite(audioDur) && audioDur > 0) {
+    return {
+      position: Math.min(audioDur, Math.max(0, audioTime)),
+      duration: audioDur
+    };
   }
-
-  if (playback.preparedAt > 0) {
-    const position = Math.max(0, (Date.now() - playback.preparedAt) / 1000);
-    if (serverDur > 0) {
-      return {
-        position: Math.min(serverDur, position),
-        duration: serverDur
-      };
-    }
-    return { position, duration: serverDur };
-  }
-
-  return {
-    position: playback.positionSec || 0,
-    duration: serverDur
-  };
+  return { position: Math.max(0, audioTime), duration: serverDur };
 }
 
 function updatePlayerProgress(playback = {}, audioEl = null) {
@@ -627,9 +608,8 @@ function updatePlayerProgress(playback = {}, audioEl = null) {
 function ensureProgressTick() {
   if (progressTickTimer) return;
   progressTickTimer = setInterval(() => {
-    const audio = $('#radio-audio');
-    if (playbackArmed && lastAdminRadio?.current) {
-      updatePlayerProgress(lastAdminRadio.playback || {}, audio);
+    if (isPlayerPlaying() && lastAdminRadio?.current) {
+      updatePlayerProgress(lastAdminRadio.playback || {}, $('#radio-audio'));
       return;
     }
     stopProgressTick();
@@ -642,48 +622,103 @@ function stopProgressTick() {
   progressTickTimer = null;
 }
 
-function prepareLocalStream(audio, url, { autoplay = false } = {}) {
-  if (!audio || !url) return;
-  const gen = ++audioLoadGen;
-  audio.pause();
-  audio.removeAttribute('src');
-  audio.load();
+function buildStreamUrl(cur, r = {}, base = '') {
+  const b = (base || cfg().base || '').replace(/\/$/, '');
+  const epoch = r.streamEpoch ?? 0;
+  return `${b}/radio/live.mp3?epoch=${epoch}&id=${cur.id}&t=${Date.now()}`;
+}
 
-  const cleanup = () => {
-    audio.removeEventListener('canplay', onReady);
-    audio.removeEventListener('loadedmetadata', onReady);
-    audio.removeEventListener('error', onErr);
-  };
+function loadAndPlayStream(audio, url, { tryPlay = true } = {}) {
+  return new Promise((resolve) => {
+    if (!audio || !url) return resolve(false);
+    const gen = ++audioLoadGen;
 
-  const onReady = () => {
-    if (gen !== audioLoadGen) return;
-    cleanup();
-    if (autoplay && playbackArmed && !userPaused) {
-      audio.play().catch(() => {
-        showToast('Klik Putar sekali lagi untuk mulai audio');
-      });
-      resumeBeatCtx();
-    }
-    updatePlayBtn();
-  };
+    const cleanup = () => {
+      audio.removeEventListener('canplay', onReady);
+      audio.removeEventListener('loadedmetadata', onReady);
+      audio.removeEventListener('error', onErr);
+    };
 
-  const onErr = () => {
-    if (gen !== audioLoadGen) return;
-    cleanup();
-    setTimeout(() => {
-      if (gen !== audioLoadGen || !url) return;
-      audio.addEventListener('canplay', onReady, { once: true });
-      audio.addEventListener('error', onErr, { once: true });
-      audio.src = `${url}&retry=${Date.now()}`;
-      audio.load();
-    }, 1800);
-  };
+    const finish = (ok) => {
+      cleanup();
+      resolve(ok);
+    };
 
-  audio.addEventListener('canplay', onReady);
-  audio.addEventListener('loadedmetadata', onReady);
-  audio.addEventListener('error', onErr);
-  audio.src = url;
-  audio.load();
+    const onReady = async () => {
+      if (gen !== audioLoadGen) return;
+      if (!tryPlay || !playbackArmed || userPaused) {
+        updatePlayBtn();
+        return finish(true);
+      }
+      try {
+        audio.muted = false;
+        audio.volume = 1;
+        await audio.play();
+        ensureProgressTick();
+        updatePlayBtn();
+        syncPlayerBadge();
+        finish(true);
+      } catch (_) {
+        showToast('Klik Putar lagi untuk mulai suara');
+        updatePlayBtn();
+        finish(false);
+      }
+    };
+
+    const onErr = () => {
+      if (gen !== audioLoadGen) return;
+      cleanup();
+      setTimeout(() => {
+        if (gen !== audioLoadGen || !url) return;
+        audio.addEventListener('canplay', onReady, { once: true });
+        audio.addEventListener('error', () => finish(false), { once: true });
+        audio.src = `${url}&retry=${Date.now()}`;
+        audio.load();
+      }, 1500);
+    };
+
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    audio.muted = false;
+    audio.volume = 1;
+    audio.addEventListener('canplay', onReady);
+    audio.addEventListener('loadedmetadata', onReady);
+    audio.addEventListener('error', onErr);
+    audio.src = url;
+    audio.load();
+  });
+}
+
+async function tryPlayCurrentTrack() {
+  const audio = $('#radio-audio');
+  const cur = lastAdminRadio?.current;
+  const base = cfg().base;
+  if (!audio || !cur || !base) return false;
+
+  resumeBeatCtx();
+  connectBeatGraph();
+
+  const url = buildStreamUrl(cur, lastAdminRadio, base);
+  const key = `${lastAdminRadio.streamEpoch ?? 0}:${cur.id}`;
+  loadedStreamKey = key;
+  lastTrackId = key;
+
+  return loadAndPlayStream(audio, url, { tryPlay: true });
+}
+
+async function ensureServerTrackReady() {
+  if (lastAdminRadio?.current) return true;
+  const hasQueue = (lastAdminRadio?.queue?.length || 0) > 0;
+  if (!hasQueue) {
+    showToast('Belum ada lagu di antrian');
+    return false;
+  }
+  const body = await postRadioPlay();
+  if (!body.ok && !body.preparing) {
+    throw new Error(body.message || 'Gagal memulai radio');
+  }
+  return waitForRadioCurrent();
 }
 
 async function postRadioPlay() {
@@ -735,84 +770,26 @@ async function waitForRadioCurrent(maxMs = 120000) {
   while (Date.now() - started < maxMs) {
     await new Promise((r) => setTimeout(r, 700));
     try {
-      await fetchRadioStatus();
+      const d = await api('/status');
+      lastAdminRadio = d.radio || lastAdminRadio;
+      renderPlayer(lastAdminRadio, cfg().base);
       netFails = 0;
-      if (lastAdminRadio?.current) return true;
-      if (lastAdminRadio?.isPreparing) {
-        playBusy = true;
-        updatePlayBtn();
-        continue;
+      if (lastAdminRadio?.current) {
+        if (pendingAutoPlay && playbackArmed) {
+          const played = await tryPlayCurrentTrack();
+          pendingAutoPlay = false;
+          if (!played) showToast('Lagu siap — klik Putar untuk suara');
+        }
+        return true;
       }
-      if (Date.now() - started > 6000) break;
+      if (lastAdminRadio?.isPreparing) continue;
+      if (Date.now() - started > 8000) break;
     } catch (e) {
       netFails += 1;
       if (netFails >= 8) throw e;
     }
   }
   return Boolean(lastAdminRadio?.current);
-}
-
-async function requestAdminServerPlay() {
-  const body = await postRadioPlay();
-  if (!body.ok && !body.preparing) {
-    throw new Error(body.message || 'Gagal memulai radio');
-  }
-  if (body.preparing) {
-    playBusy = true;
-    updatePlayBtn();
-  }
-  return waitForRadioCurrent();
-}
-
-async function startLocalRadioPlayback() {
-  const base = cfg().base;
-  let r = lastAdminRadio || {};
-  const hasQueue = (r.queue?.length || 0) > 0;
-
-  if (!r.current && !hasQueue) {
-    showToast('Belum ada lagu di antrian');
-    return false;
-  }
-
-  playBusy = true;
-  updatePlayBtn();
-  armLocalPlayback();
-
-  try {
-    if (!r.current) {
-      try {
-        await fetchRadioStatus();
-        r = lastAdminRadio || r;
-      } catch (_) { /* lanjut coba play */ }
-    }
-
-    if (!r.current) {
-      const ok = await requestAdminServerPlay();
-      if (!ok) {
-        throw new Error(
-          lastAdminRadio?.lastPrepareError?.message
-            || 'Gagal memuat lagu — cek koneksi bot & cookies YouTube'
-        );
-      }
-    }
-
-    if (!lastAdminRadio?.current) {
-      throw new Error('Lagu belum siap — coba klik Putar lagi');
-    }
-
-    loadedStreamKey = null;
-    invalidatePlayerReload();
-    renderPlayer(lastAdminRadio, base);
-    return true;
-  } catch (e) {
-    disarmLocalPlayback();
-    const msg = String(e.message || 'Gagal memutar');
-    showToast(msg.split('\n')[0]);
-    return false;
-  } finally {
-    playBusy = false;
-    updatePlayBtn();
-  }
 }
 
 async function burstRefreshWhilePreparing(times = 8, intervalMs = 1500) {
@@ -913,7 +890,14 @@ async function addSongFromSearch(index, playNow = false) {
     if (status) status.textContent = r.message || 'Berhasil.';
     await refresh();
     if (playNow) {
-      await startLocalRadioPlayback();
+      armLocalPlayback();
+      pendingAutoPlay = true;
+      if (lastAdminRadio?.current) {
+        await tryPlayCurrentTrack();
+        pendingAutoPlay = false;
+      } else {
+        await ensureServerTrackReady();
+      }
     } else if (lastAdminRadio?.isPreparing) {
       burstRefreshWhilePreparing();
     }
@@ -1026,9 +1010,7 @@ function renderPlayer(r = {}, base = '') {
   $('#player-requester').textContent = `🙋 ${cur.requestedBy || '-'}`;
   updatePlayerThumbnail(cur, thumb, fallback);
 
-  const stream = `${base}${r.streamPath || '/radio/live.mp3'}`;
-  const reloadKey = `${epoch ?? 0}:${cur.id}`;
-  lastTrackId = reloadKey;
+  lastTrackId = `${epoch ?? 0}:${cur.id}`;
 
   if (!playbackArmed) {
     stopProgressTick();
@@ -1042,15 +1024,17 @@ function renderPlayer(r = {}, base = '') {
     return;
   }
 
-  const streamUrl = `${stream}?epoch=${epoch ?? 0}&id=${cur.id}&t=${Date.now()}`;
-  const shouldAutoplay = !userPaused && (loadedStreamKey !== reloadKey || !audio?.src);
-  if (loadedStreamKey !== reloadKey) {
-    loadedStreamKey = reloadKey;
-    prepareLocalStream(audio, streamUrl, { autoplay: shouldAutoplay });
+  if (isPlayerPlaying()) {
+    ensureProgressTick();
+    updatePlayerProgress(r.playback, audio);
+  } else {
+    stopProgressTick();
+    updatePlayerProgress({
+      positionSec: 0,
+      durationSec: r.playback?.durationSec || cur.durationSec || 0,
+      durationLabel: r.playback?.durationLabel
+    }, audio);
   }
-
-  if (isPlayerPlaying()) ensureProgressTick();
-  updatePlayerProgress(r.playback, audio);
   syncPlayerBadge();
   updatePlayBtn();
 }
@@ -1407,13 +1391,13 @@ $('#btn-skip')?.addEventListener('click', async () => {
 });
 $('#btn-player-play')?.addEventListener('click', async () => {
   resumeBeatCtx();
-  connectBeatGraph();
   if (playBusy) return;
 
   const audio = $('#radio-audio');
 
   if (playbackArmed && isPlayerPlaying()) {
     userPaused = true;
+    pendingAutoPlay = false;
     audio?.pause();
     stopProgressTick();
     updatePlayBtn();
@@ -1421,20 +1405,46 @@ $('#btn-player-play')?.addEventListener('click', async () => {
     return;
   }
 
-  if (playbackArmed && lastAdminRadio?.current && audio?.src) {
-    userPaused = false;
+  armLocalPlayback();
+  userPaused = false;
+  pendingAutoPlay = true;
+
+  if (lastAdminRadio?.current && audio?.src && loadedStreamKey) {
     try {
+      connectBeatGraph();
       await audio.play();
+      pendingAutoPlay = false;
       ensureProgressTick();
       updatePlayBtn();
       syncPlayerBadge();
-    } catch (_) {
-      showToast('Gagal memutar — coba klik Putar lagi');
-    }
-    return;
+      return;
+    } catch (_) { /* reload stream below */ }
   }
 
-  await startLocalRadioPlayback();
+  playBusy = true;
+  updatePlayBtn();
+  try {
+    if (!lastAdminRadio?.current) {
+      const ready = await ensureServerTrackReady();
+      if (!ready) {
+        throw new Error(lastAdminRadio?.lastPrepareError?.message || 'Lagu belum siap');
+      }
+      renderPlayer(lastAdminRadio, cfg().base);
+    }
+    const ok = await tryPlayCurrentTrack();
+    pendingAutoPlay = false;
+    if (!ok) {
+      showToast('Audio belum jalan — klik Putar sekali lagi');
+    }
+  } catch (e) {
+    pendingAutoPlay = false;
+    disarmLocalPlayback();
+    showToast(String(e.message || 'Gagal memutar').split('\n')[0]);
+  } finally {
+    playBusy = false;
+    updatePlayBtn();
+    syncPlayerBadge();
+  }
 });
 $('#btn-clear')?.addEventListener('click', async () => {
   if (!confirm('Kosongkan antrian?')) return;
