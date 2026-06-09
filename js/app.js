@@ -817,7 +817,6 @@ function renderSearchHit(hit, index) {
     </div>
     <div class="search-hit-actions">
       <button type="button" class="btn primary btn-search-queue" data-idx="${index}">+ Antrian</button>
-      <button type="button" class="btn btn-search-play" data-idx="${index}">▶ Putar</button>
     </div>
   </li>`;
 }
@@ -860,13 +859,12 @@ async function runSongSearch() {
   }
 }
 
-async function addSongFromSearch(index, playNow = false) {
+async function addSongFromSearch(index) {
   const hit = lastSearchResults[index];
   if (!hit?.url) return;
 
   const status = $('#search-status');
-  const label = playNow ? 'Memutar' : 'Menambah';
-  if (status) status.textContent = `${label} "${hit.title}"...`;
+  if (status) status.textContent = `Menambah "${hit.title}"...`;
 
   try {
     const r = await api('/queue/add', 'POST', {
@@ -877,28 +875,15 @@ async function addSongFromSearch(index, playNow = false) {
       author: hit.author,
       seconds: hit.seconds,
       duration: hit.duration,
-      playNow
+      playNow: false
     });
     if (r.streamEpoch != null) lastStreamEpoch = r.streamEpoch;
     invalidatePlayerReload();
-    if (playNow) {
-      armLocalPlayback();
-    } else {
-      disarmLocalPlayback();
-    }
+    disarmLocalPlayback();
     showToast(r.message || 'Lagu ditambahkan');
     if (status) status.textContent = r.message || 'Berhasil.';
     await refresh();
-    if (playNow) {
-      armLocalPlayback();
-      pendingAutoPlay = true;
-      if (lastAdminRadio?.current) {
-        await tryPlayCurrentTrack();
-        pendingAutoPlay = false;
-      } else {
-        await ensureServerTrackReady();
-      }
-    } else if (lastAdminRadio?.isPreparing) {
+    if (lastAdminRadio?.isPreparing) {
       burstRefreshWhilePreparing();
     }
   } catch (e) {
@@ -1503,9 +1488,7 @@ $('#song-search-input')?.addEventListener('keydown', (e) => {
 });
 $('#search-results')?.addEventListener('click', (e) => {
   const queueBtn = e.target.closest('.btn-search-queue');
-  const playBtn = e.target.closest('.btn-search-play');
-  if (queueBtn) addSongFromSearch(Number(queueBtn.dataset.idx), false);
-  else if (playBtn) addSongFromSearch(Number(playBtn.dataset.idx), true);
+  if (queueBtn) addSongFromSearch(Number(queueBtn.dataset.idx));
 });
 
 setupLoginForm();
