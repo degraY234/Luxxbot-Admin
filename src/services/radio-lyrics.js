@@ -8,6 +8,7 @@ let lastResolvedKey = null;
 
 const FAIL_RETRY_MS = 10_000;
 const CACHE_MAX = 72;
+const QUERY_CACHE_MAX = 96;
 const MAX_PREFETCH_SLOTS = 5;
 const PREFETCH_QUEUE_LIMIT = 15;
 
@@ -51,10 +52,18 @@ function trimCache() {
     }
 }
 
+function trimQueryCache() {
+    while (queryCache.size > QUERY_CACHE_MAX) {
+        const oldest = queryCache.keys().next().value;
+        queryCache.delete(oldest);
+    }
+}
+
 function storeCache(key, qk, payload) {
     cache.set(key, payload);
     if (qk) queryCache.set(qk, payload);
     trimCache();
+    trimQueryCache();
 }
 
 function readCached(track) {
@@ -262,6 +271,16 @@ export async function resolveLyricsForTrack(track) {
     if (inflight.has(key)) return inflight.get(key);
 
     return startLyricsFetch(track, key);
+}
+
+export function getLyricsCacheStats() {
+    return {
+        trackCache: cache.size,
+        trackCacheMax: CACHE_MAX,
+        queryCache: queryCache.size,
+        queryCacheMax: QUERY_CACHE_MAX,
+        inflight: inflight.size
+    };
 }
 
 export function bindRadioLyricsWatcher(onTrackChange) {

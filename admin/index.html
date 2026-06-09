@@ -19,22 +19,22 @@
   <title>LuxxBot Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <div class="bg-layer">
-    <div class="orb orb-1"></div>
-    <div class="orb orb-2"></div>
-    <div class="orb orb-3"></div>
-  </div>
+  <canvas id="grid-canvas" class="grid-canvas" aria-hidden="true"></canvas>
+  <div class="scanline" aria-hidden="true"></div>
 
   <div id="login-screen" class="screen login-screen">
-    <div class="card login-card">
-      <div class="login-logo">🌸</div>
+    <div class="card login-card reveal">
+      <div class="login-robot" aria-hidden="true">
+        <span class="robot-eye"></span>
+        <span class="robot-eye"></span>
+      </div>
+      <p class="eyebrow">LuxxBot v3</p>
       <h1 class="login-title">L U X X B O T</h1>
-      <p class="login-sub">Admin Panel</p>
-      <p class="muted login-desc">Khusus owner — kelola bot & radio</p>
+      <p class="login-sub muted">Admin Panel</p>
 
       <div class="field">
         <label for="api-base">API Base URL</label>
@@ -52,119 +52,206 @@
 
       <button id="btn-login" class="btn primary">Masuk Dashboard</button>
       <button type="button" id="btn-local" class="btn secondary">⚡ Isi localhost:3920</button>
-
       <p id="login-error" class="login-error hidden"></p>
     </div>
   </div>
 
   <div id="app-screen" class="screen hidden">
-    <header class="topbar">
-      <div class="topbar-brand">
-        <span class="topbar-icon">🌸</span>
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-icon">🤖</div>
         <div>
           <strong>LuxxBot Admin</strong>
           <small class="muted">Control Center</small>
         </div>
-        <span id="conn-badge" class="badge offline">offline</span>
       </div>
-      <div class="top-actions">
-        <button id="btn-refresh" class="btn ghost">↻ Refresh</button>
-        <button id="btn-logout" class="btn ghost">Keluar</button>
-      </div>
-    </header>
+      <nav class="sidebar-nav">
+        <button type="button" class="nav-item active" data-panel="dashboard">◈ Dashboard</button>
+        <button type="button" class="nav-item" data-panel="bot">◈ Bot Health</button>
+        <button type="button" class="nav-item" data-panel="radio">◈ Radio</button>
+        <button type="button" class="nav-item" data-panel="watch">◈ Luxx Watch</button>
+        <button type="button" class="nav-item" data-panel="system">◈ System</button>
+        <button type="button" class="nav-item" data-panel="tools">◈ Tools</button>
+      </nav>
+      <div class="sidebar-foot muted">DoxxBorx · v3.1</div>
+    </aside>
 
-    <main class="grid">
-      <section class="card span-2 hero-card">
-        <div class="hero-inner">
-          <div>
-            <p class="eyebrow">Live Status</p>
-            <h2 id="hero-bot-name">LuxxBot</h2>
-            <p id="hero-uptime" class="hero-meta">—</p>
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <h2 id="panel-title">Dashboard</h2>
+          <span id="conn-badge" class="badge offline">offline</span>
+        </div>
+        <div class="top-actions">
+          <button id="btn-refresh" class="btn ghost">↻ Refresh</button>
+          <button id="btn-logout" class="btn ghost">Keluar</button>
+        </div>
+      </header>
+
+      <main class="panels">
+        <!-- DASHBOARD -->
+        <section id="panel-dashboard" class="panel active">
+          <div class="grid">
+            <article class="card span-2 hero-card reveal">
+              <div class="hero-inner">
+                <div>
+                  <p class="eyebrow">Live Telemetry</p>
+                  <h3 id="hero-bot-name">LuxxBot</h3>
+                  <p id="hero-uptime" class="hero-meta">—</p>
+                </div>
+                <div id="hero-pill" class="hero-pill pulse">⚡ Online</div>
+              </div>
+              <div class="hero-bars">
+                <div class="meter"><span>RAM</span><div class="meter-track"><div id="meter-ram" class="meter-fill"></div></div><em id="meter-ram-label">0 MB</em></div>
+                <div class="meter"><span>Heap</span><div class="meter-track"><div id="meter-heap" class="meter-fill heap"></div></div><em id="meter-heap-label">0 MB</em></div>
+              </div>
+            </article>
+
+            <article class="card reveal">
+              <h3>Quick Links</h3>
+              <div id="quick-links" class="link-grid"></div>
+            </article>
+
+            <article class="card reveal">
+              <h3>Service Status</h3>
+              <div id="service-pills" class="pill-row"></div>
+            </article>
+
+            <article class="card span-2 reveal">
+              <h3>Ringkasan Bot</h3>
+              <div id="status-grid" class="stat-grid"></div>
+            </article>
           </div>
-          <div id="hero-pill" class="hero-pill">⚡ Online</div>
-        </div>
-      </section>
+        </section>
 
-      <section class="card span-2">
-        <h2>Status Bot</h2>
-        <div id="status-grid" class="stat-grid"></div>
-      </section>
-
-      <section class="card">
-        <h2>Discord</h2>
-        <div id="discord-box" class="info-box"></div>
-      </section>
-
-      <section class="card span-2 watch-card">
-        <div class="row-between">
-          <h2>📺 Luxx Watch (Nonton Bareng)</h2>
-          <div class="btn-row">
-            <a id="watch-open-link" class="btn" href="/watch" target="_blank" rel="noopener">Buka TV Room</a>
-            <button id="btn-watch-skip" class="btn" type="button">⏭ Skip</button>
-            <button id="btn-watch-stop" class="btn danger" type="button">⏹ Stop</button>
-            <button id="btn-watch-clear-q" class="btn" type="button">🗑 Antrian</button>
+        <!-- BOT HEALTH -->
+        <section id="panel-bot" class="panel">
+          <div class="grid">
+            <article class="card span-2 reveal">
+              <h3>Status Bot & WhatsApp</h3>
+              <div id="bot-health-box" class="info-box"></div>
+            </article>
+            <article class="card reveal">
+              <h3>Discord</h3>
+              <div id="discord-box" class="info-box"></div>
+            </article>
+            <article class="card reveal">
+              <h3>Mode & Keamanan</h3>
+              <div id="mode-box" class="info-box"></div>
+            </article>
           </div>
-        </div>
-        <div id="watch-box" class="info-box muted">Memuat...</div>
-      </section>
+        </section>
 
-      <section class="card span-2 player-card">
-        <div class="player-head">
-          <h2>Radio Player</h2>
-          <span id="player-badge" class="player-badge idle">IDLE</span>
-        </div>
-        <div id="player-shell" class="player-shell">
-          <div class="player-art-wrap">
-            <img id="player-thumb" class="player-thumb" src="" alt="Thumbnail lagu" />
-            <div id="player-thumb-fallback" class="player-thumb-fallback">🎵</div>
+        <!-- RADIO -->
+        <section id="panel-radio" class="panel">
+          <div class="grid">
+            <article class="card span-2 player-card reveal">
+              <div class="player-head">
+                <h3>Radio Player</h3>
+                <span id="player-badge" class="player-badge idle">IDLE</span>
+              </div>
+              <div id="player-shell" class="player-shell">
+                <div class="player-art-wrap">
+                  <img id="player-thumb" class="player-thumb" src="" alt="Thumbnail lagu" />
+                  <div id="player-thumb-fallback" class="player-thumb-fallback">🎵</div>
+                </div>
+                <div class="player-body">
+                  <p id="player-title" class="player-title">Belum ada lagu</p>
+                  <p id="player-artist" class="player-artist muted">—</p>
+                  <p id="player-requester" class="player-requester muted">🙋 —</p>
+                  <audio id="radio-audio" class="radio-audio" controls preload="none"></audio>
+                </div>
+              </div>
+            </article>
+
+            <article class="card span-2 lyrics-card reveal">
+              <div class="lyrics-head">
+                <h3>📝 Lirik Sedang Diputar</h3>
+                <span id="lyrics-source" class="lyrics-badge">—</span>
+              </div>
+              <div id="lyrics-meta" class="lyrics-meta muted">Belum ada lagu</div>
+              <div id="lyrics-frame" class="lyrics-frame">
+                <p id="lyrics-empty" class="lyrics-empty">Lirik akan muncul otomatis saat lagu diputar</p>
+                <div id="lyrics-body" class="lyrics-body hidden"></div>
+              </div>
+              <div class="lyrics-progress"><div id="lyrics-progress-fill" class="lyrics-progress-fill"></div></div>
+            </article>
+
+            <article class="card span-2 reveal">
+              <div class="row-between">
+                <h3>Antrian Radio</h3>
+                <div class="btn-row">
+                  <button id="btn-skip" class="btn" type="button">⏭ Skip</button>
+                  <button id="btn-clear" class="btn danger" type="button">🛑 Clear</button>
+                  <button id="btn-restart" class="btn warn" type="button">🔄 Restart Bot</button>
+                </div>
+              </div>
+              <ul id="queue-list" class="queue-list"></ul>
+            </article>
           </div>
-          <div class="player-body">
-            <p id="player-title" class="player-title">Belum ada lagu</p>
-            <p id="player-artist" class="player-artist muted">—</p>
-            <p id="player-requester" class="player-requester muted">🙋 —</p>
-            <audio id="radio-audio" class="radio-audio" controls preload="none"></audio>
+        </section>
+
+        <!-- WATCH -->
+        <section id="panel-watch" class="panel">
+          <div class="grid">
+            <article class="card span-2 watch-card reveal">
+              <div class="row-between">
+                <h3>📺 Luxx Watch</h3>
+                <div class="btn-row">
+                  <a id="watch-open-link" class="btn" href="/watch" target="_blank" rel="noopener">Buka TV Room</a>
+                  <button id="btn-watch-skip" class="btn" type="button">⏭ Skip</button>
+                  <button id="btn-watch-stop" class="btn danger" type="button">⏹ Stop</button>
+                  <button id="btn-watch-clear-q" class="btn" type="button">🗑 Antrian</button>
+                </div>
+              </div>
+              <div id="watch-box" class="info-box muted">Memuat...</div>
+            </article>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section class="card span-2 lyrics-card">
-        <div class="lyrics-head">
-          <h2>📝 Lirik Sedang Diputar</h2>
-          <span id="lyrics-source" class="lyrics-badge">—</span>
-        </div>
-        <div id="lyrics-meta" class="lyrics-meta muted">Belum ada lagu</div>
-        <div id="lyrics-frame" class="lyrics-frame">
-          <p id="lyrics-empty" class="lyrics-empty">Lirik akan muncul otomatis saat lagu diputar</p>
-          <div id="lyrics-body" class="lyrics-body hidden"></div>
-        </div>
-        <div class="lyrics-progress">
-          <div id="lyrics-progress-fill" class="lyrics-progress-fill"></div>
-        </div>
-      </section>
-
-      <section class="card span-2">
-        <h2>🍪 YouTube Cookies (untuk !play / radio)</h2>
-        <div id="cookies-box" class="info-box muted">Memuat...</div>
-        <p class="muted" style="font-size:.85rem;margin:.5rem 0 0">Railway butuh cookies sekali — tersimpan di volume <code>/app/persist</code>. Export di PC: <code>scripts/export-youtube-cookies.ps1</code></p>
-        <textarea id="cookies-paste" class="cookies-paste" rows="5" placeholder="Paste isi file youtube-cookies.txt (format Netscape) lalu klik Simpan"></textarea>
-        <div class="btn-row" style="margin-top:.6rem">
-          <button id="btn-cookies-save" class="btn primary" type="button">💾 Simpan Cookies</button>
-        </div>
-      </section>
-
-      <section class="card span-2">
-        <div class="row-between">
-          <h2>Antrian Radio</h2>
-          <div class="btn-row">
-            <button id="btn-skip" class="btn">⏭ Skip</button>
-            <button id="btn-clear" class="btn danger">🛑 Clear</button>
-            <button id="btn-restart" class="btn warn">🔄 Restart</button>
+        <!-- SYSTEM -->
+        <section id="panel-system" class="panel">
+          <div class="grid">
+            <article class="card span-2 reveal">
+              <div class="row-between">
+                <h3>Cache & Memory</h3>
+                <button id="btn-prune-cache" class="btn warn" type="button">🧹 Prune Cache</button>
+              </div>
+              <div id="cache-grid" class="stat-grid"></div>
+            </article>
+            <article class="card reveal">
+              <h3>Temp Files</h3>
+              <div id="temp-box" class="info-box muted">—</div>
+            </article>
+            <article class="card reveal">
+              <h3>Sessions Aktif</h3>
+              <div id="session-box" class="info-box muted">—</div>
+            </article>
+            <article class="card span-2 reveal">
+              <h3>Runtime</h3>
+              <div id="runtime-box" class="info-box muted">—</div>
+            </article>
           </div>
-        </div>
-        <ul id="queue-list" class="queue-list"></ul>
-      </section>
-    </main>
-    <footer class="footer muted">LuxxBot v3.1 Premium · Made by DoxxBorx</footer>
+        </section>
+
+        <!-- TOOLS -->
+        <section id="panel-tools" class="panel">
+          <div class="grid">
+            <article class="card span-2 reveal">
+              <h3>🍪 YouTube Cookies</h3>
+              <div id="cookies-box" class="info-box muted">Memuat...</div>
+              <p class="muted hint">Railway butuh cookies sekali — tersimpan di volume <code>/app/persist</code>.</p>
+              <textarea id="cookies-paste" class="cookies-paste" rows="5" placeholder="Paste isi file youtube-cookies.txt (format Netscape) lalu klik Simpan"></textarea>
+              <div class="btn-row" style="margin-top:.6rem">
+                <button id="btn-cookies-save" class="btn primary" type="button">💾 Simpan Cookies</button>
+              </div>
+            </article>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer muted">LuxxBot Admin v3.1 · Made by DoxxBorx</footer>
+    </div>
   </div>
 
   <div id="toast" class="toast hidden"></div>

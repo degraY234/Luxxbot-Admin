@@ -25,6 +25,7 @@ import { runtime } from '../utils/runtime.js';
 import { getYoutubeCookiesStatus, saveYoutubeCookies } from '../utils/youtube-cookies.js';
 import { getSessionDiagnostics } from '../utils/wa-session.js';
 import { getCachedLyricsForTrack } from './radio-lyrics.js';
+import { buildSystemDiagnostics, pruneRuntimeCaches } from '../utils/admin-diagnostics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const adminStaticDir = path.resolve(__dirname, '../../admin');
@@ -142,6 +143,15 @@ export function mountAdminApi(app) {
                 ? getCachedLyricsForTrack(radio.current)
                 : { found: false, loading: false, lyrics: null }
         });
+    });
+
+    app.get('/admin/api/system', (req, res) => {
+        res.json({ ok: true, ...buildSystemDiagnostics() });
+    });
+
+    app.post('/admin/api/cache/prune', (req, res) => {
+        const result = pruneRuntimeCaches();
+        res.json({ ok: true, message: 'Cache runtime dibersihkan.', ...result, system: buildSystemDiagnostics() });
     });
 
     app.get('/admin/api/queue', (req, res) => {

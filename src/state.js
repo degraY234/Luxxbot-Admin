@@ -9,5 +9,3 @@ export const cooldowns = new Map();
 export const userAIContext = new Map();
 export const imageCache = new Map();
 export const aiQueue = [];
-export const aiConversationMemory = {};
-export const notesDatabase = {};

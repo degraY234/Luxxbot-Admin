@@ -4,12 +4,26 @@ import { MAX_MEMORY } from '../config.js';
 /** Jeda antar perintah ! per user (ms) — chat biasa tidak kena */
 export const COMMAND_COOLDOWN_MS = 5000;
 
+const COOLDOWN_PRUNE_INTERVAL = 200;
+let cooldownPruneCounter = 0;
+
+export function pruneExpiredCooldowns() {
+    const now = Date.now();
+    for (const [key, expiresAt] of cooldowns) {
+        if (expiresAt <= now) cooldowns.delete(key);
+    }
+}
+
 export function checkCooldown(userId, scope = 'global', duration = 3000) {
     const key = `${userId}:${scope}`;
     const now = Date.now();
     const expiresAt = cooldowns.get(key) || 0;
     if (expiresAt > now) return false;
     cooldowns.set(key, now + duration);
+    if (++cooldownPruneCounter >= COOLDOWN_PRUNE_INTERVAL) {
+        cooldownPruneCounter = 0;
+        pruneExpiredCooldowns();
+    }
     return true;
 }
 

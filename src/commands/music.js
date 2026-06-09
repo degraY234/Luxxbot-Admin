@@ -11,7 +11,6 @@ import {
     getRadioListenUrl
 } from '../services/radio-server.js';
 import { getDiscordRadioStatus } from '../services/discord-radio.js';
-import { getOrCreateRoom } from '../services/w2g.js';
 import { sendWaRadioLink } from '../utils/wa-radio-link.js';
 
 function mapVideoToTrack(v) {
@@ -106,26 +105,6 @@ export async function handleRadioCommand({ sock, from, msg }) {
     } catch (e) {
         console.error('Radio error:', e);
         await sock.sendMessage(from, { text: '❌ Gagal ambil info radio.' }, { quoted: msg });
-    }
-}
-
-// ============================================================
-// 🎬 !stream — nonton bareng W2G (video, bukan radio musik)
-// ============================================================
-export async function handleStreamCommand({ sock, from, msg, getOrCreateRoom }) {
-    try {
-        await sock.sendMessage(from, { text: '🎬 Mengambil link nonton bareng...' }, { quoted: msg });
-        const room = await getOrCreateRoom();
-        await sock.sendMessage(from, {
-            text:
-                `🎬 *NONTON BARENG (Watch2Gether)*\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `🔗 *Link room:*\n${room.url}\n\n` +
-                `_Ini untuk nonton video bareng, bukan radio musik._\n` +
-                `📻 Dengar musik: \`!play\` (link player otomatis) · Tambah lagu: \`!play\``
-        }, { quoted: msg });
-    } catch (e) {
-        await sock.sendMessage(from, { text: '❌ Gagal ambil link W2G. Cek STREAM_TOKEN di .env' }, { quoted: msg });
     }
 }
 

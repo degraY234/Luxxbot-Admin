@@ -55,12 +55,19 @@ export async function handleStickerCommand({ sock, from, msg, args }) {
         if (isVideo) {
             const inputPath = path.join(TEMP_DIR, `input-${Date.now()}.mp4`);
             const outputPath = path.join(TEMP_DIR, `output-${Date.now()}.webp`);
-            fs.writeFileSync(inputPath, buffer);
-            if (topText || bottomText) await videoToStickerWithText(inputPath, outputPath, topText, bottomText);
-            else await videoToSticker(inputPath, outputPath);
-            const stickerBuffer = fs.readFileSync(outputPath);
-            await sock.sendMessage(from, { sticker: stickerBuffer }, { quoted: msg });
-            try { fs.unlinkSync(inputPath); fs.unlinkSync(outputPath); } catch (_) {}
+            const cleanupVideoTmp = () => {
+                try { fs.unlinkSync(inputPath); } catch (_) {}
+                try { fs.unlinkSync(outputPath); } catch (_) {}
+            };
+            try {
+                fs.writeFileSync(inputPath, buffer);
+                if (topText || bottomText) await videoToStickerWithText(inputPath, outputPath, topText, bottomText);
+                else await videoToSticker(inputPath, outputPath);
+                const stickerBuffer = fs.readFileSync(outputPath);
+                await sock.sendMessage(from, { sticker: stickerBuffer }, { quoted: msg });
+            } finally {
+                cleanupVideoTmp();
+            }
             await sock.sendMessage(from, {
                 text: `✅ Stiker video *${meta.label}* siap!`
             });

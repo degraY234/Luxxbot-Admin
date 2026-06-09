@@ -84,6 +84,22 @@ const WORLD_WS_SEEDS = {
 
 const parseCache = new Map();
 const CACHE_TTL_MS = 12 * 60 * 1000;
+const PARSE_CACHE_MAX = 120;
+
+function pruneParseCache() {
+    const now = Date.now();
+    for (const [key, entry] of parseCache) {
+        if (now - entry.at >= CACHE_TTL_MS) parseCache.delete(key);
+    }
+    while (parseCache.size > PARSE_CACHE_MAX) {
+        const oldest = parseCache.keys().next().value;
+        parseCache.delete(oldest);
+    }
+}
+
+export function getParseCacheStats() {
+    return { size: parseCache.size, max: PARSE_CACHE_MAX, ttlMin: CACHE_TTL_MS / 60_000 };
+}
 
 const WORLD_AUTHORS = {
     inggris: ['Emily Dickinson', 'William Shakespeare', 'Lord Byron', 'Robert Frost', 'Elizabeth Barrett Browning', 'Percy Bysshe Shelley', 'John Keats'],
@@ -308,6 +324,7 @@ function scorePoemTitle(title, lang = 'id') {
 }
 
 async function wikisourceParse(lang, pageTitle) {
+    pruneParseCache();
     const cacheKey = `${lang}:${pageTitle}`;
     const cached = parseCache.get(cacheKey);
     if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.data;

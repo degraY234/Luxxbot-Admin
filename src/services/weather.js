@@ -386,8 +386,3 @@ export async function getWeatherMessages(location) {
     return messages;
 }
 
-/** @deprecated use getWeatherMessages */
-export async function getWeatherReport(location) {
-    const msgs = await getWeatherMessages(location);
-    return msgs.join('\n\n');
-}

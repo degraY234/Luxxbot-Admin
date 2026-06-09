@@ -313,10 +313,13 @@ async function downloadInstagram(url, mode) {
         }
     }
 
+    const igTmp = path.join('./temp/dl', `ig-${Date.now()}`);
     try {
-        return await downloadViaYtDlp(url, mode, path.join('./temp/dl', `ig-${Date.now()}`), mode === 'video' ? 'hd' : 'wa');
+        return await downloadViaYtDlp(url, mode, igTmp, mode === 'video' ? 'hd' : 'wa');
     } catch (e) {
         errors.push(`yt-dlp: ${e.message}`);
+    } finally {
+        cleanupTmp(igTmp);
     }
 
     throw new Error(errors.slice(-3).join(' · ') || 'Instagram gagal diunduh');

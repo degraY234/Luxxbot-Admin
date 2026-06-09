@@ -1,9 +1,34 @@
 const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => [...document.querySelectorAll(sel)];
 
 const loginScreen = $('#login-screen');
 const appScreen = $('#app-screen');
 const toastEl = $('#toast');
 const loginError = $('#login-error');
+
+const PANEL_TITLES = {
+  dashboard: 'Dashboard',
+  bot: 'Bot Health',
+  radio: 'Radio Control',
+  watch: 'Luxx Watch',
+  system: 'System & Cache',
+  tools: 'Tools'
+};
+
+let lastTrackId = null;
+let lastThumbTrackId = null;
+let lastStreamEpoch = null;
+let lastAdminRadio = null;
+let lastSystem = null;
+let lyricsPollTimer = null;
+
+let lyricsState = {
+  trackKey: null,
+  contentKey: null,
+  data: null,
+  playback: { positionSec: 0, durationSec: 0, progress: 0, preparedAt: 0 },
+  fetchedAt: 0
+};
 
 function showToast(msg, ms = 3000) {
   toastEl.textContent = msg;
@@ -37,24 +62,14 @@ function isSelfHostedAdmin() {
   return !isGitHubPages();
 }
 
-/** Default API base: Railway/VPS = origin ini; GitHub Pages = localhost */
 function defaultApiBase() {
-  if (isSelfHostedAdmin()) {
-    return location.origin.replace(/\/$/, '');
-  }
+  if (isSelfHostedAdmin()) return location.origin.replace(/\/$/, '');
   return 'http://localhost:3920';
 }
 
-function defaultLocalBase() {
-  return defaultApiBase();
-}
-
 function resolveApiBase() {
-  const saved = (localStorage.getItem('luxx_api_base') || '').replace(/\/$/, '');
-  if (isSelfHostedAdmin()) {
-    return location.origin.replace(/\/$/, '');
-  }
-  return saved || defaultApiBase();
+  if (isSelfHostedAdmin()) return location.origin.replace(/\/$/, '');
+  return (localStorage.getItem('luxx_api_base') || '').replace(/\/$/, '') || defaultApiBase();
 }
 
 function setupLoginForm() {
@@ -65,13 +80,10 @@ function setupLoginForm() {
 
   if (isSelfHostedAdmin()) {
     const origin = location.origin.replace(/\/$/, '');
-    if (baseInput) {
-      baseInput.value = origin;
-      baseInput.readOnly = true;
-    }
+    if (baseInput) { baseInput.value = origin; baseInput.readOnly = true; }
     if (baseField) baseField.style.display = 'none';
     if (localBtn) localBtn.style.display = 'none';
-    if (hint) hint.textContent = 'Admin jalan di server yang sama — cukup isi Admin Token dari .env / Railway Variables.';
+    if (hint) hint.textContent = 'Admin jalan di server yang sama — cukup isi Admin Token.';
   } else {
     if (baseInput) baseInput.readOnly = false;
     if (baseField) baseField.style.display = '';
@@ -84,16 +96,12 @@ function friendlyError(err, base) {
   const msg = String(err?.message || err || 'Gagal connect');
   if (msg === 'Failed to fetch' || msg.includes('NetworkError')) {
     const tunnelHint = base.includes('trycloudflare.com')
-      ? '\n• URL trycloudflare MATI kalau tunnel ditutup — jalankan ulang: scripts\\radio-tunnel.ps1\n• Salin URL BARU ke API Base URL (bukan URL lama).'
+      ? '\n• URL trycloudflare MATI kalau tunnel ditutup — jalankan ulang scripts\\radio-tunnel.ps1'
       : '';
-    return `Tidak bisa hubungi bot di ${base}.\n• Bot jalan? (pm2 status)\n• Tunnel hidup? (jendela cloudflared harus terbuka)${tunnelHint}\n• API Base URL = alamat bot/tunnel, BUKAN link GitHub Pages.`;
+    return `Tidak bisa hubungi bot di ${base}.\n• Bot jalan? (pm2 status)\n• Tunnel hidup?${tunnelHint}\n• API Base URL = alamat bot, BUKAN GitHub Pages.`;
   }
-  if (msg.includes('Unauthorized')) {
-    return 'Token salah. Harus sama persis dengan ADMIN_API_TOKEN di .env bot.';
-  }
-  if (msg.includes('Admin API disabled')) {
-    return 'ADMIN_API_TOKEN belum diset di .env bot. Restart: pm2 restart luxx --update-env';
-  }
+  if (msg.includes('Unauthorized')) return 'Token salah. Harus sama dengan ADMIN_API_TOKEN di .env bot.';
+  if (msg.includes('Admin API disabled')) return 'ADMIN_API_TOKEN belum diset. Restart: pm2 restart luxx --update-env';
   return msg;
 }
 
@@ -109,7 +117,8 @@ async function api(path, method = 'GET', body = null) {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: body != null ? JSON.stringify(body) : undefined
+      body: body != null ? JSON.stringify(body) : undefined,
+      cache: 'no-store'
     });
   } catch (e) {
     throw new Error(friendlyError(e, base));
@@ -120,9 +129,80 @@ async function api(path, method = 'GET', body = null) {
   return data;
 }
 
-let lastTrackId = null;
-let lastThumbTrackId = null;
-let lastStreamEpoch = null;
+function switchPanel(id) {
+  $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.panel === id));
+  $$('.panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${id}`));
+  $('#panel-title').textContent = PANEL_TITLES[id] || 'Dashboard';
+}
+
+function initGridCanvas() {
+  const canvas = $('#grid-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let w = 0;
+  let h = 0;
+  let t = 0;
+  const nodes = [];
+
+  function resize() {
+    w = canvas.width = window.innerWidth;
+    h = canvas.height = window.innerHeight;
+    nodes.length = 0;
+    const count = Math.floor((w * h) / 28000);
+    for (let i = 0; i < count; i++) {
+      nodes.push({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.35,
+        vy: (Math.random() - 0.5) * 0.35
+      });
+    }
+  }
+
+  function draw() {
+    t += 0.008;
+    ctx.clearRect(0, 0, w, h);
+
+    for (const n of nodes) {
+      n.x += n.vx;
+      n.y += n.vy;
+      if (n.x < 0 || n.x > w) n.vx *= -1;
+      if (n.y < 0 || n.y > h) n.vy *= -1;
+    }
+
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i];
+        const b = nodes[j];
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 120) {
+          const alpha = (1 - dist / 120) * 0.35;
+          ctx.strokeStyle = `rgba(0, 212, 255, ${alpha})`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+      }
+    }
+
+    for (const n of nodes) {
+      ctx.fillStyle = `rgba(0, 255, 163, ${0.35 + Math.sin(t + n.x) * 0.15})`;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    requestAnimationFrame(draw);
+  }
+
+  resize();
+  window.addEventListener('resize', resize);
+  draw();
+}
 
 function stopAudio(audio) {
   if (!audio) return;
@@ -145,22 +225,18 @@ function updatePlayerThumbnail(cur, thumb, fallback) {
     fallback.style.display = 'flex';
     return;
   }
-
   if (lastThumbTrackId === cur.id && thumb.classList.contains('visible')) return;
-
   lastThumbTrackId = cur.id;
   thumb.classList.remove('visible');
   fallback.style.display = 'flex';
-  thumb.onload = () => {
-    thumb.classList.add('visible');
-    fallback.style.display = 'none';
-  };
-  thumb.onerror = () => {
-    thumb.classList.remove('visible');
-    thumb.removeAttribute('src');
-    fallback.style.display = 'flex';
-  };
+  thumb.onload = () => { thumb.classList.add('visible'); fallback.style.display = 'none'; };
+  thumb.onerror = () => { thumb.classList.remove('visible'); thumb.removeAttribute('src'); fallback.style.display = 'flex'; };
   thumb.src = `${cur.thumbnail}?v=${cur.id}`;
+}
+
+function radioPreparingLabel(r) {
+  const next = r.queue?.[0];
+  return next ? `Berikutnya: ${next.title}` : 'Tunggu sebentar';
 }
 
 function renderPlayer(r = {}, base = '') {
@@ -197,9 +273,7 @@ function renderPlayer(r = {}, base = '') {
     badge.className = 'player-badge idle';
     const err = r.lastPrepareError?.message;
     $('#player-title').textContent = err ? 'Gagal memuat lagu' : 'Belum ada lagu';
-    $('#player-artist').textContent = err
-      ? `${r.lastPrepareError.title || ''}: ${err.slice(0, 120)}`
-      : '—';
+    $('#player-artist').textContent = err ? `${r.lastPrepareError.title || ''}: ${err.slice(0, 120)}` : '—';
     $('#player-requester').textContent = '🙋 —';
     thumb.classList.remove('visible');
     thumb.removeAttribute('src');
@@ -227,26 +301,9 @@ function renderPlayer(r = {}, base = '') {
   }
 }
 
-function radioPreparingLabel(r) {
-  const next = r.queue?.[0];
-  return next ? `Berikutnya: ${next.title}` : 'Tunggu sebentar';
-}
-
 function escapeHtml(s) {
-  return String(s || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
-
-let lyricsState = {
-  trackKey: null,
-  contentKey: null,
-  data: null,
-  playback: { positionSec: 0, durationSec: 0, progress: 0, preparedAt: 0 },
-  fetchedAt: 0
-};
-
 
 function lyricTrackKey(cur) {
   return cur ? `${cur.id ?? ''}:${cur.title}` : null;
@@ -269,13 +326,12 @@ function renderLyrics(r = {}) {
 
   if (!cur) {
     lyricsState = { trackKey: null, contentKey: null, data: null, playback: { positionSec: 0, durationSec: 0, progress: 0, preparedAt: 0 }, fetchedAt: 0 };
-
     meta.textContent = 'Belum ada lagu';
     badge.textContent = '—';
     empty.hidden = false;
     body.classList.add('hidden');
     body.innerHTML = '';
-    progress.style.width = '0%';
+    if (progress) progress.style.width = '0%';
     return;
   }
 
@@ -286,33 +342,27 @@ function renderLyrics(r = {}) {
     progress: r.playback?.progress ?? 0,
     preparedAt: r.playback?.preparedAt ?? 0
   };
-  lyricsState.fetchedAt = Date.now();
 
   const lyricsStale = lyrics?.trackId != null && cur.id != null && lyrics.trackId !== cur.id;
   const loading = lyrics?.loading || lyricsStale;
 
   if (loading) {
-    lyricsState.data = null;
     badge.textContent = 'Memuat...';
     empty.textContent = 'Mencari lirik lagu...';
     empty.hidden = false;
     body.classList.add('hidden');
     body.innerHTML = '';
-    progress.style.width = `${r.playback?.progress ?? 0}%`;
+    if (progress) progress.style.width = `${r.playback?.progress ?? 0}%`;
     return;
   }
 
   if (!lyrics?.found || !lyrics?.lyrics) {
-    lyricsState.data = null;
-
     badge.textContent = 'Tidak ditemukan';
-    empty.textContent = lyrics?.retryInSec
-      ? `Mencari lirik lagi dalam ${lyrics.retryInSec}s...`
-      : 'Mencari lirik — retry otomatis...';
+    empty.textContent = lyrics?.retryInSec ? `Retry dalam ${lyrics.retryInSec}s...` : 'Mencari lirik — retry otomatis...';
     empty.hidden = false;
     body.classList.add('hidden');
     body.innerHTML = '';
-    progress.style.width = `${r.playback?.progress ?? 0}%`;
+    if (progress) progress.style.width = `${r.playback?.progress ?? 0}%`;
     return;
   }
 
@@ -330,8 +380,85 @@ function renderLyrics(r = {}) {
     body.innerHTML = `<pre class="lyric-plain">${escapeHtml(lyrics.lyrics)}</pre>`;
     body.scrollTop = 0;
   }
+  if (progress) progress.style.width = `${r.playback?.progress ?? 0}%`;
+}
 
-  if (progress) progress.style.width = '0%';
+function renderMeters(d, sys) {
+  const ramMb = sys?.memory?.rssMb ?? d.ramMb ?? 0;
+  const heapMb = sys?.memory?.heapUsedMb ?? 0;
+  const heapTotal = sys?.memory?.heapTotalMb ?? 256;
+  const ramPct = Math.min(100, Math.round((ramMb / 512) * 100));
+  const heapPct = Math.min(100, Math.round((heapMb / heapTotal) * 100));
+  $('#meter-ram').style.width = `${ramPct}%`;
+  $('#meter-heap').style.width = `${heapPct}%`;
+  $('#meter-ram-label').textContent = `${ramMb} MB`;
+  $('#meter-heap-label').textContent = `${heapMb} MB`;
+}
+
+function renderQuickLinks(base, sys) {
+  const links = sys?.links || {};
+  const items = [
+    ['📻', 'Radio', `${base}/radio`],
+    ['📺', 'Luxx Watch', `${base}/watch`],
+    ['🌐', 'Portfolio', `${base}/portfolio`],
+    ['📱', 'Pair WA', `${base}/pair`]
+  ];
+  $('#quick-links').innerHTML = items.map(([icon, label, href]) =>
+    `<a class="link-tile" href="${href}" target="_blank" rel="noopener">${icon} ${label}</a>`
+  ).join('');
+}
+
+function renderServicePills(d) {
+  const sess = d.session || {};
+  const yt = d.youtubeCookies || {};
+  const disc = d.discord || {};
+  const pills = [
+    ['WA', sess.paired ? 'ok' : 'bad', sess.paired ? 'Paired' : 'Belum pair'],
+    ['YT Cookies', yt.ready ? 'ok' : 'warn', yt.ready ? 'Ready' : 'Missing'],
+    ['Discord', disc.slashReady ? 'ok' : 'warn', disc.slashReady ? 'Slash OK' : 'Slash ⏳'],
+    ['Radio', d.radio?.current || d.radio?.isPreparing ? 'ok' : 'warn', d.radio?.current ? 'Playing' : 'Idle'],
+    ['Mode', d.sleeping ? 'warn' : 'ok', d.sleeping ? 'Tidur' : 'Online']
+  ];
+  $('#service-pills').innerHTML = pills.map(([, cls, label]) =>
+    `<span class="status-pill ${cls}">${label}</span>`
+  ).join('');
+}
+
+function renderSystem(sys) {
+  if (!sys) return;
+  lastSystem = sys;
+
+  const c = sys.cache || {};
+  $('#cache-grid').innerHTML = [
+    ['Image Cache', `${c.image?.entries ?? 0} / ${c.image?.max ?? 50}`, `~${c.image?.approxMb ?? 0} MB`],
+    ['Cooldowns', c.cooldowns?.entries ?? 0, 'entries'],
+    ['AI Context', c.aiContext?.users ?? 0, 'users'],
+    ['AI Queue', c.aiQueue?.pending ?? 0, 'pending'],
+    ['Sastra Cache', c.sastra?.size ?? 0, `max ${c.sastra?.max ?? 0}`],
+    ['Lyrics Cache', c.lyrics?.trackCache ?? 0, `query ${c.lyrics?.queryCache ?? 0}`]
+  ].map(([l, v, sub]) =>
+    `<div class="stat"><div class="label">${l}</div><div class="value">${v}</div><div class="label">${sub}</div></div>`
+  ).join('');
+
+  const temp = sys.temp || {};
+  const dirs = (temp.dirs || []).map((d) =>
+    `${d.exists ? '✓' : '✗'} <code>${d.path.split(/[/\\]/).pop()}</code>: ${d.files} file`
+  ).join('<br>');
+  $('#temp-box').innerHTML = `${dirs || '—'}<br><strong>${temp.totalFiles ?? 0}</strong> files · <strong>${temp.totalMb ?? 0} MB</strong>`;
+
+  const s = sys.sessions || {};
+  $('#session-box').innerHTML = `
+    Play picker: <strong>${s.playSessions ?? 0}</strong><br>
+    SP session: <strong>${s.spSessions ?? 0}</strong><br>
+    Sastra: <strong>${s.sastraSessions ?? 0}</strong><br>
+    Notes: <strong>${s.notes ?? 0}</strong> · Reminders: <strong>${s.reminders ?? 0}</strong>`;
+
+  $('#runtime-box').innerHTML = `
+    Node <strong>${sys.node || '—'}</strong> · PID <strong>${sys.pid ?? '—'}</strong><br>
+    Platform: <strong>${sys.platform || '—'}</strong> · CPUs: <strong>${sys.cpus ?? '—'}</strong><br>
+    Load: <strong>${(sys.loadAvg || []).join(', ') || '—'}</strong><br>
+    Railway: <strong>${sys.runtime?.railway ? 'Yes' : 'No'}</strong><br>
+    Radio URL: <span class="muted">${sys.runtime?.radioUrl || '—'}</span>`;
 }
 
 function renderStatus(d) {
@@ -339,27 +466,43 @@ function renderStatus(d) {
   $('#conn-badge').className = 'badge online';
 
   $('#hero-bot-name').textContent = d.bot || 'LuxxBot';
-  $('#hero-uptime').textContent = `Uptime ${d.uptime} · RAM ${d.ramMb} MB`;
+  $('#hero-uptime').textContent = `Uptime ${d.uptime} · RAM ${d.ramMb} MB · ${d.host || ''}`;
 
   const cur = d.radio?.current;
   const pill = $('#hero-pill');
-  if (cur) pill.textContent = `▶ ${cur.title.slice(0, 32)}${cur.title.length > 32 ? '…' : ''}`;
+  if (cur) pill.textContent = `▶ ${cur.title.slice(0, 36)}${cur.title.length > 36 ? '…' : ''}`;
   else if (d.radio?.isPreparing) pill.textContent = '⏳ Memuat...';
   else if (d.sleeping) pill.textContent = '🛌 Tidur';
   else pill.textContent = '⚡ Online';
 
+  renderMeters(d, lastSystem);
+
   $('#status-grid').innerHTML = [
     ['Bot', d.bot], ['Uptime', d.uptime], ['RAM', `${d.ramMb} MB`], ['Host', d.host],
-    ['Mode', d.sleeping ? 'Tidur' : 'Online'], ['Self', d.selfMode ? 'On' : 'Off'],
-    ['Anti-Link', d.antiLink ? 'ON' : 'OFF']
+    ['Mode', d.sleeping ? 'Tidur' : 'Online'], ['Self Mode', d.selfMode ? 'On' : 'Off'],
+    ['Anti-Link', d.antiLink ? 'ON' : 'OFF'], ['Queue', `${d.radio?.queueLength ?? 0} lagu`]
   ].map(([l, v]) => `<div class="stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
+
+  const sess = d.session || {};
+  const yt = d.youtubeCookies || {};
+  $('#bot-health-box').innerHTML = `
+    WhatsApp: <strong>${sess.paired ? '✅ Paired' : '❌ Belum pair'}</strong><br>
+    Session size: <strong>${sess.credsBytes || 0}</strong> bytes<br>
+    Persist path: <strong>${sess.onPersistPath ? '✅' : '⚠️'}</strong><br>
+    YouTube cookies: <strong>${yt.ready ? '✅ Aktif' : '❌ Belum'}</strong> (${yt.bytes || 0} bytes)`;
 
   const disc = d.discord || {};
   $('#discord-box').innerHTML = `
     Server: <strong>${disc.guildCount || 0}</strong><br>
     Voice: ${disc.inVoice ? disc.voiceChannel : 'Belum connect'}<br>
     Slash: ${disc.slashReady ? '✅' : '⏳'}
-    ${disc.inviteUrl ? `<br><a href="${disc.inviteUrl}" target="_blank" rel="noopener" style="color:var(--pink3)">Invite →</a>` : ''}`;
+    ${disc.inviteUrl ? `<br><a href="${disc.inviteUrl}" target="_blank" rel="noopener" style="color:var(--cyan)">Invite →</a>` : ''}`;
+
+  $('#mode-box').innerHTML = `
+    Sleeping: <strong>${d.sleeping ? 'Yes' : 'No'}</strong><br>
+    Self mode: <strong>${d.selfMode ? 'On' : 'Off'}</strong><br>
+    Anti-link: <strong>${d.antiLink ? 'ON' : 'OFF'}</strong><br>
+    <span class="muted">Toggle via !turu / !bangun / !antilink di WA</span>`;
 
   const w = d.watch || {};
   const watchBase = cfg().base || '';
@@ -375,17 +518,11 @@ function renderStatus(d) {
     Penonton: <strong>${w.viewerCount || 0}</strong><br>
     Film: ${w.film ? `<strong>${w.film.title}</strong>` : '—'}<br>
     Playback: ${w.film ? `${pb.playing ? '▶' : '⏸'} ${mins}:${secs}${pb.by ? ` · ${pb.by}` : ''}` : '—'}<br>
-    Antrian: ${(w.queue || []).length} film<br>
-    <span class="muted">User pakai !watch → login username saja</span>`;
+    Antrian: ${(w.queue || []).length} film`;
 
-  const yt = d.youtubeCookies || {};
-  const sess = d.session || {};
   $('#cookies-box').innerHTML = yt.ready
     ? `✅ Cookies aktif · <strong>${yt.bytes || 0}</strong> bytes<br><span class="muted">${yt.path || ''}</span>`
     : `❌ Cookies belum ada — !play gagal di Railway<br><span class="muted">${yt.hint || ''}</span>`;
-  if (sess.paired) {
-    $('#cookies-box').innerHTML += `<br>📱 WA session: <strong>paired</strong> (${sess.credsBytes || 0}B) · persist: ${sess.onPersistPath ? '✅' : '⚠️'}`;
-  }
 
   const r = d.radio || {};
   lastAdminRadio = r;
@@ -395,16 +532,14 @@ function renderStatus(d) {
   const q = r.queue || [];
   $('#queue-list').innerHTML = q.length
     ? q.map((t, i) => {
-        const thumb = t.thumbnail
-          ? `<img src="${t.thumbnail}" alt="" class="queue-thumb" onerror="this.style.display='none'"/>`
-          : '';
+        const thumb = t.thumbnail ? `<img src="${t.thumbnail}" alt="" class="queue-thumb" onerror="this.style.display='none'"/>` : '';
         return `<li>${thumb}<div><strong>${i + 1}.</strong> ${t.title}<br><span class="muted">🙋 ${t.requestedBy}</span></div></li>`;
       }).join('')
     : '<li class="muted">Antrian kosong</li>';
-}
 
-let lyricsPollTimer = null;
-let lastAdminRadio = null;
+  renderServicePills(d);
+  renderQuickLinks(cfg().base, lastSystem);
+}
 
 async function pollAdminLyrics() {
   try {
@@ -420,7 +555,15 @@ async function pollAdminLyrics() {
 
 async function refresh() {
   try {
-    renderStatus(await api('/status'));
+    const [status, system] = await Promise.all([
+      api('/status'),
+      api('/system').catch(() => null)
+    ]);
+    if (system) {
+      lastSystem = system;
+      renderSystem(system);
+    }
+    renderStatus(status);
   } catch (e) {
     $('#conn-badge').textContent = 'error';
     $('#conn-badge').className = 'badge offline';
@@ -434,7 +577,7 @@ async function doLogin() {
   showLoginError('');
 
   if (!token) {
-    showLoginError('Isi Admin Token (sama dengan ADMIN_API_TOKEN di Railway Variables).');
+    showLoginError('Isi Admin Token (sama dengan ADMIN_API_TOKEN).');
     return;
   }
 
@@ -471,10 +614,14 @@ async function doLogin() {
   }
 }
 
+$$('.nav-item').forEach((btn) => {
+  btn.addEventListener('click', () => switchPanel(btn.dataset.panel));
+});
+
 $('#btn-login').addEventListener('click', doLogin);
 $('#btn-local').addEventListener('click', () => {
-  $('#api-base').value = defaultLocalBase();
-  showToast('Diisi: http://localhost:3920');
+  $('#api-base').value = defaultApiBase();
+  showToast('Diisi: localhost:3920');
 });
 $('#btn-toggle-token').addEventListener('click', () => {
   const inp = $('#api-token');
@@ -523,12 +670,14 @@ $('#btn-watch-skip').addEventListener('click', async () => {
   } catch (e) { showToast(e.message); }
 });
 $('#btn-watch-stop').addEventListener('click', async () => {
-  if (!confirm('Hentikan film yang sedang diputar?')) return;
-  try {
-    await api('/watch/stop', 'POST');
-    showToast('Pemutaran dihentikan');
-    await refresh();
-  } catch (e) { showToast(e.message); }
+  if (!confirm('Hentikan film?')) return;
+  try { await api('/watch/stop', 'POST'); showToast('Dihentikan'); await refresh(); }
+  catch (e) { showToast(e.message); }
+});
+$('#btn-watch-clear-q').addEventListener('click', async () => {
+  if (!confirm('Kosongkan antrian watch?')) return;
+  try { await api('/watch/clear-queue', 'POST'); showToast('Antrian watch dikosongkan'); await refresh(); }
+  catch (e) { showToast(e.message); }
 });
 $('#btn-cookies-save').addEventListener('click', async () => {
   const content = ($('#cookies-paste').value || '').trim();
@@ -540,20 +689,20 @@ $('#btn-cookies-save').addEventListener('click', async () => {
     await refresh();
   } catch (e) { showToast(e.message); }
 });
-
-$('#btn-watch-clear-q').addEventListener('click', async () => {
-  if (!confirm('Kosongkan antrian watch?')) return;
+$('#btn-prune-cache').addEventListener('click', async () => {
+  if (!confirm('Bersihkan cache runtime (image + cooldown)?')) return;
   try {
-    await api('/watch/clear-queue', 'POST');
-    showToast('Antrian watch dikosongkan');
+    const r = await api('/cache/prune', 'POST');
+    showToast(r.message || 'Cache dibersihkan');
+    if (r.system) { lastSystem = r.system; renderSystem(r.system); }
     await refresh();
   } catch (e) { showToast(e.message); }
 });
 
 setupLoginForm();
+initGridCanvas();
 const savedToken = localStorage.getItem('luxx_api_token');
 if (!isSelfHostedAdmin()) {
-  const savedBase = localStorage.getItem('luxx_api_base');
-  $('#api-base').value = savedBase || defaultApiBase();
+  $('#api-base').value = localStorage.getItem('luxx_api_base') || defaultApiBase();
 }
 if (savedToken) $('#api-token').value = savedToken;

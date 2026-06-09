@@ -8,7 +8,7 @@ import { minify } from 'terser';
 
 import { buildMenuText } from '../../menu.js';
 import { BOT_NAME, OWNER_NUMBER, PM2_APP_NAME, ai, GEMINI_API_KEY, GEMINI_VISION_MODEL, startTime, W2G_ROOM_FILE } from '../config.js';
-import { state, aiConversationMemory, userAIContext } from '../state.js';
+import { state, userAIContext } from '../state.js';
 import { checkCooldown, checkCommandCooldown, getRemainingCooldown } from '../utils/cooldown.js';
 import { runtime } from '../utils/runtime.js';
 import { getOrCreateRoom, createW2GRoom } from '../services/w2g.js';
@@ -768,7 +768,6 @@ export function registerMessageHandler(sock) {
             }
 
             if (command === 'resetai') {
-                aiConversationMemory[from] = [];
                 for (const key of [...userAIContext.keys()]) {
                     if (key === from || key.startsWith(`${from}|`)) userAIContext.delete(key);
                 }

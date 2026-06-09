@@ -178,13 +178,6 @@ function nextId() {
 }
 
 function syncGlobalQueue() {
-    global.radioQueue = radio.queue.map((t) => ({
-        title: t.title,
-        url: t.url,
-        duration: t.duration,
-        requestedBy: t.requestedBy,
-        thumbnail: t.thumbnail
-    }));
     prefetchQueueLyrics(radio.queue, radio.current || radio.queue[0] || null);
 }
 
@@ -464,7 +457,6 @@ export async function skipRadioTrack() {
 export function clearRadioQueue() {
     resetPlayPipeline();
     radio.queue = [];
-    global.radioQueue = [];
     stopCurrentPlayback();
     console.log('📻 Antrian dikosongkan (clear)');
 }
