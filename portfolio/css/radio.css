@@ -1,14 +1,17 @@
-/* LuxxBot Radio — molecular theme */
+/* LuxxBot Radio — dark cyber (selaras Luxx Admin) */
 :root {
-  --robot-bg: #010409;
-  --robot-panel: rgba(8, 16, 32, 0.78);
-  --robot-border: rgba(56, 189, 248, 0.22);
-  --robot-glow: rgba(34, 211, 238, 0.45);
-  --robot-accent: #22d3ee;
-  --robot-accent2: #a78bfa;
-  --robot-warn: #f43f5e;
+  --robot-bg: #030508;
+  --robot-panel: rgba(10, 18, 28, 0.88);
+  --robot-border: rgba(0, 212, 255, 0.14);
+  --robot-border2: rgba(0, 212, 255, 0.32);
+  --robot-glow: rgba(0, 212, 255, 0.45);
+  --robot-accent: #00d4ff;
+  --robot-accent2: #00ffa3;
+  --robot-purple: #7b61ff;
+  --robot-warn: #ff5c7a;
   --robot-text: #e8f4ff;
-  --robot-muted: #7dd3fc;
+  --robot-muted: #6b8fa8;
+  --robot-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
 html[data-theme="light"] {
@@ -30,15 +33,163 @@ body.radio-page {
   background: var(--robot-bg);
 }
 
-body.radio-page.molecule-theme .bg-mesh { opacity: 0.18; }
-body.radio-page.molecule-theme .grain { opacity: 0.03; }
+body.radio-page.radio-dark { background: var(--robot-bg); }
+
+.radio-scanline {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 212, 255, 0.012) 2px,
+    rgba(0, 212, 255, 0.012) 4px
+  );
+  animation: radioScan 8s linear infinite;
+}
+
+@keyframes radioScan {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(4px); }
+}
+
+/* Robot face logo */
+.luxx-robot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.luxx-robot-antenna {
+  position: relative;
+  width: 2px;
+  height: 8px;
+  background: linear-gradient(180deg, var(--robot-accent), transparent);
+  border-radius: 2px;
+  box-shadow: 0 0 8px var(--robot-accent);
+  animation: antennaPulse 2.5s ease-in-out infinite;
+}
+
+.luxx-robot-antenna::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--robot-accent2);
+  box-shadow: 0 0 10px var(--robot-accent2);
+  transform: translateX(-2px);
+}
+
+@keyframes antennaPulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; box-shadow: 0 0 14px var(--robot-accent); }
+}
+
+.luxx-robot-face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 2px solid var(--robot-border2);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(0, 212, 255, 0.08), rgba(123, 97, 255, 0.06));
+  box-shadow: 0 0 24px rgba(0, 212, 255, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  animation: robotPulse 3s ease-in-out infinite;
+}
+
+.luxx-robot-sm .luxx-robot-face {
+  width: 44px;
+  height: 30px;
+  gap: 8px;
+  border-radius: 10px;
+}
+
+.luxx-robot-hero .luxx-robot-face {
+  width: 72px;
+  height: 48px;
+  gap: 14px;
+  border-radius: 16px;
+}
+
+.luxx-robot-eye {
+  position: relative;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  overflow: hidden;
+  animation: eyeBlink 5s infinite;
+}
+
+.luxx-robot-sm .luxx-robot-eye { width: 10px; height: 10px; }
+.luxx-robot-hero .luxx-robot-eye { width: 16px; height: 16px; }
+
+.luxx-robot-pupil {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 55%;
+  height: 55%;
+  border-radius: 50%;
+  background: var(--robot-accent);
+  box-shadow: 0 0 10px var(--robot-accent);
+  transform: translate(-50%, -50%);
+  transition: transform 0.12s ease-out;
+}
+
+.luxx-robot-mouth {
+  display: block;
+  width: 28px;
+  height: 4px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--robot-accent), transparent);
+  opacity: 0.55;
+  animation: mouthGlow 2s ease-in-out infinite;
+}
+
+@keyframes eyeBlink {
+  0%, 94%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.08); }
+}
+
+@keyframes robotPulse {
+  0%, 100% { box-shadow: 0 0 16px rgba(0, 212, 255, 0.1); }
+  50% { box-shadow: 0 0 28px rgba(0, 212, 255, 0.22); }
+}
+
+@keyframes mouthGlow {
+  0%, 100% { opacity: 0.35; width: 24px; }
+  50% { opacity: 0.75; width: 32px; }
+}
+
+.luxx-robot.is-playing .luxx-robot-eye { animation: eyeBlink 3s infinite; }
+.luxx-robot.is-playing .luxx-robot-pupil { background: var(--robot-accent2); box-shadow: 0 0 14px var(--robot-accent2); }
+
+.radio-title-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+body.radio-page.molecule-theme .bg-mesh { opacity: 0.22; }
+body.radio-page.molecule-theme .grain { opacity: 0.04; }
 body.radio-page.molecule-theme .mesh-orb {
   filter: blur(80px);
   opacity: 0.35;
 }
-body.radio-page.molecule-theme .mesh-1 { background: radial-gradient(circle, #22d3ee 0%, transparent 70%); }
-body.radio-page.molecule-theme .mesh-2 { background: radial-gradient(circle, #a78bfa 0%, transparent 70%); }
-body.radio-page.molecule-theme .mesh-3 { background: radial-gradient(circle, #38bdf8 0%, transparent 70%); }
+body.radio-page.molecule-theme .mesh-1 { background: radial-gradient(circle, #00d4ff 0%, transparent 70%); }
+body.radio-page.molecule-theme .mesh-2 { background: radial-gradient(circle, #7b61ff 0%, transparent 70%); }
+body.radio-page.molecule-theme .mesh-3 { background: radial-gradient(circle, #00ffa3 0%, transparent 70%); }
+
+.nav-logo .luxx-robot-sm {
+  margin-top: 2px;
+}
 
 .radio-wrap {
   flex: 1;
@@ -52,16 +203,16 @@ body.radio-page.molecule-theme .mesh-3 { background: radial-gradient(circle, #38
 
 .radio-frame {
   position: relative;
-  width: min(520px, 100%);
+  width: min(540px, 100%);
   padding: 2px;
-  border-radius: 28px;
-  background: linear-gradient(135deg, var(--robot-accent), var(--robot-accent2), #6366f1, var(--robot-accent));
+  border-radius: 24px;
+  background: linear-gradient(135deg, var(--robot-accent), var(--robot-purple), var(--robot-accent2), var(--robot-accent));
   background-size: 320% 320%;
   animation: frameGlow 10s ease infinite;
   box-shadow:
-    0 0 60px rgba(34, 211, 238, 0.18),
-    0 0 120px rgba(167, 139, 250, 0.08),
-    0 28px 90px rgba(0, 0, 0, 0.55);
+    0 0 50px rgba(0, 212, 255, 0.15),
+    0 0 100px rgba(123, 97, 255, 0.08),
+    0 24px 80px rgba(0, 0, 0, 0.65);
 }
 
 @keyframes frameGlow {
@@ -84,11 +235,11 @@ body.radio-page.molecule-theme .mesh-3 { background: radial-gradient(circle, #38
 
 .radio-panel {
   background: var(--robot-panel);
-  backdrop-filter: blur(28px) saturate(1.35);
-  border-radius: 26px;
+  backdrop-filter: blur(24px) saturate(1.2);
+  border-radius: 22px;
   padding: 1.75rem;
   border: 1px solid var(--robot-border);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 0 40px rgba(0, 212, 255, 0.03);
 }
 
 .radio-header {
@@ -102,15 +253,16 @@ body.radio-page.molecule-theme .mesh-3 { background: radial-gradient(circle, #38
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
+  font-family: var(--robot-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--robot-accent);
+  color: var(--robot-accent2);
   padding: 0.3rem 0.75rem;
-  border: 1px solid rgba(34, 211, 238, 0.35);
+  border: 1px solid var(--robot-border2);
   border-radius: 999px;
-  background: linear-gradient(135deg, rgba(34, 211, 238, 0.12), rgba(167, 139, 250, 0.1));
+  background: rgba(0, 255, 163, 0.08);
 }
 
 .radio-badge .live-dot {
@@ -132,9 +284,11 @@ body.radio-page.molecule-theme .mesh-3 { background: radial-gradient(circle, #38
 
 .radio-title-block h1 {
   font-family: var(--font-display);
-  font-size: 1.35rem;
-  margin: 0 0 0.25rem;
-  background: linear-gradient(90deg, var(--robot-text), var(--robot-accent));
+  font-size: 1.4rem;
+  font-weight: 800;
+  margin: 0 0 0.2rem;
+  letter-spacing: 0.04em;
+  background: linear-gradient(90deg, #fff, var(--robot-accent), var(--robot-accent2));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -142,8 +296,9 @@ body.radio-page.molecule-theme .mesh-3 { background: radial-gradient(circle, #38
 
 .radio-title-block p {
   margin: 0;
-  font-size: 0.88rem;
+  font-size: 0.82rem;
   color: var(--robot-muted);
+  font-family: var(--robot-mono);
 }
 
 .radio-art {
@@ -244,7 +399,7 @@ body.radio-page.molecule-theme .mesh-3 { background: radial-gradient(circle, #38
   height: 100%;
   width: 0%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #22d3ee, #a78bfa, #38bdf8);
+  background: linear-gradient(90deg, var(--robot-accent), var(--robot-purple), var(--robot-accent2));
   box-shadow: 0 0 14px var(--robot-glow);
   transition: width 0.25s linear;
 }
@@ -312,9 +467,9 @@ body.radio-page.molecule-theme .mesh-3 { background: radial-gradient(circle, #38
 
 .radio-btn-play {
   flex: 1.4;
-  background: linear-gradient(135deg, rgba(34, 211, 238, 0.2), rgba(167, 139, 250, 0.14));
-  border-color: rgba(34, 211, 238, 0.45);
-  box-shadow: 0 4px 20px rgba(34, 211, 238, 0.12);
+  background: linear-gradient(135deg, rgba(0, 212, 255, 0.18), rgba(123, 97, 255, 0.12));
+  border-color: var(--robot-border2);
+  box-shadow: 0 4px 20px rgba(0, 212, 255, 0.14);
 }
 
 .radio-btn-stop {

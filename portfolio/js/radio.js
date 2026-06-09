@@ -490,21 +490,75 @@
       .replace(/>/g, '&gt;');
   }
 
+  const robotEls = () => document.querySelectorAll('.luxx-robot');
+
+  function updateRobotMood() {
+    const playing = playbackArmed && isPlayerPlaying();
+    robotEls().forEach((el) => el.classList.toggle('is-playing', playing));
+  }
+
+  function initRobotEyes() {
+    const pupils = document.querySelectorAll('.luxx-robot-pupil');
+    if (!pupils.length) return;
+
+    let idleT = 0;
+    let targetX = 0;
+    let targetY = 0;
+    let lastPointerAt = 0;
+
+    const applyPupils = () => {
+      pupils.forEach((p) => {
+        p.style.transform = `translate(calc(-50% + ${targetX}px), calc(-50% + ${targetY}px))`;
+      });
+    };
+
+    const onMove = (e) => {
+      const x = e.clientX ?? window.innerWidth / 2;
+      const y = e.clientY ?? window.innerHeight / 2;
+      const cx = window.innerWidth / 2;
+      const cy = window.innerHeight / 2;
+      targetX = Math.max(-3, Math.min(3, (x - cx) / cx * 3));
+      targetY = Math.max(-2, Math.min(2, (y - cy) / cy * 2));
+      lastPointerAt = Date.now();
+      applyPupils();
+    };
+
+    window.addEventListener('mousemove', onMove, { passive: true });
+    window.addEventListener('touchmove', (e) => {
+      const t = e.touches[0];
+      if (t) onMove(t);
+    }, { passive: true });
+
+    const tick = () => {
+      if (Date.now() - lastPointerAt > 1800) {
+        idleT += 0.025;
+        targetX = Math.sin(idleT) * 2;
+        targetY = Math.cos(idleT * 0.7) * 1.2;
+        applyPupils();
+      }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
   function updatePlayBtn() {
     if (!btnPlay) return;
     if (playBusy || pendingTrackKey) {
       btnPlay.disabled = true;
       btnPlay.innerHTML = '<span aria-hidden="true">⏳</span> Memuat';
+      updateRobotMood();
       return;
     }
     btnPlay.disabled = false;
     if (!playbackArmed) {
       btnPlay.innerHTML = '<span aria-hidden="true">▶</span> Putar';
+      updateRobotMood();
       return;
     }
     btnPlay.innerHTML = isPlayerPlaying()
       ? '<span aria-hidden="true">⏸</span> Jeda'
       : '<span aria-hidden="true">▶</span> Putar';
+    updateRobotMood();
   }
 
   function renderDiscordStatus(d) {
@@ -825,6 +879,7 @@
   });
 
   disarmLocalPlayback();
+  initRobotEyes();
 
   resizeWave();
   if (!animWave) drawWave();
