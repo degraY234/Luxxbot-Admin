@@ -115,6 +115,9 @@ function friendlyError(err, base) {
   }
   if (msg.includes('Unauthorized')) return 'Token salah. Harus sama dengan ADMIN_API_TOKEN di .env bot.';
   if (msg.includes('Admin API disabled')) return 'ADMIN_API_TOKEN belum diset. Restart: pm2 restart luxx --update-env';
+  if (msg.includes('404') || msg.includes('Not Found')) {
+    return 'Endpoint bot belum terbaru (HTTP 404). Redeploy/restart bot di Railway, lalu hard refresh admin.';
+  }
   return msg;
 }
 
@@ -630,8 +633,27 @@ function prepareLocalStream(audio, url, { autoplay = false } = {}) {
   audio.load();
 }
 
+async function postRadioPlay() {
+  try {
+    return await api('/play', 'POST');
+  } catch (e) {
+    const msg = String(e.message || '');
+    if (!msg.includes('404') && !msg.includes('Not Found')) throw e;
+    const { base } = cfg();
+    const res = await fetch(`${base}/radio/api/play`, {
+      method: 'POST',
+      cache: 'no-store'
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.message || data.error || `HTTP ${res.status}`);
+    }
+    return data;
+  }
+}
+
 async function requestAdminServerPlay() {
-  const body = await api('/play', 'POST');
+  const body = await postRadioPlay();
   if (!body.ok && !body.preparing) {
     throw new Error(body.message || 'Gagal memulai radio');
   }
