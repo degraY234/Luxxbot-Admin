@@ -140,6 +140,7 @@ function switchPanel(id) {
   $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.panel === id));
   $$('.panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${id}`));
   safeEl('#panel-title', (el) => { el.textContent = PANEL_TITLES[id] || 'Dashboard'; });
+  if (id === 'radio') requestAnimationFrame(() => $('#beat-canvas')?._resize?.());
 }
 
 function initGridCanvas() {
@@ -211,6 +212,350 @@ function initGridCanvas() {
   draw();
 }
 
+const BEAT = {
+  audioCtx: null,
+  analyser: null,
+  connected: false,
+  animId: null,
+  bars: 72,
+  bassLevel: 0,
+  phase: 0
+};
+
+function initBeatVisualizer() {
+  const canvas = $('#beat-canvas');
+  const audio = $('#radio-audio');
+  if (!canvas) return;
+
+  const parent = canvas.parentElement;
+  const resize = () => {
+    const rect = parent.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(rect.width * dpr);
+    canvas.height = Math.floor(rect.height * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+    canvas._ctx = ctx;
+    canvas._w = rect.width;
+    canvas._h = rect.height;
+  };
+  resize();
+  window.addEventListener('resize', resize);
+  canvas._resize = resize;
+
+  if (audio) {
+    audio.crossOrigin = audio.crossOrigin || 'anonymous';
+    audio.addEventListener('play', connectBeatGraph);
+    audio.addEventListener('timeupdate', () => {
+      updatePlayerProgress(lastAdminRadio?.playback || {}, audio);
+    });
+  }
+
+  document.addEventListener('click', resumeBeatCtx, { passive: true });
+  if (!BEAT.animId) beatLoop();
+}
+
+function resumeBeatCtx() {
+  if (BEAT.audioCtx?.state === 'suspended') BEAT.audioCtx.resume().catch(() => {});
+}
+
+function connectBeatGraph() {
+  const audio = $('#radio-audio');
+  if (!audio || BEAT.connected) return;
+  try {
+    BEAT.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    BEAT.analyser = BEAT.audioCtx.createAnalyser();
+    BEAT.analyser.fftSize = 512;
+    BEAT.analyser.smoothingTimeConstant = 0.75;
+    const src = BEAT.audioCtx.createMediaElementSource(audio);
+    src.connect(BEAT.analyser);
+    BEAT.analyser.connect(BEAT.audioCtx.destination);
+    BEAT.connected = true;
+    resumeBeatCtx();
+  } catch (e) {
+    console.warn('Beat graph:', e.message);
+  }
+}
+
+function isAudioLive() {
+  const a = $('#radio-audio');
+  return Boolean(a?.src && !a.paused && !a.ended && a.currentTime > 0.05);
+}
+
+function beatRoundRect(ctx, x, y, width, height, radius) {
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') ctx.roundRect(x, y, width, height, radius);
+  else ctx.rect(x, y, width, height);
+}
+
+function beatLoop() {
+  const canvas = $('#beat-canvas');
+  const stage = $('#beat-stage');
+  const glow = $('#beat-center-glow');
+  const ctx = canvas?._ctx;
+  const w = canvas?._w || 0;
+  const h = canvas?._h || 0;
+
+  if (ctx && w && h) {
+    BEAT.phase += 0.02;
+    const live = isAudioLive();
+    stage?.classList.toggle('is-live', live);
+
+    const freq = BEAT.analyser && live ? new Uint8Array(BEAT.analyser.frequencyBinCount) : null;
+    const wave = BEAT.analyser && live ? new Uint8Array(BEAT.analyser.frequencyBinCount) : null;
+    if (freq) BEAT.analyser.getByteFrequencyData(freq);
+    if (wave) BEAT.analyser.getByteTimeDomainData(wave);
+
+    let bass = 0;
+    if (freq) {
+      const n = Math.min(14, freq.length);
+      for (let i = 0; i < n; i++) bass += freq[i];
+      bass /= n * 255;
+    } else {
+      bass = 0.15 + Math.sin(BEAT.phase) * 0.08;
+    }
+    BEAT.bassLevel = BEAT.bassLevel * 0.82 + bass * 0.18;
+    if (glow) {
+      const scale = 0.75 + BEAT.bassLevel * 0.85;
+      glow.style.transform = `translate(-50%, -50%) scale(${scale})`;
+      glow.style.opacity = live ? String(0.35 + BEAT.bassLevel * 0.65) : '0';
+    }
+
+    ctx.clearRect(0, 0, w, h);
+
+    ctx.strokeStyle = 'rgba(0, 212, 255, 0.045)';
+    ctx.lineWidth = 1;
+    for (let gx = 0; gx < w; gx += 22) {
+      ctx.beginPath();
+      ctx.moveTo(gx, 0);
+      ctx.lineTo(gx, h);
+      ctx.stroke();
+    }
+    for (let gy = 0; gy < h; gy += 18) {
+      ctx.beginPath();
+      ctx.moveTo(0, gy);
+      ctx.lineTo(w, gy);
+      ctx.stroke();
+    }
+
+    const bars = BEAT.bars;
+    const half = bars / 2;
+    const gap = 1.5;
+    const barW = (w - gap * (bars - 1)) / bars;
+    const midY = h / 2;
+
+    for (let i = 0; i < bars; i++) {
+      const mirror = i < half ? i : bars - 1 - i;
+      const idx = freq ? Math.floor((mirror / half) * freq.length * 0.68) : 0;
+      const v = live && freq
+        ? freq[idx] / 255
+        : 0.05 + Math.sin(BEAT.phase * 2 + mirror * 0.18) * 0.04 + Math.sin(BEAT.phase + i * 0.05) * 0.02;
+      const barH = Math.max(3, v * h * 0.44);
+      const x = i * (barW + gap);
+
+      const gradTop = ctx.createLinearGradient(x, midY - barH, x, midY);
+      gradTop.addColorStop(0, `rgba(0, 255, 163, ${0.92 * v + 0.08})`);
+      gradTop.addColorStop(0.45, `rgba(0, 212, 255, ${0.88 * v + 0.12})`);
+      gradTop.addColorStop(1, 'rgba(123, 97, 255, 0.55)');
+      ctx.fillStyle = gradTop;
+      ctx.shadowBlur = live ? 6 + v * 14 : 0;
+      ctx.shadowColor = 'rgba(0, 212, 255, 0.65)';
+      beatRoundRect(ctx, x, midY - barH, barW, barH, 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      const gradBot = ctx.createLinearGradient(x, midY, x, midY + barH);
+      gradBot.addColorStop(0, 'rgba(123, 97, 255, 0.55)');
+      gradBot.addColorStop(0.55, `rgba(0, 212, 255, ${0.88 * v + 0.12})`);
+      gradBot.addColorStop(1, `rgba(0, 255, 163, ${0.72 * v + 0.1})`);
+      ctx.fillStyle = gradBot;
+      beatRoundRect(ctx, x, midY, barW, barH, 2);
+      ctx.fill();
+
+      if (live && v > 0.62) {
+        ctx.fillStyle = `rgba(255, 255, 255, ${(v - 0.62) * 1.4})`;
+        ctx.beginPath();
+        ctx.arc(x + barW / 2, midY - barH - 2, 1 + v * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x + barW / 2, midY + barH + 2, 1 + v * 1.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    ctx.strokeStyle = live ? 'rgba(0, 255, 163, 0.4)' : 'rgba(0, 212, 255, 0.18)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, midY);
+    ctx.lineTo(w, midY);
+    ctx.stroke();
+
+    if (wave && live) {
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(0, 212, 255, 0.9)';
+      ctx.lineWidth = 1.6;
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = 'rgba(0, 212, 255, 0.85)';
+      const slice = w / wave.length;
+      for (let i = 0; i < wave.length; i++) {
+        const vy = ((wave[i] - 128) / 128) * (h * 0.24);
+        const px = i * slice;
+        const py = midY + vy;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    } else {
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(0, 212, 255, 0.28)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x <= w; x += 2) {
+        const py = midY + Math.sin(x * 0.03 + BEAT.phase * 3) * (h * 0.09) * Math.sin(x * 0.008 + BEAT.phase);
+        if (x === 0) ctx.moveTo(x, py);
+        else ctx.lineTo(x, py);
+      }
+      ctx.stroke();
+    }
+
+    const vig = ctx.createLinearGradient(0, 0, w, 0);
+    vig.addColorStop(0, 'rgba(3, 5, 8, 0.88)');
+    vig.addColorStop(0.07, 'transparent');
+    vig.addColorStop(0.93, 'transparent');
+    vig.addColorStop(1, 'rgba(3, 5, 8, 0.88)');
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  BEAT.animId = requestAnimationFrame(beatLoop);
+}
+
+function formatPlayerTime(sec) {
+  if (!sec || !Number.isFinite(sec) || sec < 0) return '0:00';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+function updatePlayerProgress(playback = {}, audioEl = null) {
+  const fill = $('#player-progress-fill');
+  const glowEl = $('#player-progress-glow');
+  const elapsedEl = $('#player-time-elapsed');
+  const durationEl = $('#player-time-duration');
+  if (!fill) return;
+
+  let position = playback.positionSec ?? 0;
+  let duration = playback.durationSec ?? 0;
+
+  if (audioEl?.duration && Number.isFinite(audioEl.duration) && audioEl.duration > 0) {
+    duration = audioEl.duration;
+    position = audioEl.currentTime || 0;
+  } else if (playback.preparedAt && playback.durationSec > 0) {
+    position = (playback.positionSec ?? 0) + (Date.now() - playback.preparedAt) / 1000;
+    if (position > playback.durationSec) position = playback.durationSec;
+  }
+
+  const pct = duration > 0 ? Math.min(100, (position / duration) * 100) : (playback.progress ?? 0);
+  fill.style.width = `${pct}%`;
+  if (glowEl) {
+    glowEl.style.left = `${pct}%`;
+    glowEl.classList.toggle('active', pct > 0 && pct < 100);
+  }
+  if (elapsedEl) elapsedEl.textContent = formatPlayerTime(position);
+  if (durationEl) durationEl.textContent = formatPlayerTime(duration);
+}
+
+let searchBusy = false;
+
+function renderSearchHit(hit, index) {
+  const title = escapeHtml(hit.title);
+  const author = escapeHtml(hit.author || 'Unknown');
+  const dur = escapeHtml(hit.duration || '—');
+  const thumb = hit.thumbnail
+    ? `<img src="${escapeHtml(hit.thumbnail)}" alt="" loading="lazy" onerror="this.style.display='none'"/>`
+    : '<div class="search-hit-ph">🎵</div>';
+  return `<li class="search-hit" data-idx="${index}">
+    ${thumb}
+    <div class="search-hit-meta">
+      <p class="search-hit-title">${title}</p>
+      <p class="search-hit-sub">${author} · ${dur}</p>
+    </div>
+    <div class="search-hit-actions">
+      <button type="button" class="btn primary btn-search-queue" data-idx="${index}">+ Antrian</button>
+      <button type="button" class="btn btn-search-play" data-idx="${index}">▶ Putar</button>
+    </div>
+  </li>`;
+}
+
+let lastSearchResults = [];
+
+async function runSongSearch() {
+  const input = $('#song-search-input');
+  const status = $('#search-status');
+  const list = $('#search-results');
+  const q = (input?.value || '').trim();
+  if (!q) {
+    if (status) status.textContent = 'Ketik judul atau paste link YouTube.';
+    return;
+  }
+  if (searchBusy) return;
+
+  searchBusy = true;
+  if (status) status.textContent = 'Mencari...';
+  if (list) list.innerHTML = '';
+  lastSearchResults = [];
+
+  try {
+    const data = await api(`/search?q=${encodeURIComponent(q)}`);
+    lastSearchResults = data.results || [];
+    if (status) {
+      status.textContent = lastSearchResults.length
+        ? `${lastSearchResults.length} hasil untuk "${q}"`
+        : 'Tidak ada hasil.';
+    }
+    if (list) {
+      list.innerHTML = lastSearchResults.length
+        ? lastSearchResults.map((hit, i) => renderSearchHit(hit, i)).join('')
+        : '';
+    }
+  } catch (e) {
+    if (status) status.textContent = e.message;
+  } finally {
+    searchBusy = false;
+  }
+}
+
+async function addSongFromSearch(index, playNow = false) {
+  const hit = lastSearchResults[index];
+  if (!hit?.url) return;
+
+  const status = $('#search-status');
+  const label = playNow ? 'Memutar' : 'Menambah';
+  if (status) status.textContent = `${label} "${hit.title}"...`;
+
+  try {
+    const r = await api('/queue/add', 'POST', {
+      url: hit.url,
+      title: hit.title,
+      videoId: hit.videoId,
+      thumbnail: hit.thumbnail,
+      author: hit.author,
+      seconds: hit.seconds,
+      duration: hit.duration,
+      playNow
+    });
+    if (r.streamEpoch != null) lastStreamEpoch = r.streamEpoch;
+    resetPlayerState();
+    showToast(r.message || 'Lagu ditambahkan');
+    if (status) status.textContent = r.message || 'Berhasil.';
+    await refresh();
+  } catch (e) {
+    if (status) status.textContent = e.message;
+    showToast(e.message);
+  }
+}
+
 function stopAudio(audio) {
   if (!audio) return;
   audio.pause();
@@ -272,6 +617,7 @@ function renderPlayer(r = {}, base = '') {
     thumb.removeAttribute('src');
     fallback.style.display = 'flex';
     stopAudio(audio);
+    updatePlayerProgress({}, audio);
     return;
   }
 
@@ -288,6 +634,7 @@ function renderPlayer(r = {}, base = '') {
     stopAudio(audio);
     lastTrackId = null;
     lastThumbTrackId = null;
+    updatePlayerProgress({}, audio);
     return;
   }
 
@@ -306,6 +653,7 @@ function renderPlayer(r = {}, base = '') {
     audio.src = `${stream}?epoch=${epoch ?? 0}&id=${cur.id}&t=${Date.now()}`;
     audio.play().catch(() => {});
   }
+  updatePlayerProgress(r.playback, audio);
 }
 
 function escapeHtml(s) {
@@ -610,6 +958,7 @@ async function doLogin() {
     await api('/status');
     loginScreen.classList.add('hidden');
     appScreen.classList.remove('hidden');
+    requestAnimationFrame(() => $('#beat-canvas')?._resize?.());
     refresh();
     if (!window._poll) window._poll = setInterval(refresh, 4000);
     if (!lyricsPollTimer) lyricsPollTimer = setInterval(pollAdminLyrics, 2000);
@@ -705,9 +1054,20 @@ $('#btn-prune-cache')?.addEventListener('click', async () => {
     await refresh();
   } catch (e) { showToast(e.message); }
 });
+$('#btn-song-search')?.addEventListener('click', runSongSearch);
+$('#song-search-input')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); runSongSearch(); }
+});
+$('#search-results')?.addEventListener('click', (e) => {
+  const queueBtn = e.target.closest('.btn-search-queue');
+  const playBtn = e.target.closest('.btn-search-play');
+  if (queueBtn) addSongFromSearch(Number(queueBtn.dataset.idx), false);
+  else if (playBtn) addSongFromSearch(Number(playBtn.dataset.idx), true);
+});
 
 setupLoginForm();
 initGridCanvas();
+initBeatVisualizer();
 const savedToken = localStorage.getItem('luxx_api_token');
 if (!isSelfHostedAdmin()) {
   $('#api-base').value = localStorage.getItem('luxx_api_base') || defaultApiBase();
