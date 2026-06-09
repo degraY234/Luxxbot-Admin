@@ -263,9 +263,10 @@ function initBeatVisualizer() {
     audio.crossOrigin = audio.crossOrigin || 'anonymous';
     audio.addEventListener('play', connectBeatGraph);
     audio.addEventListener('timeupdate', () => {
-      updatePlayerProgress(lastAdminRadio?.playback || {}, audio);
+      if (playbackArmed) updatePlayerProgress(lastAdminRadio?.playback || {}, audio);
     });
   }
+  bindPlayerAudioEvents();
 
   document.addEventListener('click', resumeBeatCtx, { passive: true });
   if (!BEAT.animId) beatLoop();
@@ -457,7 +458,24 @@ function formatPlayerTime(sec) {
 
 function isPlayerPlaying() {
   const a = $('#radio-audio');
-  return Boolean(playbackArmed && a?.src && !a.paused && !a.ended && !a.error);
+  return Boolean(playbackArmed && a?.src && !a.paused && !a.ended);
+}
+
+function syncPlayerBadge() {
+  const badge = $('#player-badge');
+  if (!badge || !lastAdminRadio?.current) return;
+  if (!playbackArmed) {
+    badge.textContent = 'SIAP';
+    badge.className = 'player-badge load';
+    return;
+  }
+  if (isPlayerPlaying()) {
+    badge.textContent = 'LIVE';
+    badge.className = 'player-badge live';
+    return;
+  }
+  badge.textContent = userPaused ? 'DIJEDA' : 'SIAP';
+  badge.className = 'player-badge load';
 }
 
 function updatePlayBtn() {
@@ -468,26 +486,61 @@ function updatePlayBtn() {
   if (playBusy) {
     btn.disabled = true;
     btn.textContent = '⏳ Memuat...';
+    if (hint) hint.textContent = 'Menyiapkan lagu dari server...';
     return;
   }
 
   btn.disabled = false;
   if (!playbackArmed) {
     btn.textContent = '▶ Putar';
-    if (hint) hint.textContent = 'Klik Putar untuk mulai audio — tidak autoplay';
+    if (hint) hint.textContent = 'Klik Putar untuk mulai audio di browser ini';
     return;
   }
   if (isPlayerPlaying()) {
     btn.textContent = '⏸ Jeda';
-    if (hint) hint.textContent = 'Audio aktif di browser ini';
+    if (hint) hint.textContent = 'Sedang diputar di browser ini';
     return;
   }
-  btn.textContent = '▶ Lanjut';
+  btn.textContent = '▶ Putar';
   if (hint) {
     hint.textContent = userPaused
-      ? 'Dijeda — klik Lanjut untuk lanjutkan'
-      : 'Klik Lanjut untuk mulai audio';
+      ? 'Dijeda — klik Putar untuk lanjutkan'
+      : 'Klik Putar untuk mulai audio stream';
   }
+  syncPlayerBadge();
+}
+
+function bindPlayerAudioEvents() {
+  const audio = $('#radio-audio');
+  if (!audio || audio._playerUiBound) return;
+  audio._playerUiBound = true;
+
+  audio.addEventListener('playing', () => {
+    if (!playbackArmed) return;
+    userPaused = false;
+    ensureProgressTick();
+    updatePlayBtn();
+    syncPlayerBadge();
+  });
+
+  audio.addEventListener('pause', () => {
+    if (!playbackArmed) return;
+    updatePlayBtn();
+    syncPlayerBadge();
+  });
+
+  audio.addEventListener('ended', () => {
+    stopProgressTick();
+    updatePlayBtn();
+    syncPlayerBadge();
+  });
+
+  audio.addEventListener('play', () => {
+    if (!playbackArmed) {
+      audio.pause();
+      return;
+    }
+  });
 }
 
 function disarmLocalPlayback() {
@@ -652,18 +705,26 @@ async function postRadioPlay() {
   }
 }
 
+async function waitForRadioCurrent(maxMs = 36000) {
+  const started = Date.now();
+  while (Date.now() - started < maxMs) {
+    await new Promise((r) => setTimeout(r, 450));
+    try {
+      const d = await api('/status');
+      lastAdminRadio = d.radio || lastAdminRadio;
+      if (lastAdminRadio?.current) return true;
+      if (!lastAdminRadio?.isPreparing && Date.now() - started > 4000) break;
+    } catch (_) { /* retry */ }
+  }
+  return Boolean(lastAdminRadio?.current);
+}
+
 async function requestAdminServerPlay() {
   const body = await postRadioPlay();
   if (!body.ok && !body.preparing) {
     throw new Error(body.message || 'Gagal memulai radio');
   }
-  for (let i = 0; i < 90; i++) {
-    await new Promise((r) => setTimeout(r, 400));
-    await refresh().catch(() => {});
-    if (lastAdminRadio?.current) return true;
-    if (!lastAdminRadio?.isPreparing && i > 8) break;
-  }
-  return Boolean(lastAdminRadio?.current);
+  return waitForRadioCurrent();
 }
 
 async function startLocalRadioPlayback() {
@@ -865,7 +926,7 @@ function renderPlayer(r = {}, base = '') {
   if (epoch !== null && epoch !== lastStreamEpoch) {
     lastStreamEpoch = epoch;
     invalidatePlayerReload();
-    disarmLocalPlayback();
+    if (audio?.src) stopAudio(audio);
   }
 
   if (!cur) {
@@ -880,7 +941,6 @@ function renderPlayer(r = {}, base = '') {
       $('#player-artist').textContent = next.author || 'Mengunduh...';
       $('#player-requester').textContent = `🙋 ${next.requestedBy || '-'}`;
       updatePlayerThumbnail(next, thumb, fallback);
-      if (playbackArmed) disarmLocalPlayback();
       lastTrackId = null;
       updatePlayerProgress(r.playback, audio);
       updatePlayBtn();
@@ -902,7 +962,7 @@ function renderPlayer(r = {}, base = '') {
       thumb.removeAttribute('src');
       fallback.style.display = 'flex';
     }
-    if (playbackArmed) disarmLocalPlayback();
+    if (!playBusy) disarmLocalPlayback();
     lastTrackId = null;
     lastThumbTrackId = null;
     updatePlayerProgress(r.playback, audio);
@@ -920,31 +980,27 @@ function renderPlayer(r = {}, base = '') {
   lastTrackId = reloadKey;
 
   if (!playbackArmed) {
-    badge.textContent = 'SIAP';
-    badge.className = 'player-badge load';
     stopProgressTick();
     updatePlayerProgress({
       positionSec: 0,
       durationSec: r.playback?.durationSec || cur.durationSec || 0,
       durationLabel: r.playback?.durationLabel
     }, null);
+    syncPlayerBadge();
     updatePlayBtn();
     return;
   }
 
-  badge.textContent = isPlayerPlaying() ? 'LIVE' : 'SIAP';
-  badge.className = isPlayerPlaying() ? 'player-badge live' : 'player-badge load';
-
   const streamUrl = `${stream}?epoch=${epoch ?? 0}&id=${cur.id}&t=${Date.now()}`;
+  const shouldAutoplay = !userPaused && (loadedStreamKey !== reloadKey || !audio?.src);
   if (loadedStreamKey !== reloadKey) {
     loadedStreamKey = reloadKey;
-    prepareLocalStream(audio, streamUrl, { autoplay: !userPaused });
-  } else if (!userPaused && audio?.src && audio.paused) {
-    audio.play().catch(() => {});
+    prepareLocalStream(audio, streamUrl, { autoplay: shouldAutoplay });
   }
 
-  ensureProgressTick();
+  if (isPlayerPlaying()) ensureProgressTick();
   updatePlayerProgress(r.playback, audio);
+  syncPlayerBadge();
   updatePlayBtn();
 }
 
@@ -1300,35 +1356,34 @@ $('#btn-skip')?.addEventListener('click', async () => {
 });
 $('#btn-player-play')?.addEventListener('click', async () => {
   resumeBeatCtx();
+  connectBeatGraph();
   if (playBusy) return;
+
+  const audio = $('#radio-audio');
 
   if (playbackArmed && isPlayerPlaying()) {
     userPaused = true;
-    $('#radio-audio')?.pause();
+    audio?.pause();
     stopProgressTick();
     updatePlayBtn();
+    syncPlayerBadge();
     return;
   }
 
-  if (playbackArmed && userPaused && $('#radio-audio')?.src) {
+  if (playbackArmed && lastAdminRadio?.current && audio?.src) {
     userPaused = false;
     try {
-      await $('#radio-audio').play();
+      await audio.play();
       ensureProgressTick();
+      updatePlayBtn();
+      syncPlayerBadge();
     } catch (_) {
-      showToast('Klik Putar lagi untuk lanjutkan');
+      showToast('Gagal memutar — coba klik Putar lagi');
     }
-    updatePlayBtn();
     return;
   }
 
   await startLocalRadioPlayback();
-});
-$('#radio-audio')?.addEventListener('play', () => {
-  if (!playbackArmed) {
-    $('#radio-audio')?.pause();
-    disarmLocalPlayback();
-  }
 });
 $('#btn-clear')?.addEventListener('click', async () => {
   if (!confirm('Kosongkan antrian?')) return;
