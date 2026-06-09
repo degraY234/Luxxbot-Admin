@@ -29,6 +29,10 @@ let lastSystem = null;
 let lyricsPollTimer = null;
 let progressTickTimer = null;
 let audioLoadGen = 0;
+let loadedStreamKey = null;
+let playbackArmed = false;
+let userPaused = false;
+let playBusy = false;
 
 let lyricsState = {
   trackKey: null,
@@ -287,8 +291,7 @@ function connectBeatGraph() {
 }
 
 function isAudioLive() {
-  const a = $('#radio-audio');
-  return Boolean(a?.src && !a.paused && !a.ended && a.currentTime > 0.05);
+  return Boolean(isPlayerPlaying() && ($('#radio-audio')?.currentTime || 0) > 0.05);
 }
 
 function beatRoundRect(ctx, x, y, width, height, radius) {
@@ -449,8 +452,64 @@ function formatPlayerTime(sec) {
   return `${m}:${s}`;
 }
 
+function isPlayerPlaying() {
+  const a = $('#radio-audio');
+  return Boolean(playbackArmed && a?.src && !a.paused && !a.ended && !a.error);
+}
+
+function updatePlayBtn() {
+  const btn = $('#btn-player-play');
+  const hint = $('#player-hint');
+  if (!btn) return;
+
+  if (playBusy) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Memuat...';
+    return;
+  }
+
+  btn.disabled = false;
+  if (!playbackArmed) {
+    btn.textContent = '▶ Putar';
+    if (hint) hint.textContent = 'Klik Putar untuk mulai audio — tidak autoplay';
+    return;
+  }
+  if (isPlayerPlaying()) {
+    btn.textContent = '⏸ Jeda';
+    if (hint) hint.textContent = 'Audio aktif di browser ini';
+    return;
+  }
+  btn.textContent = '▶ Lanjut';
+  if (hint) {
+    hint.textContent = userPaused
+      ? 'Dijeda — klik Lanjut untuk lanjutkan'
+      : 'Klik Lanjut untuk mulai audio';
+  }
+}
+
+function disarmLocalPlayback() {
+  playbackArmed = false;
+  userPaused = false;
+  playBusy = false;
+  loadedStreamKey = null;
+  stopProgressTick();
+  stopAudio($('#radio-audio'));
+  updatePlayBtn();
+}
+
+function armLocalPlayback() {
+  playbackArmed = true;
+  userPaused = false;
+  resumeBeatCtx();
+  updatePlayBtn();
+}
+
 function resolvePlaybackPosition(playback = {}, audioEl = null) {
   const serverDur = playback.durationSec || 0;
+
+  if (!playbackArmed) {
+    return { position: 0, duration: serverDur };
+  }
 
   if (audioEl?.src && !audioEl.paused && !audioEl.ended) {
     const audioTime = audioEl.currentTime || 0;
@@ -513,7 +572,7 @@ function ensureProgressTick() {
   if (progressTickTimer) return;
   progressTickTimer = setInterval(() => {
     const audio = $('#radio-audio');
-    if (lastAdminRadio?.current) {
+    if (playbackArmed && lastAdminRadio?.current) {
       updatePlayerProgress(lastAdminRadio.playback || {}, audio);
       return;
     }
@@ -527,7 +586,7 @@ function stopProgressTick() {
   progressTickTimer = null;
 }
 
-function attachAndPlayStream(audio, url) {
+function prepareLocalStream(audio, url, { autoplay = false } = {}) {
   if (!audio || !url) return;
   const gen = ++audioLoadGen;
   audio.pause();
@@ -543,8 +602,13 @@ function attachAndPlayStream(audio, url) {
   const onReady = () => {
     if (gen !== audioLoadGen) return;
     cleanup();
-    audio.play().catch(() => {});
-    resumeBeatCtx();
+    if (autoplay && playbackArmed && !userPaused) {
+      audio.play().catch(() => {
+        showToast('Klik Putar sekali lagi untuk mulai audio');
+      });
+      resumeBeatCtx();
+    }
+    updatePlayBtn();
   };
 
   const onErr = () => {
@@ -564,6 +628,57 @@ function attachAndPlayStream(audio, url) {
   audio.addEventListener('error', onErr);
   audio.src = url;
   audio.load();
+}
+
+async function requestAdminServerPlay() {
+  const body = await api('/play', 'POST');
+  if (!body.ok && !body.preparing) {
+    throw new Error(body.message || 'Gagal memulai radio');
+  }
+  for (let i = 0; i < 90; i++) {
+    await new Promise((r) => setTimeout(r, 400));
+    await refresh().catch(() => {});
+    if (lastAdminRadio?.current) return true;
+    if (!lastAdminRadio?.isPreparing && i > 8) break;
+  }
+  return Boolean(lastAdminRadio?.current);
+}
+
+async function startLocalRadioPlayback() {
+  const base = cfg().base;
+  const r = lastAdminRadio || {};
+  const hasQueue = (r.queue?.length || 0) > 0;
+
+  if (!r.current && !hasQueue) {
+    showToast('Belum ada lagu di antrian');
+    return false;
+  }
+
+  playBusy = true;
+  updatePlayBtn();
+  armLocalPlayback();
+
+  try {
+    if (!lastAdminRadio?.current) {
+      const ok = await requestAdminServerPlay();
+      if (!ok) throw new Error('Gagal memuat lagu dari antrian');
+    }
+
+    if (!lastAdminRadio?.current) throw new Error('Lagu belum siap — coba lagi');
+
+    loadedStreamKey = null;
+    invalidatePlayerReload();
+    renderPlayer(lastAdminRadio, base);
+    ensureProgressTick();
+    return true;
+  } catch (e) {
+    disarmLocalPlayback();
+    showToast(e.message);
+    return false;
+  } finally {
+    playBusy = false;
+    updatePlayBtn();
+  }
 }
 
 async function burstRefreshWhilePreparing(times = 8, intervalMs = 1500) {
@@ -655,10 +770,19 @@ async function addSongFromSearch(index, playNow = false) {
     });
     if (r.streamEpoch != null) lastStreamEpoch = r.streamEpoch;
     invalidatePlayerReload();
+    if (playNow) {
+      armLocalPlayback();
+    } else {
+      disarmLocalPlayback();
+    }
     showToast(r.message || 'Lagu ditambahkan');
     if (status) status.textContent = r.message || 'Berhasil.';
     await refresh();
-    if (playNow || lastAdminRadio?.isPreparing) burstRefreshWhilePreparing();
+    if (playNow) {
+      await startLocalRadioPlayback();
+    } else if (lastAdminRadio?.isPreparing) {
+      burstRefreshWhilePreparing();
+    }
   } catch (e) {
     if (status) status.textContent = e.message;
     showToast(e.message);
@@ -676,13 +800,14 @@ function stopAudio(audio) {
 function resetPlayerState() {
   lastTrackId = null;
   lastThumbTrackId = null;
-  stopProgressTick();
-  stopAudio($('#radio-audio'));
+  loadedStreamKey = null;
+  disarmLocalPlayback();
 }
 
 function invalidatePlayerReload() {
   lastTrackId = null;
   lastThumbTrackId = null;
+  loadedStreamKey = null;
 }
 
 function updatePlayerThumbnail(cur, thumb, fallback) {
@@ -717,9 +842,8 @@ function renderPlayer(r = {}, base = '') {
 
   if (epoch !== null && epoch !== lastStreamEpoch) {
     lastStreamEpoch = epoch;
-    lastTrackId = null;
-    lastThumbTrackId = null;
-    stopAudio(audio);
+    invalidatePlayerReload();
+    disarmLocalPlayback();
   }
 
   if (!cur) {
@@ -734,9 +858,10 @@ function renderPlayer(r = {}, base = '') {
       $('#player-artist').textContent = next.author || 'Mengunduh...';
       $('#player-requester').textContent = `🙋 ${next.requestedBy || '-'}`;
       updatePlayerThumbnail(next, thumb, fallback);
-      stopAudio(audio);
+      if (playbackArmed) disarmLocalPlayback();
       lastTrackId = null;
       updatePlayerProgress(r.playback, audio);
+      updatePlayBtn();
       return;
     }
 
@@ -755,15 +880,14 @@ function renderPlayer(r = {}, base = '') {
       thumb.removeAttribute('src');
       fallback.style.display = 'flex';
     }
-    stopAudio(audio);
+    if (playbackArmed) disarmLocalPlayback();
     lastTrackId = null;
     lastThumbTrackId = null;
     updatePlayerProgress(r.playback, audio);
+    updatePlayBtn();
     return;
   }
 
-  badge.textContent = 'LIVE';
-  badge.className = 'player-badge live';
   $('#player-title').textContent = cur.title || 'Unknown';
   $('#player-artist').textContent = cur.author || 'Unknown';
   $('#player-requester').textContent = `🙋 ${cur.requestedBy || '-'}`;
@@ -771,16 +895,35 @@ function renderPlayer(r = {}, base = '') {
 
   const stream = `${base}${r.streamPath || '/radio/live.mp3'}`;
   const reloadKey = `${epoch ?? 0}:${cur.id}`;
-  if (lastTrackId !== reloadKey) {
-    lastTrackId = reloadKey;
-    stopAudio(audio);
-    attachAndPlayStream(
-      audio,
-      `${stream}?epoch=${epoch ?? 0}&id=${cur.id}&t=${Date.now()}`
-    );
+  lastTrackId = reloadKey;
+
+  if (!playbackArmed) {
+    badge.textContent = 'SIAP';
+    badge.className = 'player-badge load';
+    stopProgressTick();
+    updatePlayerProgress({
+      positionSec: 0,
+      durationSec: r.playback?.durationSec || cur.durationSec || 0,
+      durationLabel: r.playback?.durationLabel
+    }, null);
+    updatePlayBtn();
+    return;
   }
+
+  badge.textContent = isPlayerPlaying() ? 'LIVE' : 'SIAP';
+  badge.className = isPlayerPlaying() ? 'player-badge live' : 'player-badge load';
+
+  const streamUrl = `${stream}?epoch=${epoch ?? 0}&id=${cur.id}&t=${Date.now()}`;
+  if (loadedStreamKey !== reloadKey) {
+    loadedStreamKey = reloadKey;
+    prepareLocalStream(audio, streamUrl, { autoplay: !userPaused });
+  } else if (!userPaused && audio?.src && audio.paused) {
+    audio.play().catch(() => {});
+  }
+
   ensureProgressTick();
   updatePlayerProgress(r.playback, audio);
+  updatePlayBtn();
 }
 
 function escapeHtml(s) {
@@ -1113,6 +1256,7 @@ $('#btn-toggle-token')?.addEventListener('click', () => {
 $('#btn-logout')?.addEventListener('click', () => {
   localStorage.removeItem('luxx_api_base');
   localStorage.removeItem('luxx_api_token');
+  disarmLocalPlayback();
   appScreen.classList.add('hidden');
   loginScreen.classList.remove('hidden');
   clearInterval(window._poll);
@@ -1123,13 +1267,46 @@ $('#btn-logout')?.addEventListener('click', () => {
 $('#btn-refresh')?.addEventListener('click', refresh);
 $('#btn-skip')?.addEventListener('click', async () => {
   try {
+    disarmLocalPlayback();
     const r = await api('/skip', 'POST');
     if (r.streamEpoch != null) lastStreamEpoch = r.streamEpoch;
     invalidatePlayerReload();
     showToast(r.message || 'OK');
     await refresh();
-    if (r.started || lastAdminRadio?.isPreparing) burstRefreshWhilePreparing();
+    if (lastAdminRadio?.isPreparing) burstRefreshWhilePreparing();
   } catch (e) { showToast(e.message); }
+});
+$('#btn-player-play')?.addEventListener('click', async () => {
+  resumeBeatCtx();
+  if (playBusy) return;
+
+  if (playbackArmed && isPlayerPlaying()) {
+    userPaused = true;
+    $('#radio-audio')?.pause();
+    stopProgressTick();
+    updatePlayBtn();
+    return;
+  }
+
+  if (playbackArmed && userPaused && $('#radio-audio')?.src) {
+    userPaused = false;
+    try {
+      await $('#radio-audio').play();
+      ensureProgressTick();
+    } catch (_) {
+      showToast('Klik Putar lagi untuk lanjutkan');
+    }
+    updatePlayBtn();
+    return;
+  }
+
+  await startLocalRadioPlayback();
+});
+$('#radio-audio')?.addEventListener('play', () => {
+  if (!playbackArmed) {
+    $('#radio-audio')?.pause();
+    disarmLocalPlayback();
+  }
 });
 $('#btn-clear')?.addEventListener('click', async () => {
   if (!confirm('Kosongkan antrian?')) return;
@@ -1196,6 +1373,7 @@ $('#search-results')?.addEventListener('click', (e) => {
 setupLoginForm();
 initGridCanvas();
 initBeatVisualizer();
+updatePlayBtn();
 const savedToken = localStorage.getItem('luxx_api_token');
 if (!isSelfHostedAdmin()) {
   $('#api-base').value = localStorage.getItem('luxx_api_base') || defaultApiBase();
