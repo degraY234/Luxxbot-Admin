@@ -1,4 +1,4 @@
-// File: menu.js — tampilan dioptimalkan WhatsApp Android (tanpa ubah tema premium)
+// File: menu.js — menu per-section + main menu ringkas
 
 const DIVIDER = '━━━━━━━━━━━━━━━━━━━━━━━';
 const BOT_VERSION = '3.1.0';
@@ -18,132 +18,211 @@ function lastItem(cmd, desc, emoji = '') {
 }
 
 /**
- * @param {boolean} isSelfMode
- * @param {boolean} isSleeping
- * @param {boolean} antiLink
- * @param {boolean} isAdmin
- * @param {string} botUptime
- * @returns {string}
+ * Menu utama — ringkas, tampilkan pilihan section
  */
 function buildMenuText(isSelfMode, isSleeping, antiLink, isAdmin, botUptime) {
     let m = '';
 
-    m += `🌸 *L U X X B O T*\n`;
-    m += `*PREMIUM MENU* 🌸\n`;
+    m += `🌸 *L U X X B O T* v${BOT_VERSION} Premium\n`;
     m += DIVIDER + '\n';
-
     m += `📊 *STATUS*\n`;
-    m += `├ Mode · ${isSelfMode ? '🔒 Self' : '🔓 Public'}\n`;
-    m += `├ Bot · ${isSleeping ? '🛌 Tidur' : '⚡ Online'}\n`;
+    m += `├ Mode   · ${isSelfMode ? '🔒 Self' : '🔓 Public'}\n`;
+    m += `├ Bot    · ${isSleeping ? '🛌 Tidur' : '⚡ Online'}\n`;
     m += `├ Anti-Link · ${antiLink ? '🟢 On' : '🔴 Off'}\n`;
     m += `└ Uptime · ${botUptime}\n`;
 
-    m += section('🎮 *UMUM*');
-    m += item('!guide', 'Panduan pemula', '📖');
-    m += item('!halo', 'Sapaan ramah', '👋');
-    m += item('!ping', 'Cek respon bot', '🏓');
-    m += item('!status', 'Status bot, radio, Discord', '📊');
-    m += item('!help', 'Bantuan perintah', '❓');
-    m += item('!aboutlux', 'Profil bot & pembuat', '👑');
-    m += item('!menu', 'Menu ini', '📜');
-    m += item('!loot', 'Alias menu', '✨');
-    m += item('!changelogs', 'Update terbaru', '📢');
-    m += item('!lapor', 'Lapor bug / request fitur', '📮');
-    m += item('!berita', 'Berita dunia multi-negara', '📰');
-    m += item('!notes', 'Catatan pribadi', '📝');
-    m += item('!reminder', 'Pengingat', '⏰');
-    m += item('!welcome', 'Sambutan grup', '👋');
-    m += item('!add', 'Tambah member grup', '👥');
-    m += item('!tagall', 'Tag semua member', '📢');
-    m += item('!tanggal', 'Waktu Indonesia', '🗓️');
-    m += item('!warna', 'Warna acak / hex', '🎨');
-    m += lastItem('!server', 'Info sistem', '🖥️');
-
+    m += section('📂 *PILIH KATEGORI MENU*');
+    m += `_Ketik perintah di bawah untuk melihat daftar lengkap tiap kategori:_\n\n`;
+    m += `🎮 \`!menu umum\`     · Perintah dasar & info\n`;
     if (isAdmin) {
-        m += section('👑 *OWNER*');
-        m += item('!turu', 'Mode tidur', '😴');
-        m += item('!bangun', 'Bangunkan bot', '☀️');
-        m += item('!pingsan', 'Matikan bot + PM2', '💀');
-        m += item('!self', 'Self mode', '🔒');
-        m += item('!public', 'Public mode', '🔓');
-        m += item('!join', 'Masuk grup via link', '➡️');
-        m += item('!leave', 'Keluar grup', '🚪');
-        m += item('!block', 'Block kontak', '⛔');
-        m += item('!unblock', 'Unblock kontak', '✅');
-        m += item('!spek', 'Spesifikasi bot', '📊');
-        m += item('!grup', 'Info / atur grup', '👥');
-        m += item('!antilink', 'Toggle anti link', '🛡️');
-        m += item('!speedtest', 'Cek jaringan', '🌐');
-        m += item('!broadcast', 'Broadcast', '📢');
-        m += item('!bc', 'Alias broadcast', '📣');
-        m += item('!systeminfo', 'Info sistem lengkap', '🧠');
-        m += lastItem('!resetroom', 'Reset room W2G', '🔄');
+        m += `👑 \`!menu owner\`    · Kontrol bot (owner only)\n`;
     }
-
-    m += section('🧠 *AI & CHAT*');
-    m += item('!tanya', 'Tanya AI', '🤖');
-    m += item('!coding', 'Bantuan coding', '💻');
-    m += item('!db', 'Generator database + SQL + API', '🗄️');
-    m += item('!code', 'Review kode', '🔍');
-    m += item('!rangkum', 'Ringkas teks', '📑');
-    m += item('!brainstorm', 'Ide kreatif', '💡');
-    m += item('!translate', 'Kamus dunia multi-bahasa', '🌐');
-    m += item('!lihat', 'Analisa gambar AI', '👁️');
-    m += item('!q', 'Chat bebas AI', '🗨️');
-    m += item('!resetai', 'Reset memori AI', '♻️');
-    m += lastItem('!fact', 'Fakta menarik', '🤯');
-
-    m += section('🎵 *MUSIK & RADIO*');
-    m += item('!play', 'Cari & antrian lagu', '🎵');
-    m += item('!nowplaying', 'Lagu yang sedang diputar', '🎶');
-    m += item('!discord', 'Status Discord + invite', '🎧');
-    m += item('!queue', 'Antrian lagu', '📋');
-    m += item('!skip', 'Lagu berikutnya', '⏭️');
-    m += item('!lirik', 'Lirik lagu', '📝');
-    m += lastItem('!watch', 'Nonton bareng (Luxx TV)', '📺');
-
-    m += section('🎌 *HIBURAN & SASTRA*');
-    m += item('!sastra', 'Puisi dunia — pilih negara', '📜');
-    m += item('!anime', 'Info anime', '🎌');
-    m += item('!football', 'Jadwal bola (alias !jadwalbola)', '⚽');
-    m += item('!character', 'Cari karakter anime', '👤');
-    m += item('!waifu', 'Random waifu', '💖');
-    m += item('!quotesanime', 'Quote anime ID', '📜');
-    m += item('!darkjokes', 'Dark humor', '😈');
-    m += item('!pantun', 'Pantun live dari dunia', '🎭');
-    m += item('!cerpen', 'Cerpen AI', '📖');
-    m += lastItem('!meme', 'Meme random', '😂');
-
-    m += section('🎨 *MEDIA & TOOLS*');
-    m += item('!buat', 'Gambar AI HD fotorealistik', '🖼️');
-    m += item('!sp', 'Sound pad — cari, simpan & putar ulang', '🔊');
-    m += item('!quote', 'Kutipan inspiratif', '💬');
-    m += item('!s', 'Stiker premium', '🎨');
-    m += item('!dl', 'Download video / MP3', '📥');
-    m += item('!ocr', 'Baca teks gambar', '🔍');
-    m += item('!qr', 'Buat QR code', '📱');
-    m += item('!kalkulator', 'Hitung matematika', '🧮');
-    m += item('!cuaca', 'Info cuaca', '🌤️');
-    m += lastItem('!stalk', 'Profil GitHub', '🐙');
-
-    m += section('🎲 *GAMES & FUN*');
-    m += item('!apakah', 'Jawaban acak', '🔮');
-    m += item('!gacha', 'Random picker', '🎲');
-    m += item('!voting', 'Buat polling', '🗳️');
-    m += item('!pilih', 'Pilih opsi vote', '✅');
-    m += lastItem('!endvoting', 'Tutup voting', '🛑');
-
-    m += section('💎 *INFO BOT*');
-    m += `├ Creator · DoxxBorx 👑\n`;
-    m += `├ Versi · v${BOT_VERSION} Premium 🚀\n`;
-    m += `├ Fitur · 80+ perintah 📦\n`;
-    m += `└ Support · @6282384961407 📞\n`;
+    m += `🧠 \`!menu ai\`       · AI, coding & terjemahan\n`;
+    m += `🎵 \`!menu musik\`    · Radio, lagu & Discord\n`;
+    m += `🎌 \`!menu hiburan\`  · Anime, sastra & fun\n`;
+    m += `🎨 \`!menu media\`    · Stiker, download & tools\n`;
+    m += `🎲 \`!menu games\`    · Polling, voting & gacha\n`;
 
     m += `\n${DIVIDER}\n`;
-    m += `💖 *Made with Love by DoxxBorx* ✨\n`;
-    m += `🎀 _Ketik \`!help nama\` untuk detail perintah_`;
+    m += `❓ \`!help [perintah]\` · Detail satu perintah\n`;
+    m += `💖 _Made with Love by DoxxBorx_ ✨`;
 
     return m;
 }
 
-export { buildMenuText };
+/** Section UMUM */
+function buildMenuUmum() {
+    let m = '';
+    m += `🎮 *MENU UMUM*\n`;
+    m += `_Perintah dasar, info bot, dan utilitas harian._\n`;
+    m += DIVIDER + '\n';
+    m += item('!guide', 'Panduan pemula — cara pakai bot', '📖');
+    m += item('!halo', 'Sapa bot dengan ramah', '👋');
+    m += item('!ping', 'Cek kecepatan respons bot', '🏓');
+    m += item('!status', 'Status bot, radio & Discord', '📊');
+    m += item('!help', 'Detail satu perintah (!help play)', '❓');
+    m += item('!aboutlux', 'Profil bot & info pembuat', '👑');
+    m += item('!menu', 'Tampilkan menu utama', '📜');
+    m += item('!changelogs', 'Update & fitur terbaru', '📢');
+    m += item('!lapor', 'Lapor bug / request fitur', '📮');
+    m += item('!berita', 'Berita terkini multi-negara', '📰');
+    m += item('!notes', 'Catatan pribadi (add/list/edit)', '📝');
+    m += item('!reminder', 'Atur pengingat (30m / 2h / HH:MM)', '⏰');
+    m += item('!welcome', 'Pesan sambutan otomatis grup', '👋');
+    m += item('!add', 'Tambah member ke grup', '👥');
+    m += item('!tagall', 'Tag semua member grup', '📢');
+    m += item('!tanggal', 'Waktu & tanggal Indonesia (WIB)', '🗓️');
+    m += item('!warna', 'Generate warna acak + kode hex', '🎨');
+    m += lastItem('!server', 'Info server & spesifikasi sistem', '🖥️');
+    m += `\n${DIVIDER}\n`;
+    m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
+    return m;
+}
+
+/** Section OWNER */
+function buildMenuOwner() {
+    let m = '';
+    m += `👑 *MENU OWNER*\n`;
+    m += `_Kontrol penuh bot — khusus owner terdaftar._\n`;
+    m += DIVIDER + '\n';
+    m += item('!turu', 'Aktifkan mode tidur bot', '😴');
+    m += item('!bangun', 'Bangunkan bot dari mode tidur', '☀️');
+    m += item('!pingsan', 'Matikan bot + shutdown PM2', '💀');
+    m += item('!self', 'Ganti ke mode self (owner only)', '🔒');
+    m += item('!public', 'Ganti ke mode public (semua bisa)', '🔓');
+    m += item('!join', 'Bot masuk grup via link invite', '➡️');
+    m += item('!leave', 'Bot keluar dari grup ini', '🚪');
+    m += item('!block', 'Block kontak tertentu', '⛔');
+    m += item('!unblock', 'Unblock kontak', '✅');
+    m += item('!spek', 'Spesifikasi lengkap bot & server', '📊');
+    m += item('!grup', 'Info & atur pengaturan grup', '👥');
+    m += item('!antilink', 'Toggle anti-link grup on/off', '🛡️');
+    m += item('!speedtest', 'Tes kecepatan koneksi server', '🌐');
+    m += item('!broadcast', 'Kirim pesan ke semua kontak/grup', '📢');
+    m += item('!bc', 'Alias dari !broadcast', '📣');
+    m += item('!systeminfo', 'Info sistem lengkap (CPU/RAM/disk)', '🧠');
+    m += lastItem('!resetroom', 'Reset room Watch2Gether', '🔄');
+    m += `\n${DIVIDER}\n`;
+    m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
+    return m;
+}
+
+/** Section AI */
+function buildMenuAi() {
+    let m = '';
+    m += `🧠 *MENU AI & CHAT*\n`;
+    m += `_Kecerdasan buatan untuk coding, terjemahan & analisis._\n`;
+    m += DIVIDER + '\n';
+    m += item('!tanya', 'Tanya AI apapun yang kamu mau', '🤖');
+    m += item('!q', 'Chat bebas tanpa prefix panjang', '🗨️');
+    m += item('!coding', 'Minta bantuan coding & debugging', '💻');
+    m += item('!code', 'Review & analisis kode program', '🔍');
+    m += item('!db', 'Generate database, SQL, dan REST API', '🗄️');
+    m += item('!rangkum', 'Ringkas teks panjang jadi singkat', '📑');
+    m += item('!brainstorm', 'Ide kreatif untuk topik apapun', '💡');
+    m += item('!translate', 'Terjemahan multi-bahasa dunia', '🌐');
+    m += item('!lihat', 'Analisis & deskripsikan gambar AI', '👁️');
+    m += item('!resetai', 'Reset memori percakapan AI', '♻️');
+    m += lastItem('!fact', 'Fakta menarik & unik acak', '🤯');
+    m += `\n${DIVIDER}\n`;
+    m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
+    return m;
+}
+
+/** Section MUSIK */
+function buildMenuMusik() {
+    let m = '';
+    m += `🎵 *MENU MUSIK & RADIO*\n`;
+    m += `_Putar lagu, kelola antrian & integrasi Discord._\n`;
+    m += DIVIDER + '\n';
+    m += item('!play', 'Cari lagu & masukkan ke antrian radio', '🎵');
+    m += item('!nowplaying', 'Lihat lagu yang sedang diputar', '🎶');
+    m += item('!queue', 'Lihat seluruh antrian lagu', '📋');
+    m += item('!skip', 'Lewati ke lagu berikutnya', '⏭️');
+    m += item('!lirik', 'Cari lirik lagu apapun', '📝');
+    m += item('!discord', 'Status Discord bot + link invite', '🎧');
+    m += lastItem('!watch', 'Buat/buka sesi nonton bareng Luxx TV', '📺');
+    m += `\n${DIVIDER}\n`;
+    m += `_Discord: \`/join\` \`/play\` \`/queue\` \`/lirik\` \`/leave\` \`/stop\`_\n`;
+    m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
+    return m;
+}
+
+/** Section HIBURAN */
+function buildMenuHiburan() {
+    let m = '';
+    m += `🎌 *MENU HIBURAN & SASTRA*\n`;
+    m += `_Anime, puisi, humor & konten hiburan dari seluruh dunia._\n`;
+    m += DIVIDER + '\n';
+    m += item('!sastra', 'Puisi dari berbagai negara dunia', '📜');
+    m += item('!anime', 'Info & detail anime favorit', '🎌');
+    m += item('!football', 'Jadwal pertandingan bola terkini', '⚽');
+    m += item('!character', 'Cari karakter anime apapun', '👤');
+    m += item('!waifu', 'Random waifu anime', '💖');
+    m += item('!quotesanime', 'Quote inspiratif dari anime', '📜');
+    m += item('!darkjokes', 'Dark humor & lelucon gelap', '😈');
+    m += item('!pantun', 'Pantun live dari berbagai daerah', '🎭');
+    m += item('!cerpen', 'Cerpen pendek AI', '📖');
+    m += lastItem('!meme', 'Meme random lucu', '😂');
+    m += `\n${DIVIDER}\n`;
+    m += `_Alias: \`!jadwalbola\` = \`!football\`_\n`;
+    m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
+    return m;
+}
+
+/** Section MEDIA */
+function buildMenuMedia() {
+    let m = '';
+    m += `🎨 *MENU MEDIA & TOOLS*\n`;
+    m += `_Buat konten, download media & berbagai alat bantu._\n`;
+    m += DIVIDER + '\n';
+    m += item('!buat', 'Generate gambar AI HD fotorealistik', '🖼️');
+    m += item('!s', 'Buat stiker premium dari foto/video', '🎨');
+    m += item('!dl', 'Download video/audio dari YouTube & TikTok', '📥');
+    m += item('!sp', 'Sound pad — cari, simpan & putar efek suara', '🔊');
+    m += item('!quote', 'Kutipan inspiratif acak', '💬');
+    m += item('!ocr', 'Baca & ekstrak teks dari gambar', '🔍');
+    m += item('!qr', 'Buat QR code dari teks/link', '📱');
+    m += item('!kalkulator', 'Kalkulator ekspresi matematika', '🧮');
+    m += item('!cuaca', 'Info cuaca kota manapun', '🌤️');
+    m += lastItem('!stalk', 'Lihat profil & repo GitHub', '🐙');
+    m += `\n${DIVIDER}\n`;
+    m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
+    return m;
+}
+
+/** Section GAMES */
+function buildMenuGames() {
+    let m = '';
+    m += `🎲 *MENU GAMES & FUN*\n`;
+    m += `_Polling, gacha & mini-game seru bareng grup._\n`;
+    m += DIVIDER + '\n';
+    m += item('!apakah', 'Jawaban acak untuk pertanyaan ya/tidak', '🔮');
+    m += item('!gacha', 'Random picker dari daftar pilihanmu', '🎲');
+    m += item('!voting', 'Buat sesi polling/voting grup', '🗳️');
+    m += item('!pilih', 'Pilih opsi dalam voting aktif', '✅');
+    m += lastItem('!endvoting', 'Tutup & tampilkan hasil voting', '🛑');
+    m += `\n${DIVIDER}\n`;
+    m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
+    return m;
+}
+
+/**
+ * Routing menu per section
+ * @param {string} sectionArg - argumen section yang diminta
+ * @param {boolean} isAdmin
+ * @returns {string|null} - teks menu atau null jika section tidak dikenal
+ */
+function buildSectionMenu(sectionArg, isAdmin) {
+    const s = sectionArg.toLowerCase().trim();
+    if (s === 'umum' || s === 'general' || s === 'u') return buildMenuUmum();
+    if ((s === 'owner' || s === 'admin' || s === 'o') && isAdmin) return buildMenuOwner();
+    if (s === 'ai' || s === 'chat' || s === 'a') return buildMenuAi();
+    if (s === 'musik' || s === 'music' || s === 'radio' || s === 'm') return buildMenuMusik();
+    if (s === 'hiburan' || s === 'entertainment' || s === 'h') return buildMenuHiburan();
+    if (s === 'media' || s === 'tools' || s === 't') return buildMenuMedia();
+    if (s === 'games' || s === 'game' || s === 'fun' || s === 'g') return buildMenuGames();
+    return null;
+}
+
+export { buildMenuText, buildSectionMenu };

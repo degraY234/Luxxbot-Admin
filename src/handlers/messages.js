@@ -6,7 +6,7 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { minify } from 'terser';
 
-import { buildMenuText } from '../../menu.js';
+import { buildMenuText, buildSectionMenu } from '../../menu.js';
 import { BOT_NAME, OWNER_NUMBER, PM2_APP_NAME, ai, GEMINI_API_KEY, GEMINI_VISION_MODEL, startTime, W2G_ROOM_FILE } from '../config.js';
 import { state, userAIContext } from '../state.js';
 import { checkCooldown, checkCommandCooldown, getRemainingCooldown } from '../utils/cooldown.js';
@@ -261,6 +261,18 @@ export function registerMessageHandler(sock) {
 
             if (command === 'menu' || command === 'loot') {
                 const botUptime = runtime((Date.now() - startTime) / 1000);
+                // Jika ada argumen section, tampilkan menu section itu
+                if (args.length > 0) {
+                    const sectionText = buildSectionMenu(args[0], isAdmin);
+                    if (sectionText) {
+                        return await sock.sendMessage(from, { text: sectionText }, { quoted: msg });
+                    }
+                    // Section tidak dikenal — tampilkan pesan helper
+                    return await sock.sendMessage(from, {
+                        text: `❓ Section *"${args[0]}"* tidak ditemukan.\n\nPilihan section yang tersedia:\n\`!menu umum\` · \`!menu ai\` · \`!menu musik\`\n\`!menu hiburan\` · \`!menu media\` · \`!menu games\`${isAdmin ? ' · `!menu owner`' : ''}`
+                    }, { quoted: msg });
+                }
+                // Tanpa argumen — tampilkan menu utama
                 const menuText = buildMenuText(state.isSelfMode, state.isSleeping, state.antiLink, isAdmin, botUptime);
                 return await sock.sendMessage(from, { text: menuText }, { quoted: msg });
             }

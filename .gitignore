@@ -32,6 +32,7 @@ data/youtube-cookies.txt
 temp/
 terminals/
 backup/
+restore.js
 dasu.response
 persist/
 
@@ -48,8 +49,13 @@ logs/
 .DS_Store
 Thumbs.db
 
-# IDE files
+# IDE / agent tools
 .vscode/
 .idea/
+.kiro/
 *.swp
 *.swo
+
+# Accidental / one-off clutter
+$null
+CLEANUP_AND_COMMIT.md

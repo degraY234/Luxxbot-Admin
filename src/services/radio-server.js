@@ -41,9 +41,11 @@ let trackIdCounter = 0;
 let serverStarted = false;
 let advanceTimer = null;
 let radioGeneration = 0;
+let playbackSeq = 0;
 let loadMutex = Promise.resolve();
 let activeMp3Path = null;
 const trackChangeListeners = new Set();
+const playbackStateListeners = new Set();
 
 function ensureDirs() {
     if (!fs.existsSync(RADIO_DIR)) fs.mkdirSync(RADIO_DIR, { recursive: true });
@@ -126,11 +128,13 @@ function stopCurrentPlayback() {
     clearAdvanceTimer();
     radio.current = null;
     radio.playbackActive = false;
+    radio.paused = false;
     if (activeMp3Path) {
         parkMp3File(activeMp3Path);
         activeMp3Path = null;
     }
     emitTrackChange();
+    emitPlaybackStateChange();
 }
 
 export function getCurrentMp3Path() {
@@ -147,6 +151,25 @@ function emitTrackChange() {
     for (const fn of trackChangeListeners) {
         try { fn(payload); } catch (e) { console.error('radio track listener:', e.message); }
     }
+    emitPlaybackStateChange();
+}
+
+export function onRadioPlaybackStateChange(fn) {
+    playbackStateListeners.add(fn);
+    return () => playbackStateListeners.delete(fn);
+}
+
+function emitPlaybackStateChange() {
+    const payload = {
+        paused: Boolean(radio.paused),
+        positionSec: getPlaybackPositionSec(),
+        track: radio.current,
+        streamEpoch: radioGeneration,
+        playbackSeq
+    };
+    for (const fn of playbackStateListeners) {
+        try { fn(payload); } catch (e) { console.error('radio playback listener:', e.message); }
+    }
 }
 
 export const radio = {
@@ -154,6 +177,7 @@ export const radio = {
     current: null,
     isPreparing: false,
     playbackActive: false,
+    paused: false,
     listeners: 0,
     lastPrepareError: null,
     lastPrepareAt: null
@@ -161,6 +185,21 @@ export const radio = {
 
 export function isRadioPlaying() {
     return Boolean(radio.current?.preparedAt);
+}
+
+export function isRadioPaused() {
+    return Boolean(radio.paused && isRadioPlaying());
+}
+
+function getPlaybackPositionSec() {
+    const cur = radio.current;
+    if (!cur?.preparedAt) return 0;
+    if (radio.paused) {
+        return Math.max(0, cur.pausedPositionSec || 0);
+    }
+    const durationSec = cur.durationSec || 0;
+    const pos = (Date.now() - cur.preparedAt) / 1000;
+    return durationSec > 0 ? Math.min(durationSec, Math.max(0, pos)) : Math.max(0, pos);
 }
 
 function getUpNextTrack() {
@@ -199,8 +238,8 @@ function getMp3DurationSec(filePath) {
 
 export function isCurrentTrackFinished() {
     const cur = radio.current;
-    if (!cur?.preparedAt || !cur.durationSec) return false;
-    return (Date.now() - cur.preparedAt) / 1000 >= cur.durationSec - 0.5;
+    if (!cur?.preparedAt || !cur.durationSec || radio.paused) return false;
+    return getPlaybackPositionSec() >= cur.durationSec - 0.5;
 }
 
 export function getRadioPlayback() {
@@ -213,31 +252,117 @@ export function getRadioPlayback() {
             durationSec: dur,
             progress: 0,
             preparedAt: 0,
+            paused: false,
             elapsedLabel: '0:00',
             durationLabel: dur > 0 ? formatDurationSec(dur) : (display?.duration || '0:00')
         };
     }
     const durationSec = cur.durationSec || 0;
-    const positionSec = durationSec > 0
-        ? Math.min(durationSec, Math.max(0, (Date.now() - cur.preparedAt) / 1000))
-        : Math.max(0, (Date.now() - cur.preparedAt) / 1000);
+    const positionSec = getPlaybackPositionSec();
     const progress = durationSec > 0 ? Math.min(100, (positionSec / durationSec) * 100) : 0;
     return {
         positionSec,
         durationSec,
         progress,
         preparedAt: cur.preparedAt,
+        paused: Boolean(radio.paused),
+        playbackSeq,
         elapsedLabel: formatDurationSec(positionSec),
         durationLabel: formatDurationSec(durationSec) || cur.duration || '-'
     };
 }
 
+export function getRadioPlaybackSeq() {
+    return playbackSeq;
+}
+
+export function pauseRadioPlayback() {
+    if (!isRadioPlaying()) {
+        return { ok: false, message: 'Tidak ada lagu yang diputar.' };
+    }
+    if (radio.paused) {
+        return {
+            ok: true,
+            paused: true,
+            positionSec: getPlaybackPositionSec(),
+            playbackSeq,
+            message: 'Sudah dijeda.',
+            streamEpoch: radioGeneration
+        };
+    }
+    const positionSec = getPlaybackPositionSec();
+    radio.current.pausedPositionSec = positionSec;
+    radio.paused = true;
+    playbackSeq += 1;
+    clearAdvanceTimer();
+    console.log(`📻 Radio dijeda @ ${formatDurationSec(positionSec)}`);
+    emitPlaybackStateChange();
+    return {
+        ok: true,
+        paused: true,
+        positionSec,
+        playbackSeq,
+        message: `⏸️ Dijeda — ${radio.current.title} @ ${formatDurationSec(positionSec)}`,
+        streamEpoch: radioGeneration
+    };
+}
+
+export function resumeRadioPlayback() {
+    if (!isRadioPlaying()) {
+        return { ok: false, message: 'Tidak ada lagu aktif.' };
+    }
+    if (!radio.paused) {
+        return {
+            ok: true,
+            paused: false,
+            positionSec: getPlaybackPositionSec(),
+            message: 'Sudah diputar.',
+            streamEpoch: radioGeneration
+        };
+    }
+    const positionSec = Math.max(0, radio.current.pausedPositionSec || 0);
+    radio.current.preparedAt = Date.now() - positionSec * 1000;
+    delete radio.current.pausedPositionSec;
+    radio.paused = false;
+    playbackSeq += 1;
+    scheduleAutoAdvance();
+    console.log(`📻 Radio lanjut @ ${formatDurationSec(positionSec)}`);
+    emitPlaybackStateChange();
+    return {
+        ok: true,
+        paused: false,
+        positionSec,
+        playbackSeq,
+        message: `▶️ Lanjut — ${radio.current.title} @ ${formatDurationSec(positionSec)}`,
+        streamEpoch: radioGeneration
+    };
+}
+
+async function refreshCurrentDuration() {
+    const cur = radio.current;
+    if (!cur?.filePath || !fs.existsSync(cur.filePath)) return 0;
+    const dur = await getMp3DurationSec(cur.filePath);
+    if (dur > 0 && cur === radio.current) {
+        cur.durationSec = dur;
+        cur.duration = formatDurationSec(dur) || cur.duration || '-';
+        emitPlaybackStateChange();
+    }
+    return dur;
+}
+
 function scheduleAutoAdvance() {
     clearAdvanceTimer();
     const cur = radio.current;
-    if (!cur?.preparedAt || !cur.durationSec || cur.durationSec < 3) return;
+    if (radio.paused || !cur?.preparedAt) return;
 
-    const remainingMs = (cur.durationSec * 1000) - (Date.now() - cur.preparedAt) + 600;
+    if (!cur.durationSec || cur.durationSec < 3) {
+        void refreshCurrentDuration().then((dur) => {
+            if (dur >= 3 && radio.current === cur && !radio.paused) scheduleAutoAdvance();
+        });
+        return;
+    }
+
+    const remainingMs = (cur.durationSec * 1000) - getPlaybackPositionSec() * 1000 + 600;
     if (remainingMs <= 0) {
         handleTrackEnded().catch((e) => console.error('📻 Radio track ended:', e.message));
         return;
@@ -248,12 +373,45 @@ function scheduleAutoAdvance() {
     }, remainingMs);
 }
 
-/** Lagu selesai — berhenti, antrian berikutnya tunggu tombol Putar di web */
+/** Putar head antrian — tanpa lock (hanya dari dalam withLoadLock) */
+async function playNextInQueue(reason = 'advance') {
+    radio.paused = false;
+    if (!radio.queue.length) {
+        console.log(`📻 Radio: ${reason} — antrian kosong`);
+        return { ok: false, message: 'Antrian kosong.' };
+    }
+    const nextTitle = radio.queue[0]?.title || 'lagu';
+    console.log(`📻 Radio: ${reason} — auto-play "${nextTitle}"`);
+    const gen = radioGeneration;
+    const ok = await startQueueHead(gen);
+    return {
+        ok,
+        preparing: false,
+        restarted: false,
+        message: ok
+            ? `▶️ Memutar: ${radio.current?.title || 'lagu'}`
+            : (radio.lastPrepareError?.message || 'Gagal memuat lagu'),
+        streamEpoch: radioGeneration,
+        queueLength: radio.queue.length
+    };
+}
+
+/** Langsung putar lagu berikutnya — dengan lock (antrian baru / lagu habis) */
+async function autoPlayNextTrack(reason = 'advance') {
+    return withLoadLock(() => playNextInQueue(reason));
+}
+
+/** Lagu selesai — lanjut otomatis ke antrian berikutnya */
 async function handleTrackEnded() {
-    if (radio.isPreparing) return;
+    if (radio.isPreparing && radio.current) return;
     clearAdvanceTimer();
-    console.log('📻 Radio: lagu selesai — tunggu Putar untuk lagu berikutnya');
+    console.log('📻 Radio: lagu selesai');
     stopCurrentPlayback();
+    try {
+        await autoPlayNextTrack('lagu selesai');
+    } catch (e) {
+        console.error('📻 Radio auto-advance:', e?.message || e);
+    }
 }
 
 export function getRadioPublicUrl() {
@@ -264,16 +422,27 @@ export function getRadioListenUrl() {
     return `${getRadioPublicUrl()}/portfolio/radio`;
 }
 
-const PREPARE_TIMEOUT_MS = Number(process.env.RADIO_PREPARE_TIMEOUT_MS || 300_000);
+const PREPARE_TIMEOUT_BASE_MS = Number(process.env.RADIO_PREPARE_TIMEOUT_MS || 300_000);
+const PREPARE_TIMEOUT_MAX_MS = Number(process.env.RADIO_PREPARE_TIMEOUT_MAX_MS || 1_800_000);
+
+function getPrepareTimeoutMs(track = {}) {
+    const dur = track.durationSec || 0;
+    const scaled = dur > 0 ? dur * 2500 + 180_000 : PREPARE_TIMEOUT_BASE_MS;
+    return Math.min(PREPARE_TIMEOUT_MAX_MS, Math.max(PREPARE_TIMEOUT_BASE_MS, scaled));
+}
 
 async function prepareTrack(track, gen) {
     ensureDirs();
     const tmpPath = path.join(RADIO_DIR, `track-${track.id}.mp3`);
     try {
+        const prepareTimeoutMs = getPrepareTimeoutMs(track);
         await Promise.race([
             downloadYoutubeToMp3(track.url, tmpPath),
             new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Download radio timeout')), PREPARE_TIMEOUT_MS);
+                setTimeout(
+                    () => reject(new Error(`Download radio timeout (${Math.round(prepareTimeoutMs / 1000)}s)`)),
+                    prepareTimeoutMs
+                );
             })
         ]);
     } catch (e) {
@@ -300,6 +469,8 @@ async function prepareTrack(track, gen) {
     const fileDuration = await getMp3DurationSec(playPath);
     const durationSec = fileDuration || track.durationSec || 0;
     radio.playbackActive = true;
+    radio.paused = false;
+    playbackSeq += 1;
     radio.current = {
         ...track,
         durationSec,
@@ -315,6 +486,11 @@ async function prepareTrack(track, gen) {
 async function startQueueHead(gen) {
     if (gen !== radioGeneration) return false;
     if (!radio.queue.length) return false;
+    if (radio.isPreparing && isRadioPlaying()) return false;
+    if (radio.isPreparing && !radio.current) {
+        console.log('📻 Radio: reset flag isPreparing macet');
+        radio.isPreparing = false;
+    }
     if (radio.isPreparing) return false;
 
     radio.isPreparing = true;
@@ -352,40 +528,67 @@ async function startQueueHead(gen) {
     }
 }
 
-/** Mulai lagu dari antrian — hanya dipanggil saat tombol Putar di web */
-export async function startRadioPlayback() {
+/** Respons HTTP cepat — unduhan jalan di background (hindari timeout Failed to fetch) */
+export async function handleRadioPlayRequest() {
     if (radio.isPreparing) {
+        return {
+            ok: true,
+            preparing: true,
+            message: '⏳ Sedang mengunduh lagu...',
+            streamEpoch: radioGeneration,
+            queueLength: radio.queue.length
+        };
+    }
+    if (!radio.queue.length) {
+        return { ok: false, message: 'Antrian kosong — tambah via !play dulu.' };
+    }
+    if (isRadioPlaying()) {
+        if (radio.paused) return resumeRadioPlayback();
+        return {
+            ok: true,
+            message: `▶️ ${radio.current.title} — sedang diputar`,
+            streamEpoch: radioGeneration,
+            queueLength: radio.queue.length,
+            positionSec: getPlaybackPositionSec()
+        };
+    }
+
+    const title = radio.queue[0]?.title || 'lagu';
+    void startRadioPlayback().catch((e) => {
+        console.error('📻 Radio play background:', e?.message || e);
+    });
+
+    return {
+        ok: true,
+        preparing: true,
+        message: `⏳ Memuat: ${title}...`,
+        streamEpoch: radioGeneration,
+        queueLength: radio.queue.length
+    };
+}
+
+/** Mulai lagu dari antrian — manual (tombol Putar) atau auto-advance (skip/lagu habis) */
+export async function startRadioPlayback({ autoAdvance = false } = {}) {
+    if (radio.isPreparing && !autoAdvance) {
         return { ok: false, preparing: true, message: '⏳ Sedang mengunduh lagu...' };
     }
     if (!radio.queue.length) {
         return { ok: false, message: 'Antrian kosong — tambah via !play dulu.' };
     }
     if (isRadioPlaying()) {
-        radio.current.preparedAt = Date.now();
-        bumpRadioGeneration();
-        scheduleAutoAdvance();
+        if (radio.paused) {
+            return resumeRadioPlayback();
+        }
         return {
             ok: true,
-            restarted: true,
-            message: `▶️ ${radio.current.title} — mulai dari awal`,
-            streamEpoch: radioGeneration
+            message: `▶️ ${radio.current.title} — sedang diputar`,
+            streamEpoch: radioGeneration,
+            queueLength: radio.queue.length,
+            positionSec: getPlaybackPositionSec()
         };
     }
 
-    return withLoadLock(async () => {
-        const gen = radioGeneration;
-        const ok = await startQueueHead(gen);
-        return {
-            ok,
-            preparing: false,
-            restarted: false,
-            message: ok
-                ? `▶️ Memutar: ${radio.current?.title || 'lagu'}`
-                : (radio.lastPrepareError?.message || 'Gagal memuat lagu'),
-            streamEpoch: radioGeneration,
-            queueLength: radio.queue.length
-        };
-    });
+    return withLoadLock(() => playNextInQueue(autoAdvance ? 'auto' : 'manual'));
 }
 
 export async function addTrackToRadio(track, requestedBy = 'user') {
@@ -404,7 +607,12 @@ export async function addTrackToRadio(track, requestedBy = 'user') {
     radio.queue.push(entry);
     scheduleLyricsPrefetch(entry);
     syncGlobalQueue();
-    console.log(`📻 Antrian +1: ${entry.title} (total ${radio.queue.length}) — tunggu Putar di web`);
+    console.log(`📻 Antrian +1: ${entry.title} (total ${radio.queue.length})`);
+    if (!isRadioPlaying() && !radio.isPreparing) {
+        void autoPlayNextTrack('antrian baru').catch((e) => {
+            console.error('📻 Radio auto-play:', e?.message || e);
+        });
+    }
     return entry;
 }
 
@@ -443,13 +651,21 @@ export async function skipRadioTrack() {
 
         const nextTitle = radio.queue[0]?.title;
         console.log(`📻 Skip selesai · sisa antrian ${radio.queue.length}${nextTitle ? ` · berikutnya: ${nextTitle}` : ''}`);
+        if (radio.queue.length) {
+            try {
+                await playNextInQueue('skip');
+            } catch (e) {
+                console.error('📻 Radio skip-advance:', e?.message || e);
+            }
+        }
         return {
             ok: true,
             message: nextTitle
-                ? `⏭️ Skip: *${skipped || '—'}* · Berikutnya: *${nextTitle}* — klik Putar di web`
+                ? `⏭️ Skip: *${skipped || '—'}* · Memutar: *${nextTitle}*`
                 : `⏭️ Skip: *${skipped || '—'}* · Antrian kosong.`,
-            streamEpoch: gen,
-            queueLength: radio.queue.length
+            streamEpoch: radioGeneration,
+            queueLength: radio.queue.length,
+            autoPlay: Boolean(radio.queue.length && isRadioPlaying())
         };
     });
 }
@@ -467,7 +683,7 @@ export function getRadioStatusText() {
         : radio.isPreparing
             ? '⏳ Sedang memuat lagu...'
             : radio.queue.length
-                ? `⏸️ *Siap diputar:*\n${radio.queue[0].title}\n👤 ${radio.queue[0].author}\n🙋 ${radio.queue[0].requestedBy}\n_Klik Putar di web untuk mulai._`
+                ? `⏳ *Memuat:*\n${radio.queue[0].title}\n👤 ${radio.queue[0].author}\n🙋 ${radio.queue[0].requestedBy}`
                 : '_Belum ada lagu di antrian._';
 
     const queueLines = radio.queue.length
@@ -507,6 +723,30 @@ export function attachRadioServer(app) {
             isPreparing: radio.isPreparing,
             listenUrl: getRadioListenUrl()
         });
+    });
+
+    function applyRadioCors(req, res) {
+        const origin = req.headers.origin;
+        if (origin) {
+            res.setHeader('Access-Control-Allow-Origin', origin);
+            res.setHeader('Access-Control-Allow-Credentials', 'true');
+            res.setHeader('Vary', 'Origin');
+        } else {
+            res.setHeader('Access-Control-Allow-Origin', '*');
+        }
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+        if (req.method === 'OPTIONS') {
+            res.status(204).end();
+            return true;
+        }
+        return false;
+    }
+
+    app.use('/radio', (req, res, next) => {
+        if (applyRadioCors(req, res)) return;
+        next();
     });
 
     app.get('/radio/live.mp3', (req, res) => {
@@ -561,11 +801,32 @@ export function attachRadioServer(app) {
     });
 
     app.post('/radio/api/play', async (req, res) => {
-        const result = await startRadioPlayback();
+        const result = await handleRadioPlayRequest();
         res.json({
             ...result,
             queueLength: radio.queue.length,
+            isPreparing: radio.isPreparing,
+            paused: isRadioPaused(),
             hasStream: Boolean(getActiveMp3Path() && isRadioPlaying())
+        });
+    });
+
+    app.post('/radio/api/pause', (req, res) => {
+        const result = pauseRadioPlayback();
+        res.json({
+            ...result,
+            queueLength: radio.queue.length,
+            playback: getRadioPlayback()
+        });
+    });
+
+    app.post('/radio/api/resume', (req, res) => {
+        const result = resumeRadioPlayback();
+        res.json({
+            ...result,
+            queueLength: radio.queue.length,
+            hasStream: Boolean(getActiveMp3Path() && isRadioPlaying()),
+            playback: getRadioPlayback()
         });
     });
 
@@ -591,6 +852,7 @@ export function attachRadioServer(app) {
             current: playing ? mapTrack(radio.current) : null,
             upNext: mapTrack(upNext),
             playbackActive: playing,
+            paused: isRadioPaused(),
             waitingPlay: Boolean(!playing && radio.queue.length),
             queue: radio.queue.map((t) => {
                 const ls = getLyricsPrefetchStatus(t);
@@ -609,6 +871,7 @@ export function attachRadioServer(app) {
             lastPrepareError: radio.lastPrepareError,
             hasStream: Boolean(getActiveMp3Path() && playing),
             playback: getRadioPlayback(),
+            playbackSeq,
             streamEpoch: radioGeneration,
             lyrics,
             discord: getDiscordRadioBlock(),

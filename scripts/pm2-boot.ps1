@@ -11,14 +11,15 @@ try {
     $list = pm2 jlist 2>$null | ConvertFrom-Json
     $luxx = $list | Where-Object { $_.name -eq 'luxx' } | Select-Object -First 1
 
-    if (-not $luxx) {
+    if ($luxx -and $luxx.pm2_env.status -eq 'online') {
+        # App already online; nothing to do.
+    } elseif (-not $luxx) {
         pm2 start ecosystem.config.cjs --update-env 2>$null
-    } elseif ($luxx.pm2_env.status -ne 'online') {
-        pm2 start luxx --update-env 2>$null
+        pm2 save 2>$null
+    } else {
+        # App exists but is not online (e.g., stopped); do NOT force-start.
+        # Manual start required to run again.
     }
-
-    pm2 save 2>$null
 } catch {
-    pm2 start ecosystem.config.cjs --update-env 2>$null
-    pm2 save 2>$null
+    # If dump read fails, do nothing to avoid forced start.
 }

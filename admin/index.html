@@ -20,7 +20,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=14" />
 </head>
 <body>
   <canvas id="grid-canvas" class="grid-canvas" aria-hidden="true"></canvas>
@@ -38,8 +38,8 @@
 
       <div class="field">
         <label for="api-base">API Base URL</label>
-        <input id="api-base" type="url" placeholder="https://luxxbot-production.up.railway.app" autocomplete="url" />
-        <span class="field-hint">Railway: buka /admin langsung — cukup token. GitHub Pages: isi URL bot (tanpa /admin).</span>
+        <input id="api-base" type="url" placeholder="https://healing-java-searched-continues.trycloudflare.com" autocomplete="url" />
+        <span class="field-hint">GitHub Pages: isi URL server bot (RADIO_PUBLIC_URL / tunnel / VPS) — tanpa /admin. Bukan link github.io.</span>
       </div>
 
       <div class="field">
@@ -51,7 +51,7 @@
       </div>
 
       <button id="btn-login" class="btn primary">Masuk Dashboard</button>
-      <button type="button" id="btn-local" class="btn secondary">⚡ Isi localhost:3920</button>
+      <button type="button" id="btn-local" class="btn secondary">⚡ Isi localhost bot</button>
       <p id="login-error" class="login-error hidden"></p>
     </div>
   </div>
@@ -68,7 +68,7 @@
       <nav class="sidebar-nav">
         <button type="button" class="nav-item active" data-panel="dashboard">◈ Dashboard</button>
         <button type="button" class="nav-item" data-panel="bot">◈ Bot Health</button>
-        <button type="button" class="nav-item" data-panel="radio">◈ Radio</button>
+        <button type="button" class="nav-item" data-panel="radio">◈ Radio & Cari</button>
         <button type="button" class="nav-item" data-panel="watch">◈ Luxx Watch</button>
         <button type="button" class="nav-item" data-panel="system">◈ System</button>
         <button type="button" class="nav-item" data-panel="tools">◈ Tools</button>
@@ -146,9 +146,46 @@
         <section id="panel-radio" class="panel">
           <div class="grid">
             <article class="card span-2 player-card reveal">
+              <div class="radio-search-hero" id="radio-search-hero">
+                <div class="radio-search-head">
+                  <div>
+                    <p class="eyebrow">YouTube Search</p>
+                    <h3>🔍 Cari & Tambah Lagu</h3>
+                  </div>
+                  <span class="search-pill">Langsung ke antrian bot</span>
+                </div>
+                <p class="muted hint">Ketik judul lagu atau paste link YouTube, lalu pilih <strong>+ Antrian</strong>.</p>
+                <div class="search-row search-row-hero">
+                  <span class="search-icon" aria-hidden="true">🎵</span>
+                  <input id="song-search-input" type="search" placeholder="Cari lagu... misal: multo sb19" autocomplete="off" />
+                  <button id="btn-song-search" class="btn primary" type="button">Cari</button>
+                </div>
+                <p id="search-status" class="search-status muted"></p>
+                <ul id="search-results" class="search-results"></ul>
+              </div>
+
               <div class="player-head">
                 <h3>Radio Player</h3>
                 <span id="player-badge" class="player-badge idle">IDLE</span>
+              </div>
+              <div class="beat-stage" id="beat-stage">
+                <canvas id="beat-canvas" aria-hidden="true"></canvas>
+                <div class="beat-overlay"></div>
+                <div class="beat-center-glow" id="beat-center-glow"></div>
+              </div>
+              <div class="player-progress">
+                <div class="player-progress-track">
+                  <div id="player-progress-fill" class="player-progress-fill"></div>
+                  <div id="player-progress-glow" class="player-progress-glow"></div>
+                </div>
+                <div class="player-progress-times">
+                  <span id="player-time-elapsed">0:00</span>
+                  <span id="player-time-duration">0:00</span>
+                </div>
+              </div>
+              <div class="player-controls">
+                <button id="btn-player-play" class="btn primary player-play-btn" type="button">▶ Putar</button>
+                <p id="player-hint" class="player-hint muted">Klik Putar untuk mulai audio — tidak autoplay</p>
               </div>
               <div id="player-shell" class="player-shell">
                 <div class="player-art-wrap">
@@ -159,7 +196,7 @@
                   <p id="player-title" class="player-title">Belum ada lagu</p>
                   <p id="player-artist" class="player-artist muted">—</p>
                   <p id="player-requester" class="player-requester muted">🙋 —</p>
-                  <audio id="radio-audio" class="radio-audio" controls preload="none"></audio>
+                  <audio id="radio-audio" class="radio-audio" controls preload="none" crossorigin="anonymous"></audio>
                 </div>
               </div>
             </article>
@@ -240,7 +277,7 @@
             <article class="card span-2 reveal">
               <h3>🍪 YouTube Cookies</h3>
               <div id="cookies-box" class="info-box muted">Memuat...</div>
-              <p class="muted hint">Railway butuh cookies sekali — tersimpan di volume <code>/app/persist</code>.</p>
+              <p class="muted hint">Simpan sekali di server bot — dipakai untuk <code>!play</code>, radio web & Discord.</p>
               <textarea id="cookies-paste" class="cookies-paste" rows="5" placeholder="Paste isi file youtube-cookies.txt (format Netscape) lalu klik Simpan"></textarea>
               <div class="btn-row" style="margin-top:.6rem">
                 <button id="btn-cookies-save" class="btn primary" type="button">💾 Simpan Cookies</button>
@@ -255,6 +292,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=26"></script>
 </body>
 </html>

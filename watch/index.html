@@ -22,7 +22,7 @@
       <div class="login-logo">📺</div>
       <h1 class="login-title">L U X X W A T C H</h1>
       <p class="login-sub">Ruang Nonton Bareng</p>
-      <p class="muted login-desc">Masuk pakai username — nonton film LK21 bareng</p>
+      <p class="muted login-desc">Masuk pakai username — nonton film LK21 + Rebahin bareng</p>
 
       <div class="field">
         <label for="username">Username / Nick</label>
@@ -97,6 +97,15 @@
             <p>Belum ada film diputar</p>
             <small class="muted">Pilih film di katalog lalu klik ▶ Putar</small>
           </div>
+          <div id="player-play-overlay" class="player-play-overlay hidden">
+            <button id="btn-play-overlay" class="play-overlay-btn" type="button" aria-label="Putar">▶</button>
+          </div>
+          <div id="server-switcher" class="server-switcher hidden">
+            <span class="server-switcher-label">SRV</span>
+            <button class="server-btn active" data-idx="0">1</button>
+            <button class="server-btn" data-idx="1">2</button>
+            <button class="server-btn" data-idx="2">3</button>
+          </div>
         </div>
         <div class="now-bar">
           <img id="now-poster" class="now-poster hidden" alt="" />
@@ -150,7 +159,7 @@
 
       <section class="card span-full catalog-card">
         <div class="section-head">
-          <h2>🎬 Katalog LK21</h2>
+          <h2>🎬 Katalog LK21 + Rebahin</h2>
           <button id="btn-latest" class="btn ghost" type="button">🔥 Terbaru</button>
         </div>
         <div class="search-row">

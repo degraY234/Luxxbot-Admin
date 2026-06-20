@@ -7,7 +7,8 @@ import { randomBytes } from 'crypto';
 import axios from 'axios';
 import { getRadioPublicUrl } from '../utils/radio-url.js';
 import {
-    searchLk21, getLk21Film, fetchLatestLk21, fetchLk21Genres,
+    searchLk21, getLk21Film, getFilmDetail,
+    fetchLatestLk21, fetchLk21Genres,
     browseLk21Genre, browseLk21, getLk21HomeMeta
 } from './lk21.js';
 import { isVidplayerUrl, resolveVidplayerStream } from './vidplayer.js';
@@ -20,12 +21,24 @@ const PLAYER_ORIGIN = 'https://sf21.vidplayer.live';
 function streamFetchHeaders(url, req) {
     const headers = { 'User-Agent': STREAM_UA, Accept: '*/*' };
     const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
+    
+    // vidplayer embeds: use sf21.vidplayer.live as referer
     if (/vidplayer\.live|\/v4\/|\.m3u8/i.test(url) || /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(host)) {
         headers.Referer = PLAYER_REFERER;
         headers.Origin = PLAYER_ORIGIN;
-    } else {
-        headers.Referer = 'https://lk21.us/';
+        return headers;
     }
+    
+    // All other embeds:
+    // Use a plausible referer. For rebahin sourced use rebahin, else lk21
+    if (url.includes('rebahin')) {
+      headers.Referer = 'https://rebahin.uno/';
+      headers.Origin = 'https://rebahin.uno';
+    } else {
+      headers.Referer = 'https://lk21.lat/';
+      headers.Origin = 'https://lk21.lat';
+    }
+    
     if (req?.headers?.range) headers.Range = req.headers.range;
     return headers;
 }
@@ -59,9 +72,10 @@ function proxyEmbedUrl(url) {
     return `/watch/embed?u=${encodeB64Url(url)}`;
 }
 
-function clientEmbedUrl(url) {
+function clientEmbedUrl(url, source = '') {
     if (!url || !/^https?:\/\//i.test(url)) return '';
-    return proxyEmbedUrl(url);
+    // Always use a dedicated embed wrapper (iframe shell) — works for both LK21 + Rebahin embeds
+    return `/watch/embed?u=${encodeB64Url(url)}`;
 }
 
 function enrichFilmForClient(film) {
@@ -105,8 +119,10 @@ async function resolveFilmPlayback(film) {
 
     if (!candidates.length) return film;
 
-    for (const url of candidates) {
-        if (!isVidplayerUrl(url)) continue;
+    // Try EVERY vidplayer candidate until we get a working direct HLS
+    // This greatly improves success rate so users rarely need to manually pick servers
+    const vidCandidates = candidates.filter(isVidplayerUrl);
+    for (const url of vidCandidates) {
         const resolved = await tryResolveVidplayer(url);
         if (resolved?.streamUrl) {
             const rest = candidates.filter((u) => u !== url);
@@ -117,17 +133,18 @@ async function resolveFilmPlayback(film) {
                 videoUrl: resolved.streamUrl,
                 hls: true,
                 embedUrl: url,
-                embedFallbacks: [...nonVid, ...rest.filter((u) => isVidplayerUrl(u) && u !== url)].slice(0, 5)
+                embedFallbacks: [...nonVid, ...rest.filter((u) => isVidplayerUrl(u) && u !== url)].slice(0, 6)
             };
         }
     }
 
+    // If primary embed was vidplayer but failed to resolve, fall back to a non-vid one for embed player
     const nonVid = candidates.filter((u) => !isVidplayerUrl(u));
     if (nonVid.length && isVidplayerUrl(film.embedUrl)) {
         return {
             ...film,
             embedUrl: nonVid[0],
-            embedFallbacks: [...nonVid.slice(1), ...candidates.filter((u) => isVidplayerUrl(u))].slice(0, 5),
+            embedFallbacks: [...nonVid.slice(1), ...candidates.filter((u) => isVidplayerUrl(u))].slice(0, 6),
             videoUrl: ''
         };
     }
@@ -240,7 +257,8 @@ export function getWatchRoomState() {
 }
 
 async function loadFilmFromUrl(url, title = '') {
-    let film = withFilmKey(await getLk21Film(url, { title }));
+    // Use getFilmDetail which properly handles LK21 + Rebahin sources
+    let film = withFilmKey(await getFilmDetail(url, { title }));
     film = withFilmKey(await resolveFilmPlayback(film));
     if (!film.embedUrl && !film.videoUrl) {
         throw new Error('Player tidak ditemukan untuk film ini.');
@@ -380,6 +398,21 @@ export function mountWatchServer(app) {
             const page = Math.max(1, Number(req.query.page) || 1);
             const sort = String(req.query.sort || 'newest').toLowerCase() === 'oldest' ? 'oldest' : 'newest';
             const data = await browseLk21({ page, sort });
+
+            // On page 1 merge Rebahin results as second source
+            if (page === 1) {
+                const seen = new Set((data.results || []).map((r) => r.url));
+                try {
+                    const { fetchLatestLk21 } = await import('./lk21.js');
+                    // fetchLatestLk21 already merges Rebahin; use it directly on page 1
+                    const merged = await fetchLatestLk21(60);
+                    const extra = merged.filter((r) => !seen.has(r.url));
+                    data.results = [...(data.results || []), ...extra];
+                } catch (e) {
+                    console.log('latest merge skip:', e.message);
+                }
+            }
+
             res.json({ ok: true, ...data });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
@@ -516,42 +549,52 @@ export function mountWatchServer(app) {
         }
     });
 
+    // Embed player proxy — 302 redirect to unified iframe wrapper (LK21/Rebahin)
+    app.get('/watch/api/player', (req, res) => {
+        try {
+            const raw = req.query.u;
+            if (!raw) return res.status(400).send('URL kosong');
+            let target;
+            try { target = decodeB64Url(raw); } catch (_) { return res.status(400).send('URL tidak valid'); }
+            if (!/^https?:\/\//i.test(target)) return res.status(400).send('URL tidak valid');
+            // Unified embed wrapper
+            res.redirect(302, `/watch/embed?u=${encodeB64Url(target)}`);
+        } catch (e) {
+            console.log('[player] error:', e.message);
+            res.status(502).send('Gagal memuat player');
+        }
+    });
+
+    // Shared thin iframe wrapper for all external players (LK21 + Rebahin embeds)
+    function sendPlayerShell(res, targetUrl) {
+        const safe = String(targetUrl || '').replace(/"/g, '"').replace(/</g, '<');
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(`<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><meta name="referrer" content="no-referrer-when-downgrade"/><title>Player</title><style>*{margin:0;padding:0;box-sizing:border-box}html,body{height:100%;background:#000;overflow:hidden}#stage{position:relative;width:100%;height:100%;overflow:hidden;background:#000}#player-frame{position:absolute;left:0;top:0;width:100%;height:100%;border:0;display:block;background:#000}</style></head><body><div id="stage"><iframe id="player-frame" src="${safe}" referrerpolicy="no-referrer-when-downgrade" allowfullscreen allow="autoplay;encrypted-media;picture-in-picture;fullscreen;clipboard-write"></iframe></div></body></html>`);
+    }
+
     app.get('/watch/lk21', (req, res) => {
         const raw = req.query.u;
         if (!raw) return res.status(400).send('URL kosong');
         let target;
-        try {
-            target = decodeB64Url(raw);
-        } catch (_) {
-            return res.status(400).send('URL tidak valid');
-        }
-        if (!/^https?:\/\//i.test(target) || !/\/sinopsis\//i.test(target)) {
-            return res.status(400).send('URL LK21 tidak valid');
-        }
-        const safe = target.replace(/"/g, '&quot;').replace(/</g, '&lt;');
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-store');
-        res.send(`<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><meta name="referrer" content="no-referrer-when-downgrade"/><title>Player</title><style>*{margin:0;padding:0;box-sizing:border-box}html,body{height:100%;background:#000;overflow:hidden}#stage{position:relative;width:100%;height:100%;overflow:hidden;background:#000}#lk21-frame{position:absolute;left:0;width:100%;height:280%;top:-132%;border:0;display:block;background:#000;pointer-events:auto}@media(max-width:768px){#lk21-frame{height:310%;top:-138%}}</style></head><body><div id="stage"><iframe id="lk21-frame" src="${safe}" referrerpolicy="no-referrer-when-downgrade" allowfullscreen allow="autoplay;encrypted-media;picture-in-picture;fullscreen;clipboard-write"></iframe></div></body></html>`);
+        try { target = decodeB64Url(raw); } catch (_) { return res.status(400).send('URL tidak valid'); }
+        if (!/^https?:\/\//i.test(target)) return res.status(400).send('URL tidak valid');
+        sendPlayerShell(res, target);
     });
 
     app.get('/watch/embed', (req, res) => {
         const raw = req.query.u;
         if (!raw) return res.status(400).send('URL kosong');
         let target;
-        try {
-            target = decodeB64Url(raw);
-        } catch (_) {
-            return res.status(400).send('URL tidak valid');
-        }
+        try { target = decodeB64Url(raw); } catch (_) { return res.status(400).send('URL tidak valid'); }
         if (!/^https?:\/\//i.test(target)) return res.status(400).send('URL tidak valid');
-        const safe = target.replace(/"/g, '&quot;').replace(/</g, '&lt;');
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-store');
-        res.send(`<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><meta name="referrer" content="no-referrer-when-downgrade"/><title>Player</title><style>*{margin:0;padding:0}html,body{height:100%;background:#000;overflow:hidden}iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style></head><body><iframe src="${safe}" referrerpolicy="no-referrer-when-downgrade" allowfullscreen allow="autoplay;encrypted-media;picture-in-picture;fullscreen;clipboard-write"></iframe></body></html>`);
+        sendPlayerShell(res, target);
     });
 
+
+
     app.post('/watch/api/play', async (req, res) => {
-        const { sessionId, url, title, embedUrl, poster } = req.body || {};
+        const { sessionId, url, title, embedUrl, poster, source } = req.body || {};
         if (!sessionId || !room.viewers.has(sessionId)) {
             return res.status(401).json({ ok: false, error: 'Sesi habis — login ulang.' });
         }
@@ -565,17 +608,18 @@ export function mountWatchServer(app) {
                     videoUrl: req.body?.videoUrl || '',
                     poster: poster || '',
                     pageUrl: url || '',
-                    source: 'custom',
+                    source: source || 'custom',
                     embedFallbacks: req.body?.embedFallbacks || []
                 }));
             } else if (url) {
                 film = await loadFilmFromUrl(url, title);
+                if (source && !film.source) film.source = source;
             } else {
                 return res.status(400).json({ ok: false, error: 'URL film kosong.' });
             }
             room.film = film;
             if (!room.film.embedUrl && !room.film.videoUrl) {
-                throw new Error('Player LK21 tidak ditemukan untuk film ini.');
+                throw new Error('Player tidak ditemukan untuk film ini (LK21/Rebahin).');
             }
             setPlayback({ position: 0, playing: false, by: user });
             pushChat('📺 TV', `${user} memutar ${film.title}`);
@@ -634,14 +678,33 @@ export function mountWatchServer(app) {
 
     app.get('/watch', sendWatch);
     app.get('/watch/', sendWatch);
-    app.use('/watch', express.static(watchStaticDir, {
-        index: false,
-        redirect: false,
-        maxAge: '1h',
-        setHeaders(res, filePath) {
-            if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+    app.use('/watch', (req, res, next) => {
+        // Inject permissive CSP for ALL watch pages so iframe embeds work
+        const setWatchCsp = () => {
+            res.setHeader('Content-Security-Policy',
+                "default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; " +
+                "frame-src *; media-src *; connect-src *; img-src *; " +
+                "script-src * 'unsafe-inline' 'unsafe-eval'; style-src * 'unsafe-inline'; " +
+                "font-src *; worker-src *; child-src *;");
+            res.setHeader('X-Frame-Options', 'ALLOWALL');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+        };
+        if (req.path === '/' || req.path === '/index.html') {
+            setWatchCsp();
+            return res.sendFile(indexHtml);
         }
-    }));
+        // For static assets, also set CORS + CSP leniently
+        const setStaticHeaders = (filePath) => {
+            res.setHeader('Cache-Control', 'no-cache');
+            setWatchCsp();
+        };
+        express.static(watchStaticDir, {
+            index: false,
+            redirect: false,
+            maxAge: '1h',
+            setHeaders: setStaticHeaders
+        })(req, res, next);
+    });
 
     console.log(`\x1b[35m📺 Luxx Watch: ${getRadioPublicUrl()}/watch\x1b[0m`);
 }

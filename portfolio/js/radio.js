@@ -4,6 +4,8 @@
   const $ = (sel) => document.querySelector(sel);
   const API_NOW = '/radio/api/now';
   const API_PLAY = '/radio/api/play';
+  const API_PAUSE = '/radio/api/pause';
+  const API_RESUME = '/radio/api/resume';
   const API_LYRICS = '/radio/api/lyrics';
   const STREAM = '/radio/live.mp3';
 
@@ -56,6 +58,8 @@
   let streamLoadGen = 0;
   let lastAudioProgressAt = 0;
   let lastStreamTrackKey = null;
+  let lastPlaybackSeq = null;
+  let lastKnownServerPaused = null;
 
   let lyricsState = {
     trackKey: null,
@@ -72,13 +76,13 @@
 
   function trackKey(d) {
     if (!d?.playbackActive || !d?.current) return null;
-    return `${d.streamEpoch || 0}:${d.current.id}`;
+    return String(d.current.id);
   }
 
   function streamIdentityKey(d) {
     const t = displayTrack(d);
     if (!t) return null;
-    return `${d.streamEpoch || 0}:${t.id}`;
+    return String(t.id);
   }
 
   function setStatus(msg, isError) {
@@ -217,8 +221,8 @@
     return startPlayerPlayback();
   }
 
-  function seekToStart() {
-    try { player.currentTime = 0; } catch (_) { /* ignore */ }
+  function seekToPosition(sec = 0) {
+    try { player.currentTime = Math.max(0, sec); } catch (_) { /* ignore */ }
   }
 
   function prepareStream(d) {
@@ -231,23 +235,29 @@
     loadAttempt += 1;
     lastAudioProgressAt = 0;
     updatePlayBtn();
+    const seekSec = Math.max(0, d.playback?.positionSec || 0);
+    const serverPaused = Boolean(d.paused ?? d.playback?.paused);
 
     const url = `${STREAM}?epoch=${d.streamEpoch}&id=${d.current.id}&n=${loadAttempt}`;
     player.pause();
     player.removeAttribute('src');
     player.load();
 
-    const onCanPlay = () => {
+    const onCanPlay = async () => {
       if (gen !== streamLoadGen) return;
       player.removeEventListener('canplay', onCanPlay);
       player.removeEventListener('error', onErr);
       activeTrackKey = key;
       pendingTrackKey = null;
-      seekToStart();
-      if (playbackArmed && !userPaused) {
+      if (seekSec > 0) {
+        await waitForPlayerMetadata(seekSec > 600 ? 20000 : 12000);
+        seekToPosition(seekSec);
+      }
+      userPaused = serverPaused;
+      if (playbackArmed && !serverPaused) {
         startPlayerPlayback();
       } else {
-        updateProgressDisplay();
+        updateProgressUI(seekSec, d.playback?.durationSec || 0);
       }
       updatePlayBtn();
     };
@@ -307,15 +317,99 @@
   }
 
   function updateProgressDisplay() {
-    if (isPlayerAudible()) return;
-    const dur = lyricsState.playback.durationSec || 0;
-    updateProgressUI(0, dur);
+    const serverPaused = Boolean(lastNowData?.paused ?? lastNowData?.playback?.paused);
+    if (isPlayerAudible() && !serverPaused) return;
+    const pb = lastNowData?.playback || {};
+    const dur = pb.durationSec || lyricsState.playback.durationSec || 0;
+    const pos = pb.positionSec || 0;
+    updateProgressUI(pos, dur);
+  }
+
+  function syncServerPlayback(d) {
+    const pb = d.playback || {};
+    const serverPaused = Boolean(d.paused ?? pb.paused);
+    const serverPos = pb.positionSec || 0;
+    const wasPaused = lastKnownServerPaused;
+    lastKnownServerPaused = serverPaused;
+    userPaused = serverPaused;
+
+    if (pb.playbackSeq != null || d.playbackSeq != null) {
+      lastPlaybackSeq = pb.playbackSeq ?? d.playbackSeq;
+    }
+
+    updatePlayBtn();
+
+    if (!d.playbackActive) return;
+
+    updateProgressUI(serverPos, pb.durationSec || 0);
+
+    if (serverPaused) {
+      if (player.src && !player.paused) player.pause();
+      if (player.src) seekToPosition(serverPos);
+      return;
+    }
+
+    if (!playbackArmed) return;
+
+    if (!player.src) {
+      prepareStream(d);
+      return;
+    }
+
+    const resumedFromPause = wasPaused === true;
+    const drift = Math.abs((player.currentTime || 0) - serverPos);
+    if (resumedFromPause || player.paused || drift > 2) {
+      seekToPosition(serverPos);
+      startPlayerPlayback();
+    }
   }
 
   function formatTime(sec) {
     const s = Math.floor(sec || 0);
     const m = Math.floor(s / 60);
     return `${m}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  function parseDurationHint(track) {
+    if (!track) return 0;
+    if (track.durationSec > 0) return track.durationSec;
+    const raw = String(track.duration || '').trim();
+    if (!raw || raw === '—' || raw === '-') return 0;
+    if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+    const parts = raw.split(':').map((p) => parseInt(p, 10));
+    if (parts.some((n) => Number.isNaN(n))) return 0;
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    return 0;
+  }
+
+  function estimatePrepareWaitMs(d = {}) {
+    const head = d.playbackActive ? null : (d.upNext || d.queue?.[0]);
+    const dur = parseDurationHint(head) || 300;
+    return Math.min(1_800_000, Math.max(180_000, dur * 2500 + 120_000));
+  }
+
+  async function waitForPlayerMetadata(maxMs = 12000) {
+    if (!player) return false;
+    if (Number.isFinite(player.duration) && player.duration > 0) return true;
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const done = (ok) => {
+        player.removeEventListener('loadedmetadata', onMeta);
+        player.removeEventListener('durationchange', onMeta);
+        clearInterval(timer);
+        resolve(ok);
+      };
+      const onMeta = () => {
+        if (Number.isFinite(player.duration) && player.duration > 0) done(true);
+      };
+      player.addEventListener('loadedmetadata', onMeta);
+      player.addEventListener('durationchange', onMeta);
+      const timer = setInterval(() => {
+        if (Number.isFinite(player.duration) && player.duration > 0) done(true);
+        else if (Date.now() - started >= maxMs) done(false);
+      }, 200);
+    });
   }
 
   function lyricTrackKey(cur) {
@@ -333,13 +427,54 @@
     return Number(lyrics.trackId) === Number(cur.id);
   }
 
+  function isAutoAdvancePending(d) {
+    return Boolean(
+      playbackArmed
+      && !d.playbackActive
+      && (d.isPreparing || d.waitingPlay || (d.queueLength || 0) > 0)
+    );
+  }
+
+  async function followAutoAdvance(maxMs = null) {
+    if (!playbackArmed) return;
+    const waitMs = maxMs ?? Math.max(90000, estimatePrepareWaitMs(lastNowData));
+    const started = Date.now();
+    setStatus('⏭️ Lagu berikutnya — putar otomatis...', false);
+    while (Date.now() - started < waitMs) {
+      await new Promise((r) => setTimeout(r, 350));
+      await pollNow();
+      const d = lastNowData;
+      if (!d) continue;
+      const serverPaused = Boolean(d.paused ?? d.playback?.paused);
+      if (d.playbackActive && d.hasStream && !serverPaused) {
+        armLocalPlayback();
+        lastKnownServerPaused = false;
+        userPaused = false;
+        prepareStream(d);
+        return;
+      }
+      if (!d.isPreparing && !d.waitingPlay && !(d.queueLength || 0)) break;
+    }
+  }
+
   function onTrackIdentityChange(d) {
     const key = streamIdentityKey(d);
     if (!key || key === lastStreamTrackKey) return;
     lastStreamTrackKey = key;
-    disarmLocalPlayback();
+    activeTrackKey = null;
+    pendingTrackKey = null;
+    streamLoadGen += 1;
+    const serverPaused = Boolean(d.paused ?? d.playback?.paused);
+    if (d.playbackActive && d.hasStream && !serverPaused) {
+      if (!playbackArmed) armLocalPlayback();
+      prepareStream(d);
+    } else if (isAutoAdvancePending(d)) {
+      setStatus('⏳ Lagu berikutnya dimuat — putar otomatis setelah siap', false);
+    } else if (!d.playbackActive) {
+      disarmLocalPlayback();
+    }
     if (d.waitingPlay || d.upNext) {
-      setStatus('▶️ Lagu siap di antrian — klik Putar untuk mulai dari awal', false);
+      setStatus('⏳ Lagu sedang dimuat — audio menyala otomatis setelah siap', false);
     }
     burstLyricsPoll();
     prefetchQueueLyricsClient(d.queue);
@@ -550,14 +685,15 @@
       return;
     }
     btnPlay.disabled = false;
-    if (!playbackArmed) {
+    const serverPaused = Boolean(lastNowData?.paused ?? lastNowData?.playback?.paused);
+    const hasLive = Boolean(lastNowData?.playbackActive && lastNowData?.hasStream);
+    if (hasLive) {
+      btnPlay.innerHTML = serverPaused
+        ? '<span aria-hidden="true">▶</span> Lanjut'
+        : '<span aria-hidden="true">⏸</span> Jeda';
+    } else {
       btnPlay.innerHTML = '<span aria-hidden="true">▶</span> Putar';
-      updateRobotMood();
-      return;
     }
-    btnPlay.innerHTML = isPlayerPlaying()
-      ? '<span aria-hidden="true">⏸</span> Jeda'
-      : '<span aria-hidden="true">▶</span> Putar';
     updateRobotMood();
   }
 
@@ -575,12 +711,22 @@
       setStatus('⏸️ Dijeda — klik Putar untuk lanjut');
       return;
     }
-    if (d.waitingPlay && !playbackArmed) {
-      setStatus('▶️ Klik Putar — lagu belum dimulai (mulai dari awal)');
+    if (d.isPreparing) {
+      setStatus('⏳ Sedang mengunduh lagu...');
+      return;
+    }
+    if (d.paused || d.playback?.paused) {
+      const pos = d.playback?.elapsedLabel || '0:00';
+      setStatus(`⏸️ Dijeda @ ${pos} — sinkron admin/Discord`);
       return;
     }
     if (d.playbackActive && d.hasStream && !playbackArmed) {
-      setStatus('▶️ Klik Putar untuk lanjut audio');
+      const pos = d.playback?.elapsedLabel || '0:00';
+      setStatus(`▶️ Live @ ${pos} — klik Putar untuk dengar di browser ini`);
+      return;
+    }
+    if (d.waitingPlay && !playbackArmed) {
+      setStatus('⏳ Menunggu lagu siap...');
       return;
     }
     if (!disc?.enabled) {
@@ -650,7 +796,8 @@
   }
 
   function checkAudioHealth() {
-    if (!playbackArmed || userPaused) return;
+    if (!playbackArmed) return;
+    if (lastNowData?.paused || lastNowData?.playback?.paused || userPaused) return;
     if (!lastNowData?.current || !lastNowData.hasStream) return;
     if (needsStreamReload(lastNowData)) {
       prepareStream(lastNowData);
@@ -696,6 +843,7 @@
       lastNowData = d;
 
       syncPlaybackState(d);
+      syncServerPlayback(d);
       onTrackIdentityChange(d);
       renderDiscordStatus(d);
       renderQueue(d.queue || []);
@@ -705,7 +853,6 @@
       } catch (lyricErr) {
         console.warn('lyrics render:', lyricErr);
       }
-
       const queuePrefetchKey = (d.queue || []).map((t) => t.id).join(',');
       if (queuePrefetchKey && queuePrefetchKey !== lastQueueLyricsPrefetchKey) {
         lastQueueLyricsPrefetchKey = queuePrefetchKey;
@@ -714,7 +861,10 @@
 
       const hasQueue = (d.queueLength || 0) > 0 || d.waitingPlay || d.upNext;
       if (d.playbackActive && d.hasStream && d.current) {
-        if (playbackArmed && needsStreamReload(d)) {
+        if (!playbackArmed && userInteracted && !userPaused && !(d.paused ?? d.playback?.paused)) {
+          armLocalPlayback();
+          prepareStream(d);
+        } else if (playbackArmed && needsStreamReload(d)) {
           prepareStream(d);
         } else {
           updateProgressDisplay();
@@ -722,17 +872,20 @@
         btnSkip.disabled = false;
         btnStop.disabled = false;
         ensureTick();
-      } else if (d.isPreparing) {
+      } else if (d.isPreparing && !d.playbackActive) {
         streamLoadGen += 1;
         activeTrackKey = null;
         pendingTrackKey = null;
-        player.pause();
+        if (playbackArmed && player.src && !player.paused) player.pause();
         btnSkip.disabled = false;
         btnStop.disabled = false;
         ensureTick();
         updateProgressDisplay();
       } else if (hasQueue) {
-        if (activeTrackKey || pendingTrackKey) disarmLocalPlayback();
+        if (!playbackArmed && (activeTrackKey || pendingTrackKey)) disarmLocalPlayback();
+        if (isAutoAdvancePending(d)) {
+          setStatus('⏳ Menunggu lagu berikutnya — putar otomatis...', false);
+        }
         btnSkip.disabled = false;
         btnStop.disabled = false;
         ensureTick();
@@ -757,18 +910,21 @@
     }
   }
 
-  async function postAction(path) {
+  async function postAction(path, { keepListening = false } = {}) {
     markUserInteraction();
     btnSkip.disabled = true;
     btnStop.disabled = true;
     setStatus('Memproses...');
-    disarmLocalPlayback();
-    lastStreamTrackKey = null;
-    lastMetaKey = '';
-    lastQueueKey = '';
-    lyricsState.trackKey = null;
-    lyricsState.contentKey = null;
-    lyricsState.data = null;
+    const wasListening = playbackArmed;
+    if (!keepListening) {
+      disarmLocalPlayback();
+      lastStreamTrackKey = null;
+      lastMetaKey = '';
+      lastQueueKey = '';
+      lyricsState.trackKey = null;
+      lyricsState.contentKey = null;
+      lyricsState.data = null;
+    }
     player.pause();
     try {
       const r = await fetch(path, { method: 'POST', cache: 'no-store' });
@@ -776,12 +932,33 @@
       setStatus(d.message || (d.ok ? 'OK' : 'Gagal'), !d.ok);
       await pollNow();
       burstLyricsPoll();
+      if (wasListening || keepListening) {
+        armLocalPlayback();
+        lastKnownServerPaused = false;
+        userPaused = false;
+        const d = lastNowData;
+        const serverPaused = Boolean(d?.paused ?? d?.playback?.paused);
+        if (d?.playbackActive && d?.hasStream && !serverPaused) {
+          prepareStream(d);
+        } else if (d && (d.isPreparing || d.waitingPlay || (d.queueLength || 0) > 0)) {
+          void followAutoAdvance();
+        }
+      }
     } catch (e) {
       setStatus('Gagal menghubungi server', true);
     } finally {
       btnSkip.disabled = false;
       btnStop.disabled = false;
     }
+  }
+
+  async function postPlaybackAction(path) {
+    const r = await fetch(path, { method: 'POST', cache: 'no-store' });
+    const body = await r.json();
+    if (!body.ok && path !== API_PAUSE) {
+      throw new Error(body.message || 'Gagal');
+    }
+    return body;
   }
 
   async function requestServerPlay() {
@@ -791,11 +968,13 @@
       setStatus(body.message || 'Gagal memulai', true);
       return false;
     }
-    for (let i = 0; i < 180; i++) {
+    const maxWait = estimatePrepareWaitMs(lastNowData);
+    const maxIter = Math.ceil(maxWait / 400);
+    for (let i = 0; i < maxIter; i++) {
       await new Promise((res) => setTimeout(res, 400));
       await pollNow();
       if (lastNowData?.playbackActive && lastNowData?.hasStream) return true;
-      if (!lastNowData?.isPreparing && i > 10 && !lastNowData?.hasStream) break;
+      if (!lastNowData?.isPreparing && i > 15 && !lastNowData?.hasStream && !(lastNowData?.queueLength || 0)) break;
     }
     return Boolean(lastNowData?.playbackActive && lastNowData?.hasStream);
   }
@@ -812,22 +991,47 @@
       return;
     }
 
-    if (playbackArmed && isPlayerPlaying()) {
-      pausePlayerPlayback();
-      return;
-    }
-
-    if (playbackArmed && userPaused && player.src && lastNowData?.playbackActive) {
-      await resumePlayerPlayback();
-      return;
-    }
+    const serverPaused = Boolean(lastNowData?.paused ?? lastNowData?.playback?.paused);
+    const hasLive = Boolean(lastNowData?.playbackActive && lastNowData?.hasStream);
 
     playBusy = true;
     updatePlayBtn();
-    armLocalPlayback();
-    setStatus('⏳ Mengunduh & memuat lagu dari awal...', false);
 
     try {
+      if (hasLive && !serverPaused) {
+        await postPlaybackAction(API_PAUSE);
+        lastKnownServerPaused = true;
+        userPaused = true;
+        if (playbackArmed) pausePlayerPlayback();
+        await pollNow();
+        setStatus('⏸️ Dijeda — admin & Discord ikut', false);
+        return;
+      }
+
+      if (hasLive && serverPaused) {
+        const body = await postPlaybackAction(API_RESUME);
+        lastKnownServerPaused = false;
+        userPaused = false;
+        armLocalPlayback();
+        if (body.playback) lastNowData = { ...lastNowData, playback: body.playback, paused: false };
+        setStatus('▶️ Lanjut — sinkron admin & Discord', false);
+        prepareStream(lastNowData);
+        await pollNow();
+        return;
+      }
+
+      armLocalPlayback();
+      if (lastNowData?.playbackActive && lastNowData?.hasStream) {
+        setStatus('🔊 Menyambung ke stream radio...', false);
+        prepareStream(lastNowData);
+        return;
+      }
+      if (lastNowData?.isPreparing && !lastNowData?.playbackActive) {
+        setStatus('⏳ Mengunduh lagu...', false);
+        void followAutoAdvance();
+        return;
+      }
+      setStatus('⏳ Memulai pemutaran...', false);
       const ok = await requestServerPlay();
       if (!ok) {
         disarmLocalPlayback();
@@ -835,13 +1039,15 @@
         return;
       }
       prepareStream(lastNowData);
+    } catch (e) {
+      setStatus(e.message || 'Gagal', true);
     } finally {
       playBusy = false;
       updatePlayBtn();
     }
   });
 
-  btnSkip?.addEventListener('click', () => postAction('/radio/api/skip'));
+  btnSkip?.addEventListener('click', () => postAction('/radio/api/skip', { keepListening: true }));
   btnStop?.addEventListener('click', () => {
     if (!confirm('Hentikan radio dan kosongkan antrian?')) return;
     postAction('/radio/api/stop');
@@ -865,10 +1071,8 @@
     updatePlayBtn();
   });
   player?.addEventListener('ended', () => {
-    disarmLocalPlayback();
-    lastStreamTrackKey = null;
-    setStatus('▶️ Lagu selesai — klik Putar untuk lagu berikutnya', false);
-    pollNow();
+    if (playbackArmed) void followAutoAdvance();
+    else void pollNow();
   });
   player?.addEventListener('timeupdate', () => {
     if (!playbackArmed) return;
@@ -887,7 +1091,7 @@
 
   pollNow();
   pollLyrics();
-  pollTimer = setInterval(pollNow, 2000);
+  pollTimer = setInterval(pollNow, 800);
   setLyricsPollInterval(true);
 
   window.addEventListener('pageshow', (e) => {

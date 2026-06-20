@@ -5,22 +5,27 @@ Bot WhatsApp multi-fitur (AI, musik, radio, stiker, sastra, gambar HD) oleh Doxx
 ## Struktur proyek
 
 ```
-├── index.js              # Entry point
+├── index.js              # Entry point HTTP + boot WA/radio
 ├── menu.js               # Menu !menu
 ├── ecosystem.config.cjs  # PM2 (lokal & VPS/Zelpstore)
 ├── src/
 │   ├── luxx-bot.js       # Koneksi Baileys
-│   ├── handlers/messages.js
-│   ├── commands/         # Perintah (!buat, !play, dll.)
-│   └── services/         # AI, radio, media, admin API
-├── admin/                # Panel admin (bisa /admin di server)
+│   ├── handlers/         # messages, group-events
+│   ├── commands/         # Perintah (!buat, !play, !watch, dll.)
+│   ├── services/         # AI, radio, media, admin API, LK21
+│   └── utils/            # session, cookies, ffmpeg, dll.
+├── admin/                # Panel admin web
+├── watch/                # Web player film (!watch / LK21)
 ├── portfolio/            # Portofolio + radio web
-├── scripts/
-│   ├── zelpstore-deploy.sh
-│   └── luxx-ctl.sh       # status | restart | update
+├── data/                 # changelog, group-settings (runtime)
+├── config/               # cloudflared example (credentials lokal)
+├── scripts/              # deploy, PM2, build-pages (bukan probe/test)
 ├── session/              # Jangan commit — login WA
+├── temp/                 # Cache runtime (auto, di .gitignore)
 └── .env.example          # Template env (copy → .env)
 ```
+
+**Bersihkan clutter lokal:** `.\scripts\cleanup-repo.ps1` · **Commit cleanup:** `npm run cleanup:commit`
 
 ## Setup lokal (PC + PM2)
 

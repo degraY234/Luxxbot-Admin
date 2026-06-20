@@ -11,6 +11,7 @@ import {
     clearRadioQueue,
     getRadioListenUrl
 } from './radio-server.js';
+import { setLastTextChannel } from './discord-radio.js';
 import { youtubeThumbnail } from '../utils/youtube-meta.js';
 import { fetchLyrics } from './lyrics.js';
 
@@ -205,21 +206,30 @@ export async function handleDiscordMusicInteraction(interaction, voice) {
     }
 
     if (commandName === 'join') {
+        if (interaction.channel?.isTextBased?.()) {
+            setLastTextChannel(interaction.channel);
+        }
         await interaction.deferReply();
         let member = interaction.member;
         if (interaction.guild) {
             member = await interaction.guild.members.fetch(interaction.user.id).catch(() => member);
         }
-        const result = await voice.joinMemberVoice(member, interaction.guild);
+        // Fix 1: use joinAndPlay — waits for VoiceConnectionStatus.Ready then plays immediately
+        const result = await voice.joinAndPlay(member, interaction.guild);
         if (!result.ok) {
             await interaction.editReply(`❌ ${result.message}`);
             return true;
         }
+        const playingHint = radio.current?.title
+            ? `▶️ Memutar: **${radio.current.title}** (sinkron web/WA)`
+            : radio.queue.length
+                ? `⏳ Memuat: **${radio.queue[0].title}**...`
+                : 'Antrian kosong — tambah via `/play` atau WA `!play`';
         await interaction.editReply(
-            `🎧 Masuk **${result.channelName}** — lagu dari antrian diputar di sini.\n` +
+            `🎧 Masuk **${result.channelName}**\n${playingHint}\n\n` +
             'Perintah: `/play` `/queue` `/lirik` `/leave` `/stop` · WA: `!play` `!nowplaying`'
         );
-        voice.playCurrentMp3();
+        console.log(`🎧 Discord /join: radio paused=${radio.paused} current=${radio.current?.title || '—'}`);
         return true;
     }
 

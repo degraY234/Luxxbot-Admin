@@ -14,7 +14,7 @@ async function getLinkBody() {
         return `▶️ ${radio.current.title} — ${radio.current.author}`;
     }
     if (radio.queue.length) {
-        return `⏸️ ${radio.queue[0].title} — klik Putar di web`;
+        return `🎵 ${radio.queue[0].title} — ${radio.queue[0].author || 'Unknown'}`;
     }
     return 'Ketuk link untuk buka player & dengar musik';
 }

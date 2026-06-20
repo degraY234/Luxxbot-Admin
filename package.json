@@ -12,6 +12,8 @@
     "pm2:start": "pm2 start ecosystem.config.cjs --update-env",
     "pm2:restart": "pm2 restart luxx --update-env",
     "pm2:save": "pm2 save",
+    "pm2:unsave": "pm2 stop luxx & pm2 stop luxx-tunnel & pm2 save",
+    "pm2:disable-startup": "powershell -ExecutionPolicy Bypass -File scripts\\pm2-disable-startup.ps1",
     "pm2:status": "pm2 status luxx",
     "watch:setup": "node scripts/setup-public-watch.mjs",
     "tunnel:start": "pm2 start ecosystem.config.cjs --only luxx-tunnel --update-env",
@@ -22,7 +24,8 @@
     "build:pages": "node scripts/build-pages.mjs",
     "export:portfolio": "node scripts/export-portfolio-repo.mjs",
     "sync:portfolio": "node scripts/sync-portfolio-repo.mjs",
-    "portfolio:domain": "node scripts/enable-portfolio-domain.mjs"
+    "portfolio:domain": "node scripts/enable-portfolio-domain.mjs",
+    "cleanup:commit": "node scripts/commit-cleanup.mjs"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",

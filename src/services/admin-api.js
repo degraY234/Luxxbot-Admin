@@ -4,14 +4,23 @@ import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import os from 'os';
 import express from 'express';
+import ytSearch from 'yt-search';
 import {
     radio,
     skipRadioTrack,
     clearRadioQueue,
+    addTrackToRadio,
+    handleRadioPlayRequest,
+    pauseRadioPlayback,
+    resumeRadioPlayback,
     getRadioListenUrl,
     getRadioPlayback,
-    getRadioStreamEpoch
+    getRadioPlaybackSeq,
+    getRadioStreamEpoch,
+    isRadioPaused
 } from './radio-server.js';
+import { extractYoutubeVideoId, youtubeThumbnail } from '../utils/youtube-meta.js';
+import { getYtDlpTitle } from '../utils/ytdlp-download.js';
 import {
     getWatchRoomState,
     adminWatchSkip,
@@ -101,6 +110,8 @@ function buildStatusPayload() {
             listenUrl: getRadioListenUrl(),
             streamPath: '/radio/live.mp3',
             playback: getRadioPlayback(),
+            paused: isRadioPaused(),
+            playbackSeq: getRadioPlaybackSeq(),
             streamEpoch: getRadioStreamEpoch(),
             lyrics: null
         },
@@ -165,17 +176,133 @@ export function mountAdminApi(app) {
 
     app.post('/admin/api/skip', async (req, res) => {
         const result = await skipRadioTrack();
+        const nextTitle = radio.queue[0]?.title;
         res.json({
             ok: result.ok,
-            message: result.message,
-            streamEpoch: result.streamEpoch ?? getRadioStreamEpoch(),
-            queueLength: result.queueLength ?? radio.queue.length
+            message: nextTitle
+                ? `⏭️ Skip · berikutnya: ${nextTitle}`
+                : result.message,
+            streamEpoch: getRadioStreamEpoch(),
+            queueLength: radio.queue.length,
+            isPreparing: radio.isPreparing
+        });
+    });
+
+    app.post('/admin/api/play', async (req, res) => {
+        const result = await handleRadioPlayRequest();
+        res.json({
+            ...result,
+            streamEpoch: getRadioStreamEpoch(),
+            queueLength: radio.queue.length,
+            isPreparing: radio.isPreparing,
+            paused: isRadioPaused(),
+            playback: getRadioPlayback()
+        });
+    });
+
+    app.post('/admin/api/pause', (req, res) => {
+        const result = pauseRadioPlayback();
+        res.json({
+            ...result,
+            queueLength: radio.queue.length,
+            playback: getRadioPlayback()
+        });
+    });
+
+    app.post('/admin/api/resume', (req, res) => {
+        const result = resumeRadioPlayback();
+        res.json({
+            ...result,
+            queueLength: radio.queue.length,
+            hasStream: Boolean(radio.current),
+            playback: getRadioPlayback()
         });
     });
 
     app.post('/admin/api/clear', (req, res) => {
         clearRadioQueue();
         res.json({ ok: true, message: 'Antrian dikosongkan.', streamEpoch: getRadioStreamEpoch() });
+    });
+
+    app.get('/admin/api/search', async (req, res) => {
+        const q = String(req.query.q || '').trim();
+        if (!q) {
+            return res.status(400).json({ ok: false, error: 'Ketik judul lagu atau paste link YouTube.' });
+        }
+
+        try {
+            const directId = extractYoutubeVideoId(q);
+            if (directId) {
+                const url = q.startsWith('http') ? q : `https://www.youtube.com/watch?v=${directId}`;
+                const title = await getYtDlpTitle(url).catch(() => 'YouTube');
+                return res.json({
+                    ok: true,
+                    query: q,
+                    results: [{
+                        title,
+                        url,
+                        videoId: directId,
+                        author: 'YouTube',
+                        duration: '—',
+                        seconds: 0,
+                        thumbnail: youtubeThumbnail(url, directId)
+                    }]
+                });
+            }
+
+            const search = await ytSearch(q);
+            const results = search.videos.slice(0, 8).map((v) => ({
+                title: v.title,
+                url: v.url,
+                videoId: v.videoId,
+                author: v.author?.name || v.author || 'Unknown',
+                duration: v.timestamp,
+                seconds: v.seconds,
+                thumbnail: v.image || youtubeThumbnail(v.url, v.videoId)
+            }));
+
+            res.json({ ok: true, query: q, results });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message || 'Pencarian gagal' });
+        }
+    });
+
+    app.post('/admin/api/queue/add', async (req, res) => {
+        const body = req.body || {};
+        const url = String(body.url || '').trim();
+        if (!url) {
+            return res.status(400).json({ ok: false, error: 'URL lagu wajib diisi.' });
+        }
+
+        try {
+            const entry = await addTrackToRadio({
+                title: body.title || 'Unknown',
+                url,
+                videoId: body.videoId,
+                thumbnail: body.thumbnail,
+                author: body.author,
+                seconds: body.seconds,
+                duration: body.duration
+            }, 'Admin Panel');
+
+            let playResult = null;
+            if (body.playNow) {
+                playResult = await handleRadioPlayRequest();
+            }
+
+            res.json({
+                ok: true,
+                message: body.playNow
+                    ? `"${entry.title}" masuk antrian & diputar.`
+                    : `"${entry.title}" masuk antrian radio.`,
+                track: entry,
+                play: playResult,
+                streamEpoch: getRadioStreamEpoch(),
+                queueLength: radio.queue.length
+            });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message || 'Gagal menambah lagu' });
+        }
     });
 
     app.post('/admin/api/watch/skip', async (req, res) => {

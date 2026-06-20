@@ -1,20 +1,19 @@
 {
   "version": "3.1.0",
-  "updatedAt": "2026-06-09",
-  "gitHead": "fda74f99",
+  "updatedAt": "2026-06-20",
+  "gitHead": "9c3411f7",
   "highlights": [
-    "GitHub + Zelpstore deploy — PM2 sama seperti lokal, luxx-ctl update",
+    "dark cyber theme + animated robot logo with moving eyes",
+    "sync admin ke branch main GitHub Pages, perbaiki workflow gagal",
+    "$(cat <<'EOF'",
+    "siapkan GitHub dan Zelpstore PM2 sama seperti lokal",
     "export cookies supports -Local PM2 and reads .env token",
     "stronger session snapshot backup and reconnect watchdog",
     "auto-detect Railway origin, login cukup token saja",
     "handle Chrome DPAPI cookie error, add upload-only path",
     "clearer youtube cookie export errors when browser is open",
     "YouTube cookies on persist volume + WA session backup across redeploy",
-    "improve session persist diagnostics and pair reconnect",
-    "restore playback on Railway, admin, and Discord",
-    "startup ringan + session volume + perintah aktif setelah WA online",
-    "satu jalur bot stabil — semua perintah aktif seperti PM2",
-    "!status — cek kesehatan bot, radio & Discord",
-    "!help <cmd> — panduan perintah"
+    "GitHub + Zelpstore deploy — PM2 sama seperti lokal, luxx-ctl update",
+    "improve session persist diagnostics and pair reconnect"
   ]
 }
