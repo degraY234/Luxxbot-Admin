@@ -44,8 +44,10 @@ export async function handleDiscordCommand({ sock, from, msg }) {
     }
 
     await sock.sendMessage(from, { text: block }, { quoted: msg });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }
 
 export async function handleNowPlayingCommand({ sock, from, msg }) {
     await sock.sendMessage(from, { text: getNowPlayingText() }, { quoted: msg });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }

@@ -60,7 +60,9 @@ export async function handleSastraCommand({ sock, from, msg, args }) {
     const lower = raw.toLowerCase();
 
     if (!raw || lower === 'help' || lower === 'bantuan') {
-        return sock.sendMessage(from, { text: getSastraHelpText() }, { quoted: msg });
+        await sock.sendMessage(from, { text: getSastraHelpText() }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
+        return;
     }
 
     if (lower.startsWith('pilih ')) {
@@ -68,9 +70,11 @@ export async function handleSastraCommand({ sock, from, msg, args }) {
         const session = getSastraSession(from) || { topic: 'cinta' };
         const region = findSastraRegion(pick);
         if (!region) {
-            return sock.sendMessage(from, {
+            await sock.sendMessage(from, {
                 text: '⚠️ Negara tidak dikenal. Contoh: `!sastra pilih indonesia` atau balas angka 1–12.'
             }, { quoted: msg });
+            await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
+            return;
         }
         clearSession(from);
         await sock.sendMessage(from, {
@@ -82,6 +86,7 @@ export async function handleSastraCommand({ sock, from, msg, args }) {
         } catch (e) {
             await sock.sendMessage(from, { text: `❌ ${e.message}` }, { quoted: msg });
         }
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
         return;
     }
 
@@ -90,4 +95,5 @@ export async function handleSastraCommand({ sock, from, msg, args }) {
     await sock.sendMessage(from, {
         text: buildSastraPickerText(topic)
     }, { quoted: msg });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }

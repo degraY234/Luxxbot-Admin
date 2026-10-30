@@ -10,7 +10,9 @@ export async function handleHelpCommand({ sock, from, msg, args }) {
             `Contoh: \`!help dl\` · \`!help play\`\n\n` +
             listAllCommandsBrief();
         return sock.sendMessage(from, { text }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     }
     const text = getCommandHelpText(sub);
     await sock.sendMessage(from, { text }, { quoted: msg });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }

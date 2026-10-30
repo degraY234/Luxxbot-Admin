@@ -1,7 +1,8 @@
-import { spawn } from 'child_process';
+import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { resolveFfmpegPath } from './ffmpeg-path.js';
+import { runYtDlpInWorker } from './ytdlp-worker.js';
 import { ensureWaCompatibleMp4 } from './wa-video.js';
 import {
     hasYoutubeCookies,
@@ -21,27 +22,85 @@ const COOKIE_BROWSERS = (process.env.YTDLP_COOKIES_BROWSER || 'chrome,edge,firef
 
 const YTDLP_TIMEOUT_MS = Number(process.env.YTDLP_TIMEOUT_MS || 240_000);
 
-function runYtDlp(args, label = 'yt-dlp', timeoutMs = YTDLP_TIMEOUT_MS) {
-    return new Promise((resolve, reject) => {
-        const proc = spawn('yt-dlp', args, { windowsHide: true });
-        let stderr = '';
-        let stdout = '';
-        const timer = setTimeout(() => {
-            try { proc.kill('SIGKILL'); } catch { /* ignore */ }
-            reject(new Error(`${label}: timeout ${Math.round(timeoutMs / 1000)}s`));
-        }, timeoutMs);
-        proc.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
-        proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-        proc.on('error', (err) => {
-            clearTimeout(timer);
-            reject(new Error(`${label}: ${err.message}`));
-        });
-        proc.on('close', (code) => {
-            clearTimeout(timer);
-            if (code === 0) return resolve(stdout.trim() || stderr.trim());
-            reject(new Error((stderr || stdout).trim().slice(-500) || `${label} exit ${code}`));
-        });
-    });
+let cachedYtDlp = null;
+
+/** Resolve yt-dlp binary — Windows sering tidak ada di PATH meski sudah terinstall. */
+export function resolveYtDlpCommand() {
+    if (cachedYtDlp) return cachedYtDlp;
+
+    const envPath = process.env.YTDLP_PATH?.trim();
+    if (envPath && fs.existsSync(envPath)) {
+        cachedYtDlp = { bin: envPath, prefix: [], label: envPath };
+        return cachedYtDlp;
+    }
+
+    const winCandidates = [
+        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'yt-dlp', 'yt-dlp.exe'),
+        path.join(process.env.USERPROFILE || '', 'AppData', 'Local', 'Microsoft', 'WinGet', 'Links', 'yt-dlp.exe'),
+        'C:\\Program Files\\yt-dlp\\yt-dlp.exe',
+        'C:\\yt-dlp\\yt-dlp.exe'
+    ];
+    for (const p of winCandidates) {
+        if (p && fs.existsSync(p)) {
+            cachedYtDlp = { bin: p, prefix: [], label: p };
+            return cachedYtDlp;
+        }
+    }
+
+    try {
+        const cmd = process.platform === 'win32' ? 'where yt-dlp' : 'which yt-dlp';
+        const out = execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        const first = out.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
+        if (first && fs.existsSync(first)) {
+            cachedYtDlp = { bin: first, prefix: [], label: first };
+            return cachedYtDlp;
+        }
+    } catch { /* lanjut fallback */ }
+
+    if (process.platform === 'win32') {
+        for (const py of ['py', 'python', 'python3']) {
+            try {
+                execSync(`${py} -m yt_dlp --version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+                cachedYtDlp = { bin: py, prefix: ['-m', 'yt_dlp'], label: `${py} -m yt_dlp` };
+                return cachedYtDlp;
+            } catch { /* coba python berikutnya */ }
+        }
+    }
+
+    cachedYtDlp = { bin: 'yt-dlp', prefix: [], label: 'yt-dlp' };
+    return cachedYtDlp;
+}
+
+export function checkYtDlpAvailable() {
+    const cmd = resolveYtDlpCommand();
+    try {
+        execSync(
+            [cmd.bin, ...cmd.prefix, '--version'].map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' '),
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: true }
+        );
+        return { ok: true, path: cmd.label };
+    } catch (e) {
+        return {
+            ok: false,
+            path: cmd.label,
+            hint: 'Install: winget install yt-dlp  ATAU  pip install yt-dlp  lalu set YTDLP_PATH di .env'
+        };
+    }
+}
+
+let activeAbortableProc = null;
+
+/** Hentikan unduhan radio yang masih jalan (skip / ganti lagu). */
+export function abortActiveYtDlpDownload() {
+    if (!activeAbortableProc) return;
+    try { activeAbortableProc.kill('SIGKILL'); } catch { /* ignore */ }
+    activeAbortableProc = null;
+}
+
+function runYtDlp(args, label = 'yt-dlp', timeoutMs = YTDLP_TIMEOUT_MS, { abortable = false } = {}) {
+    const cmd = resolveYtDlpCommand();
+    const spawnArgs = [...cmd.prefix, ...args];
+    return runYtDlpInWorker(cmd.bin, spawnArgs, timeoutMs, false);
 }
 
 function resolveOutputFile(basePath, extensions) {
@@ -99,6 +158,13 @@ const YT_CLIENT_FALLBACKS = [
     ['--extractor-args', 'youtube:player_client=mweb,web']
 ];
 
+/** Hanya audio — hindari unduh video penuh yang bikin file ratusan MB & macet di player */
+const YT_AUDIO_FORMAT = 'ba/b/bestaudio[ext=m4a]/bestaudio/best';
+
+function radioMaxDurationSec() {
+    return Number(process.env.RADIO_MAX_DURATION_SEC || 6000);
+}
+
 function isBotBlockError(msg = '') {
     return /sign in to confirm|not a bot|cookies-from-browser|confirm you.?re not/i.test(msg);
 }
@@ -107,7 +173,7 @@ function buildYoutubeBotHint() {
     return 'YouTube menolak tanpa login — coba link lain atau export cookies (opsional): scripts/export-youtube-cookies.ps1';
 }
 
-async function runYtDlpWithFallback(url, buildArgsList) {
+async function runYtDlpWithFallback(url, buildArgsList, runOpts = {}) {
     const list = Array.isArray(buildArgsList) ? buildArgsList : [buildArgsList];
     let lastErr;
     let sawBotBlock = false;
@@ -138,14 +204,14 @@ async function runYtDlpWithFallback(url, buildArgsList) {
                 continue;
             }
             try {
-                return await runYtDlp(args, label);
+                return await runYtDlp(args, label, YTDLP_TIMEOUT_MS, runOpts);
             } catch (e) {
                 lastErr = e;
                 const msg = e.message || '';
                 if (isBotBlockError(msg)) sawBotBlock = true;
                 console.error(`yt-dlp ${label} gagal:`, msg.slice(0, 200));
-                const retryable = /instagram|login|cookie|empty media|sign in|not a bot|could not copy/i.test(msg);
-                if (!retryable && label === 'default') break;
+                const retryable = /instagram|login|cookie|empty media|sign in|not a bot|could not copy|format is not available|403|forbidden|416|timeout/i.test(msg);
+                if (!retryable) break;
             }
         }
     }
@@ -160,7 +226,7 @@ async function runYtDlpWithFallback(url, buildArgsList) {
 /**
  * Download audio as MP3 from supported URL (YouTube, IG, TikTok, dll.)
  */
-export async function downloadAudioToMp3(url, outputPath) {
+export async function downloadAudioToMp3(url, outputPath, { abortable = false } = {}) {
     const dir = path.dirname(outputPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const base = path.join(dir, path.basename(outputPath, '.mp3'));
@@ -170,18 +236,25 @@ export async function downloadAudioToMp3(url, outputPath) {
         if (fs.existsSync(f)) try { fs.unlinkSync(f); } catch (_) {}
     }
 
-    const buildAudioArgs = (extra = []) => (targetUrl, youtubeCookies = false) => [
-        '-x', '--audio-format', 'mp3', '--audio-quality', '0',
-        ...commonFlags(template, { youtubeCookies }),
-        ...extra,
-        targetUrl
-    ];
+    const maxDur = radioMaxDurationSec();
+    const buildAudioArgs = (extra = []) => (targetUrl, youtubeCookies = false) => {
+        const flags = [
+            '-f', YT_AUDIO_FORMAT,
+            '-x', '--audio-format', 'mp3', '--audio-quality', '5',
+            '--no-keep-video',
+            '--match-filter', `duration < ${maxDur + 120}`,
+            ...commonFlags(template, { youtubeCookies }),
+            ...extra,
+            targetUrl
+        ];
+        return flags;
+    };
 
     const builders = isYoutubeUrl(url)
         ? YT_CLIENT_FALLBACKS.map((extra) => buildAudioArgs(extra))
         : [buildAudioArgs()];
 
-    await runYtDlpWithFallback(url, builders);
+    await runYtDlpWithFallback(url, builders, { abortable });
 
     const file = resolveOutputFile(base, ['mp3', 'm4a', 'opus', 'webm']);
     if (!file) throw new Error('File MP3 tidak ditemukan setelah unduhan');
@@ -259,8 +332,8 @@ async function downloadVideoRaw(url, outputPath, maxHeight = 1080) {
     return outputPath;
 }
 
-export async function downloadYoutubeToMp3(url, outputPath) {
-    return downloadAudioToMp3(url, outputPath);
+export async function downloadYoutubeToMp3(url, outputPath, opts = {}) {
+    return downloadAudioToMp3(url, outputPath, opts);
 }
 
 /** Ambil lirik dari subtitle YouTube (auto/manual) via yt-dlp */

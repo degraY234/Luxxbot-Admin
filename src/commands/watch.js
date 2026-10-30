@@ -81,6 +81,7 @@ export async function handleWatchCommand({ sock, from, msg }) {
             description: 'Katalog LK21 + Rebahin · Chat live · Voice',
             quoted: msg
         });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     } catch (e) {
         console.error('WATCH ERROR:', e?.message || e);
         // Fallback: kirim link dari env langsung tanpa probe
@@ -95,5 +96,6 @@ export async function handleWatchCommand({ sock, from, msg }) {
                 text: '❌ Gagal ambil link watch. Pastikan bot & tunnel berjalan, lalu coba lagi.'
             }, { quoted: msg });
         }
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     }
 }

@@ -49,4 +49,5 @@ export async function handleLaporCommand({ sock, from, msg, args, sender, isGrou
             ? `✅ *Laporan terkirim!*\n\nTerima kasih sudah membantu LuxxBot jadi lebih baik 🌸\n_Owner akan cek secepatnya._`
             : `⚠️ Laporan tersimpan tapi gagal diteruskan ke owner.\nCoba hubungi @6282384961407 langsung.`
     }, { quoted: msg });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }

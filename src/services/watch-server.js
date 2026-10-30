@@ -88,12 +88,13 @@ function enrichFilmForClient(film) {
         out.playVideoUrl = `/watch/api/stream?u=${encodeB64Url(out.videoUrl)}`;
     }
     if (out.embedUrl) {
-        out.playEmbedUrl = clientEmbedUrl(out.embedUrl);
-        out.playEmbedProxyUrl = out.playEmbedUrl;
+        // Langsung URL asli — hindari iframe ganda (/watch/embed) yang bikin open/close berulang
+        out.playEmbedUrl = out.embedUrl;
+        out.playEmbedProxyUrl = clientEmbedUrl(out.embedUrl);
     }
     if (out.embedFallbacks?.length) {
         const cleaned = cleanEmbedFallbacks(out.embedUrl, out.embedFallbacks);
-        out.playEmbedFallbacks = cleaned.map((u) => clientEmbedUrl(u)).filter(Boolean);
+        out.playEmbedFallbacks = cleaned.slice(0, 1);
     }
     return out;
 }
@@ -103,14 +104,48 @@ async function tryResolveVidplayer(embedUrl) {
         return await resolveVidplayerStream(embedUrl);
     } catch (e) {
         const status = e.response?.status;
-        if (status === 429) console.log('vidplayer rate limited — pakai embed');
+        if (status === 429) console.log('vidplayer rate limited — coba server lain');
         else console.log('vidplayer resolve skip:', e.message);
         return null;
     }
 }
 
+/** Cek apakah URL stream benar-benar bisa diakses sebelum dikirim ke client */
+async function probeStreamUrl(url) {
+    if (!url || !/^https?:\/\//i.test(url)) return false;
+    try {
+        const { status, data } = await axios.get(url, {
+            httpsAgent: streamAgent,
+            headers: streamFetchHeaders(url),
+            timeout: 14_000,
+            maxRedirects: 5,
+            validateStatus: (s) => s >= 200 && s < 400,
+            responseType: 'text',
+            maxContentLength: 12_000
+        });
+        if (status >= 400) return false;
+        const body = String(data || '').slice(0, 4096);
+        return /#EXTM3U|\.m3u8|\.mp4|\.ts\b/i.test(body) || body.length > 80;
+    } catch {
+        return false;
+    }
+}
+
+function filmHasDirectStream(film) {
+    return Boolean(film?.videoUrl || film?.hls);
+}
+
 async function resolveFilmPlayback(film) {
-    if (!film || film.videoUrl) return film;
+    if (!film) return film;
+
+    if (film.videoUrl) {
+        if (film.hls) {
+            const ok = await probeStreamUrl(film.videoUrl);
+            if (ok) return film;
+            return { ...film, videoUrl: '', hls: false };
+        }
+        return film;
+    }
 
     const candidates = [
         film.embedUrl,
@@ -119,32 +154,43 @@ async function resolveFilmPlayback(film) {
 
     if (!candidates.length) return film;
 
-    // Try EVERY vidplayer candidate until we get a working direct HLS
-    // This greatly improves success rate so users rarely need to manually pick servers
-    const vidCandidates = candidates.filter(isVidplayerUrl);
-    for (const url of vidCandidates) {
+    // Coba semua server vidplayer (biasanya 3 tab LK21) — pilih yang stream-nya hidup
+    const vidCandidates = [...new Set(candidates.filter(isVidplayerUrl))].slice(0, 3);
+    for (let i = 0; i < vidCandidates.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 400));
+        const url = vidCandidates[i];
         const resolved = await tryResolveVidplayer(url);
-        if (resolved?.streamUrl) {
-            const rest = candidates.filter((u) => u !== url);
-            const nonVid = rest.filter((u) => !isVidplayerUrl(u));
-            return {
-                ...film,
-                title: film.title || resolved.title || film.title,
-                videoUrl: resolved.streamUrl,
-                hls: true,
-                embedUrl: url,
-                embedFallbacks: [...nonVid, ...rest.filter((u) => isVidplayerUrl(u) && u !== url)].slice(0, 6)
-            };
+        if (!resolved?.streamUrl) continue;
+        const ok = await probeStreamUrl(resolved.streamUrl);
+        if (!ok) {
+            console.log(`📺 Watch: stream server ${i + 1} tidak responsif — coba berikutnya`);
+            continue;
         }
-    }
-
-    // If primary embed was vidplayer but failed to resolve, fall back to a non-vid one for embed player
-    const nonVid = candidates.filter((u) => !isVidplayerUrl(u));
-    if (nonVid.length && isVidplayerUrl(film.embedUrl)) {
+        const rest = candidates.filter((u) => u !== url);
+        const nonVid = rest.filter((u) => !isVidplayerUrl(u));
+        console.log(`📺 Watch: stream langsung dari server ${i + 1} — ${film.title || resolved.title || 'film'}`);
         return {
             ...film,
-            embedUrl: nonVid[0],
-            embedFallbacks: [...nonVid.slice(1), ...candidates.filter((u) => isVidplayerUrl(u))].slice(0, 6),
+            title: film.title || resolved.title || film.title,
+            videoUrl: resolved.streamUrl,
+            hls: true,
+            embedUrl: url,
+            embedFallbacks: [...nonVid, ...rest.filter((u) => isVidplayerUrl(u) && u !== url)].slice(0, 6)
+        };
+    }
+
+    // Vidplayer gagal — pakai embed non-vidplayer terbaik (tanpa paksa user ganti server manual)
+    const nonVid = candidates.filter((u) => !isVidplayerUrl(u));
+    if (nonVid.length) {
+        const primary = isVidplayerUrl(film.embedUrl) ? nonVid[0] : (film.embedUrl || nonVid[0]);
+        const fallbacks = [...new Set([
+            ...nonVid.filter((u) => u !== primary),
+            ...candidates.filter((u) => isVidplayerUrl(u))
+        ])].slice(0, 3);
+        return {
+            ...film,
+            embedUrl: primary,
+            embedFallbacks: fallbacks,
             videoUrl: ''
         };
     }
@@ -274,7 +320,7 @@ async function playNextFromQueue(by, { auto = false } = {}) {
     try {
         const film = await loadFilmFromUrl(next.url, next.title);
         room.film = film;
-        setPlayback({ position: 0, playing: false, by });
+        setPlayback({ position: 0, playing: filmHasDirectStream(film), by });
         const label = auto ? 'auto lanjut' : 'skip';
         pushChat('⏭️ TV', `${by} ${label} → ${film.title}`);
         return { ok: true, film, auto };
@@ -621,7 +667,7 @@ export function mountWatchServer(app) {
             if (!room.film.embedUrl && !room.film.videoUrl) {
                 throw new Error('Player tidak ditemukan untuk film ini (LK21/Rebahin).');
             }
-            setPlayback({ position: 0, playing: false, by: user });
+            setPlayback({ position: 0, playing: filmHasDirectStream(film), by: user });
             pushChat('📺 TV', `${user} memutar ${film.title}`);
             res.json({ ok: true, room: roomSnapshot() });
         } catch (e) {

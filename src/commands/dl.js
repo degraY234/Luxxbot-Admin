@@ -59,6 +59,7 @@ export async function handleDlCommand({ sock, from, msg, args }) {
                 caption
             }, { quoted: msg });
         }
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     } catch (e) {
         console.error('DL ERROR:', e.message);
         await sock.sendMessage(from, {

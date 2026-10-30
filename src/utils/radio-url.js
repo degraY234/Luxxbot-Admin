@@ -1,13 +1,27 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { spawnSync } from 'child_process';
 import axios from 'axios';
 import { getListenPort, isRailwayRuntime } from './listen-port.js';
+import { persistRadioPublicUrl } from './env-persist.js';
+import { publishBotDiscovery } from './bot-discovery-publish.js';
 
 const RADIO_PORT = getListenPort();
 const TUNNEL_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/gi;
 
+function isValidTunnelHost(url) {
+    try {
+        const { hostname } = new URL(url);
+        return /\.trycloudflare\.com$/i.test(hostname) && hostname !== 'api.trycloudflare.com';
+    } catch {
+        return false;
+    }
+}
+
 let cache = { base: null, at: 0 };
+let lastTunnelRecoverAt = 0;
+const TUNNEL_RECOVER_COOLDOWN_MS = 90_000;
 
 const TUNNEL_LOG_PATHS = [
     path.join(process.cwd(), 'temp', 'radio-tunnel-new.log'),
@@ -38,7 +52,7 @@ function isPrivateHost(hostname) {
 
 async function probeBase(base) {
     const { data } = await axios.get(`${base.replace(/\/$/, '')}/health`, {
-        timeout: 5000,
+        timeout: 2500,
         validateStatus: (s) => s === 200
     });
     return Boolean(data?.ok);
@@ -77,7 +91,7 @@ export function getConfiguredPublicBaseUrl() {
 }
 
 /** Ambil URL trycloudflare terbaru dari log tunnel (kalau .env ketinggalan). */
-export function extractTunnelUrlsFromLogs() {
+export function extractTunnelUrlsFromLogs(limit = 5) {
     const ordered = [];
     const seen = new Set();
     for (const logPath of TUNNEL_LOG_PATHS) {
@@ -86,6 +100,7 @@ export function extractTunnelUrlsFromLogs() {
             const content = fs.readFileSync(logPath, 'utf8');
             for (const m of content.matchAll(TUNNEL_URL_RE)) {
                 const u = m[0];
+                if (!isValidTunnelHost(u)) continue;
                 if (seen.has(u)) {
                     ordered.splice(ordered.indexOf(u), 1);
                 } else {
@@ -97,7 +112,7 @@ export function extractTunnelUrlsFromLogs() {
             /* skip */
         }
     }
-    return ordered.reverse();
+    return ordered.reverse().slice(0, limit);
 }
 
 async function collectPublicCandidates() {
@@ -106,8 +121,9 @@ async function collectPublicCandidates() {
         const clean = String(u || '').trim().replace(/\/$/, '');
         if (clean && !out.includes(clean)) out.push(clean);
     };
+    // Log tunnel lebih baru dari .env — coba yang terbaru dulu (maks 3)
+    for (const u of extractTunnelUrlsFromLogs(3)) push(u);
     push(getConfiguredPublicBaseUrl());
-    for (const u of extractTunnelUrlsFromLogs()) push(u);
     return out;
 }
 
@@ -129,7 +145,7 @@ export async function discoverLivePublicBase() {
             if (await probeBase(base)) {
                 const configured = getConfiguredPublicBaseUrl();
                 if (configured && configured !== base) {
-                    console.log(`\x1b[33m🌐 Tunnel aktif: ${base} (update RADIO_PUBLIC_URL di .env)\x1b[0m`);
+                    console.log(`\x1b[33m🌐 Tunnel URL baru terdeteksi: ${base}\x1b[0m`);
                 }
                 return { base, source: 'tunnel', localOk };
             }
@@ -164,6 +180,76 @@ export async function discoverLivePublicBase() {
 export async function ensureLivePublicBase() {
     invalidateRadioUrlCache();
     return discoverLivePublicBase();
+}
+
+/**
+ * Restart luxx-tunnel dan tunggu URL trycloudflare yang benar-benar hidup.
+ * Dipanggil saat tunnel di .env mati tapi bot lokal masih jalan.
+ */
+export async function tryRecoverTunnelUrl({ force = false } = {}) {
+    if (isRailwayRuntime()) return null;
+    if (!force && Date.now() - lastTunnelRecoverAt < TUNNEL_RECOVER_COOLDOWN_MS) return null;
+    lastTunnelRecoverAt = Date.now();
+
+    const prev = getConfiguredPublicBaseUrl() || '';
+    if (process.platform === 'win32') {
+        try {
+            spawnSync('taskkill', ['/F', '/IM', 'cloudflared.exe'], { stdio: 'ignore', shell: true, windowsHide: true });
+        } catch { /* ignore */ }
+    }
+
+    try {
+        const { ensurePm2Tunnel } = await import('./ensure-pm2-tunnel.js');
+        const { isLuxxAutoTunnelEnabled } = await import('./luxx-pm2-flags.js');
+        if (isLuxxAutoTunnelEnabled()) {
+            ensurePm2Tunnel({ quiet: true, forceStart: true });
+        }
+    } catch { /* ignore */ }
+
+    for (let i = 0; i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        invalidateRadioUrlCache();
+        for (const base of extractTunnelUrlsFromLogs(3)) {
+            try {
+                if (await probeBase(base)) {
+                    if (base !== prev) {
+                        persistRadioPublicUrl(base, { injectApp: false });
+try { publishBotDiscovery(base); } catch { /* ignore */ }
+                        console.log(`\x1b[32m🌐 Tunnel dipulihkan: ${base}\x1b[0m`);
+                    }
+                    cache = { base, at: Date.now() };
+                    return base;
+                }
+            } catch { /* tunggu URL berikutnya */ }
+        }
+    }
+    return null;
+}
+
+/** URL untuk dibagikan ke WhatsApp — tidak pakai LAN/local. */
+export async function resolveWaShareBase() {
+    invalidateRadioUrlCache();
+    let status = await discoverLivePublicBase();
+    if (status.source === 'tunnel') return { base: status.base, status };
+
+    if (status.localOk && status.source !== 'railway') {
+        const recovered = await tryRecoverTunnelUrl();
+        if (recovered) {
+            status = { base: recovered, source: 'tunnel', localOk: true };
+            return { base: recovered, status };
+        }
+    }
+
+    if (status.source === 'stale' || status.source === 'railway' || status.source === 'railway-local') {
+        return { base: status.base, status };
+    }
+
+    const configured = getConfiguredPublicBaseUrl();
+    if (configured) {
+        return { base: configured, status: { ...status, base: configured, source: 'stale' } };
+    }
+
+    return { base: null, status };
 }
 
 /**
@@ -256,9 +342,63 @@ export function invalidateRadioUrlCache() {
 
 /** URL publik untuk share (/radio, /watch) */
 export function getRadioPublicUrl() {
+    const live = process.env.RADIO_PUBLIC_URL?.trim().replace(/\/$/, '');
+    try {
+        if (live && !isPrivateHost(new URL(live).hostname)) return live;
+    } catch { /* invalid url */ }
     return (
         getConfiguredPublicBaseUrl() ||
         getConfiguredBaseUrl() ||
         `http://127.0.0.1:${RADIO_PORT}`
     );
+}
+
+/**
+ * Sinkronkan RADIO_PUBLIC_URL dari tunnel hidup → process.env + .env.
+ * Dipanggil saat boot, periodic, dan saat tunnel ganti URL.
+ */
+export async function syncPublicUrl({ persist = true, quiet = false } = {}) {
+    try {
+        invalidateRadioUrlCache();
+        let live = await discoverLivePublicBase();
+        if (live.source === 'stale' && live.localOk && !isRailwayRuntime()) {
+            const recovered = await tryRecoverTunnelUrl();
+            if (recovered) {
+                live = { base: recovered, source: 'tunnel', localOk: true };
+            }
+        }
+        if (!live.base) return live;
+
+        const clean = live.base.replace(/\/$/, '');
+        const prev = process.env.RADIO_PUBLIC_URL?.trim().replace(/\/$/, '') || '';
+
+        if (persist && live.source === 'tunnel') {
+            const { changed, fileWritten } = persistRadioPublicUrl(clean, { injectApp: false });
+            if (changed) {
+try { publishBotDiscovery(clean); } catch { /* ignore */ }
+            }
+            if (changed && !quiet) {
+                const tag = fileWritten ? '→ .env' : 'memori';
+                const lan = getLanIPv4();
+                const lanHint = lan ? ` · LAN: http://${lan}:${RADIO_PORT}` : '';
+                console.log(`\x1b[32m🌐 Tunnel URL ${prev && prev !== clean ? 'baru' : 'aktif'}: ${clean} (${tag})${lanHint}\x1b[0m`);
+            }
+        } else if (clean !== prev) {
+            process.env.RADIO_PUBLIC_URL = clean;
+            if (!quiet) {
+                console.log(`\x1b[32m🌐 Public URL aktif: ${clean} (${live.source})\x1b[0m`);
+            }
+        }
+
+        cache = { base: clean, at: Date.now() };
+        return { ...live, base: clean };
+    } catch (e) {
+        if (!quiet) console.warn('🌐 syncPublicUrl:', e.message);
+        return { base: getRadioPublicUrl(), source: 'local', localOk: true };
+    }
+}
+
+/** @deprecated gunakan syncPublicUrl */
+export async function bootstrapPublicUrl() {
+    return syncPublicUrl({ persist: true, quiet: false });
 }

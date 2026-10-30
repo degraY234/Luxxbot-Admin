@@ -1,8 +1,10 @@
 {
-  "version": "3.1.0",
-  "updatedAt": "2026-06-20",
-  "gitHead": "9c3411f7",
+  "version": "3.2.0",
+  "updatedAt": "2026-10-29",
+  "gitHead": "098a0469",
   "highlights": [
+    "tambah helper PM2 startup disable",
+    "rapikan struktur repo + hapus clutter",
     "dark cyber theme + animated robot logo with moving eyes",
     "sync admin ke branch main GitHub Pages, perbaiki workflow gagal",
     "$(cat <<'EOF'",
@@ -11,9 +13,7 @@
     "stronger session snapshot backup and reconnect watchdog",
     "auto-detect Railway origin, login cukup token saja",
     "handle Chrome DPAPI cookie error, add upload-only path",
-    "clearer youtube cookie export errors when browser is open",
-    "YouTube cookies on persist volume + WA session backup across redeploy",
-    "GitHub + Zelpstore deploy — PM2 sama seperti lokal, luxx-ctl update",
-    "improve session persist diagnostics and pair reconnect"
+    "Audio APK stabil — resumeAudio() tunggal, EQ graph hanya saat preset aktif",
+    "Mood stasiun cepat — cache server 6 jam + endpoint /radio/api/mood/:id"
   ]
 }

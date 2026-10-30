@@ -28,6 +28,7 @@ let catalogMode = 'latest';
 let catalogQuery = '';
 let hlsInstance = null;
 let playerMountGen = 0;
+let mountedPlayerKey = '';
 let currentFilmForPlayer = null;
 let progressBound = false;
 let finishReported = false;
@@ -285,7 +286,8 @@ function showPlayerEmpty() {
   const video = $('#player-video');
   const sw = $('#server-switcher');
   if (iframe) {
-    iframe.src = 'about:blank';
+    iframe.removeAttribute('src');
+    delete iframe.dataset.src;
     iframe.classList.add('hidden');
   }
   if (video) {
@@ -299,33 +301,57 @@ function showPlayerEmpty() {
   $('#player-empty')?.classList.remove('hidden');
   renderFilmDetails(null);
   lastFilmKey = '';
+  mountedPlayerKey = '';
   lastPlaybackUpdatedAt = 0;
 }
 
 function showPlayerLoading() {
   $('#player-empty')?.classList.add('hidden');
   $('#player-loading')?.classList.remove('hidden');
-  $('#player')?.classList.add('hidden');
-  $('#player-video')?.classList.add('hidden');
-  const sw = $('#server-switcher');
-  if (sw) sw.classList.add('hidden');
 }
 
 function isVidplayerUrl(url = '') {
   return /vidplayer\.live/i.test(url);
 }
 
+function decodeB64Url(str) {
+  try {
+    const b64 = String(str).replace(/-/g, '+').replace(/_/g, '/');
+    const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
+    const bin = atob(b64 + pad);
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return '';
+  }
+}
+
+function unwrapPlayerUrl(raw) {
+  if (!raw) return '';
+  const full = raw.startsWith('http') ? raw : `${location.origin}${raw.startsWith('/') ? '' : '/'}${raw}`;
+  try {
+    const u = new URL(full);
+    if (u.pathname.endsWith('/watch/embed') && u.searchParams.get('u')) {
+      const direct = decodeB64Url(u.searchParams.get('u'));
+      if (direct.startsWith('http')) return direct;
+    }
+  } catch (_) {}
+  return full;
+}
+
 function buildEmbedSources(film) {
   if (!film) return [];
-  const list = [];
-  const push = (u) => {
-    const resolved = resolvePlayerUrl(u);
-    if (resolved && !list.includes(resolved)) list.push(resolved);
-  };
-
-  push(film.playEmbedUrl);
-  for (const u of film.playEmbedFallbacks || []) push(u);
-  return list;
+  const candidates = [
+    film.playEmbedUrl,
+    film.embedUrl,
+    ...(film.playEmbedFallbacks || []),
+    ...(film.embedFallbacks || [])
+  ].filter(Boolean);
+  for (const raw of candidates) {
+    const direct = unwrapPlayerUrl(raw);
+    if (direct.startsWith('http')) return [direct];
+  }
+  return [];
 }
 
 function playerEmbedSrc(film) {
@@ -345,51 +371,9 @@ function clearEmbedLoadTimer() {
   }
 }
 
-function tryNextEmbed(film, gen = playerMountGen) {
-  embedFallbackIdx += 1;
-  if (embedFallbackIdx >= embedFallbackList.length) {
-    toast('Semua server gagal. Coba film lain atau refresh.');
-    $('#player-loading')?.classList.add('hidden');
-    return;
-  }
-  const iframe = $('#player');
-  const next = resolvePlayerUrl(embedFallbackList[embedFallbackIdx]);
-  toast(`Mencoba server ${embedFallbackIdx + 1}...`);
-  $('#player-loading')?.classList.remove('hidden');
-  iframe.onload = () => markPlayerReady(gen);
-  iframe.onerror = () => { if (gen === playerMountGen) tryNextEmbed(film, gen); };
-  iframe.src = 'about:blank';
-  requestAnimationFrame(() => {
-    if (gen !== playerMountGen) return;
-    iframe.src = next;
-    scheduleEmbedWatch(film, gen);
-  });
-}
-
-function embedLoadTimeoutMs() {
-  return 12000; // faster auto-advance
-}
-
-function scheduleEmbedWatch(film, gen = playerMountGen) {
-  clearEmbedLoadTimer();
-  embedLoadTimer = setTimeout(() => {
-    if (gen !== playerMountGen) return;
-    if (embedFallbackIdx < embedFallbackList.length - 1) {
-      tryNextEmbed(film, gen);
-    } else {
-      toast('Player lambat dimuat — coba film lain atau refresh.');
-    }
-  }, embedLoadTimeoutMs());
-}
-
-function fallbackToEmbed(film, reason) {
-  const sources = buildEmbedSources(film);
-  if (!sources.length) {
-    toast(reason || 'Stream gagal. Coba film lain.');
-    return false;
-  }
-  toast('Stream HLS gagal — mencoba player embed...');
-  return mountEmbedPlayer(film);
+function failPlayer(reason) {
+  toast(reason || 'Gagal memutar — coba film lain.');
+  $('#player-loading')?.classList.add('hidden');
 }
 
 function markPlayerReady(gen) {
@@ -402,11 +386,16 @@ function mountHlsPlayer(film, gen = playerMountGen) {
   const video = $('#player-video');
   const iframe = $('#player');
   const src = resolvePlayerUrl(film.playVideoUrl || '');
-  if (!video || !src) return fallbackToEmbed(film, 'URL stream kosong.');
+  if (!video || !src) {
+    failPlayer('URL stream kosong.');
+    return false;
+  }
 
   destroyHls();
-  iframe.src = 'about:blank';
-  iframe.classList.add('hidden');
+  if (iframe) {
+    iframe.removeAttribute('src');
+    iframe.classList.add('hidden');
+  }
   showProgressUi(false);
   $('#player-empty')?.classList.add('hidden');
   $('#player-loading')?.classList.remove('hidden');
@@ -422,29 +411,43 @@ function mountHlsPlayer(film, gen = playerMountGen) {
     showProgressUi(true);
     bindProgressEvents();
     updateProgressBar();
+    suppressPlaybackReport = true;
+    void video.play().then(() => {
+      reportPlayback();
+      setTimeout(() => { suppressPlaybackReport = false; }, 400);
+    }).catch(() => {
+      suppressPlaybackReport = false;
+    });
   };
 
+  let hlsRetries = 0;
   if (window.Hls?.isSupported()) {
-    hlsInstance = new window.Hls({ enableWorker: true, lowLatencyMode: false });
+    hlsInstance = new window.Hls({ enableWorker: true, lowLatencyMode: false, maxLoadingRetry: 4 });
     hlsInstance.loadSource(src);
     hlsInstance.attachMedia(video);
     hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, onReady);
     hlsInstance.on(window.Hls.Events.ERROR, (_, data) => {
       if (gen !== playerMountGen) return;
       if (!data?.fatal) return;
+      if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR && hlsRetries < 2) {
+        hlsRetries += 1;
+        hlsInstance.startLoad();
+        return;
+      }
       destroyHls();
-      fallbackToEmbed(film, 'Stream HLS putus.');
+      failPlayer('Stream gagal dimuat — coba film lain.');
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
     video.src = src;
     video.addEventListener('loadedmetadata', onReady, { once: true });
     video.addEventListener('error', () => {
       if (gen !== playerMountGen) return;
-      fallbackToEmbed(film, 'Stream gagal dimuat.');
+      failPlayer('Stream gagal dimuat — coba film lain.');
     }, { once: true });
     video.load();
   } else {
-    return fallbackToEmbed(film, 'Browser tidak mendukung streaming ini.');
+    failPlayer('Browser tidak mendukung streaming ini.');
+    return false;
   }
   return true;
 }
@@ -454,7 +457,7 @@ function mountEmbedPlayer(film, gen = playerMountGen) {
   const video = $('#player-video');
   embedFallbackList = buildEmbedSources(film);
   embedFallbackIdx = 0;
-  const src = resolvePlayerUrl(embedFallbackList[0]);
+  const src = embedFallbackList[0];
   if (!src) {
     toast('Player tidak ditemukan. Coba film lain.');
     return false;
@@ -464,6 +467,8 @@ function mountEmbedPlayer(film, gen = playerMountGen) {
   showProgressUi(false);
   $('#player-empty')?.classList.add('hidden');
   $('#player-loading')?.classList.remove('hidden');
+  $('#player-play-overlay')?.classList.add('hidden');
+  $('#server-switcher')?.classList.add('hidden');
 
   video.pause?.();
   video.classList.add('hidden');
@@ -472,62 +477,14 @@ function mountEmbedPlayer(film, gen = playerMountGen) {
 
   currentFilmForPlayer = film;
 
-  const playOverlay = $('#player-play-overlay');
-  const serverSwitcher = $('#server-switcher');
-
-  // Setup server switcher (show even for 2+ servers)
-  if (serverSwitcher) {
-    const total = Math.min(embedFallbackList.length, 3);
-    serverSwitcher.classList.toggle('hidden', total <= 1);
-    serverSwitcher.querySelectorAll('.server-btn').forEach((btn, i) => {
-      btn.classList.toggle('active', i === 0 && i < total);
-      btn.style.display = i < total ? '' : 'none';
-      btn.onclick = () => {
-        if (i >= embedFallbackList.length) return;
-        embedFallbackIdx = i;
-        const nextSrc = resolvePlayerUrl(embedFallbackList[i]);
-        serverSwitcher.querySelectorAll('.server-btn').forEach((b, j) => b.classList.toggle('active', j === i));
-        loadEmbedSrc(iframe, nextSrc, gen);
-        if (playOverlay) playOverlay.classList.add('hidden');
-      };
-    });
-  }
-
-  iframe.onload = () => {
-    markPlayerReady(gen);
-    if (playOverlay) playOverlay.classList.add('hidden');
-  };
-  iframe.onerror = () => {
-    if (gen !== playerMountGen) return;
-    tryNextEmbed(film, gen);
-  };
-
-  // Show overlay for first load (user gesture for autoplay)
-  if (playOverlay) {
-    playOverlay.classList.remove('hidden');
-    playOverlay.onclick = () => {
-      playOverlay.classList.add('hidden');
-      loadEmbedSrc(iframe, src, gen);
-    };
-  }
-
-  iframe.src = 'about:blank';
-  iframe.classList.remove('hidden');
-
-  // Start a timeout watcher for auto-advance
-  scheduleEmbedWatch(film, gen);
-  return true;
-}
-
-function loadEmbedSrc(iframe, src, gen) {
-  if (!src || !iframe) return;
-  $('#player-loading')?.classList.remove('hidden');
   iframe.onload = () => markPlayerReady(gen);
-  iframe.src = 'about:blank';
-  requestAnimationFrame(() => {
-    if (gen !== playerMountGen) return;
+
+  iframe.classList.remove('hidden');
+  if (iframe.dataset.src !== src) {
+    iframe.dataset.src = src;
     iframe.src = src;
-  });
+  }
+  return true;
 }
 
 function playerVideoSrc(film) {
@@ -613,7 +570,7 @@ function applyPlaybackSync(room) {
     meta.textContent = `${base} · ⏱ ${formatElapsed(effectivePlayback(pb))} bareng`;
     if (pb.by) meta.textContent += ` · ${pb.by}`;
   } else {
-    meta.textContent = `${base} · klik ▶ play di layar untuk mulai nonton bareng`;
+    meta.textContent = `${base} · siap diputar`;
     if (pb.by) meta.textContent += ` · dipilih ${pb.by}`;
   }
 }
@@ -702,12 +659,13 @@ function renderRoom(room) {
     }
 
     const key = filmIdentity(film);
-    if (key !== lastFilmKey) {
+    if (key !== mountedPlayerKey) {
       playerMountGen += 1;
       const gen = playerMountGen;
       finishReported = false;
       showPlayerLoading();
       lastFilmKey = key;
+      mountedPlayerKey = key;
       lastPlaybackUpdatedAt = 0;
       if (hasHls) {
         mountHlsPlayer(film, gen);
@@ -716,8 +674,11 @@ function renderRoom(room) {
       } else if (hasVideo) {
         clearEmbedLoadTimer();
         destroyHls();
-        iframe.src = 'about:blank';
-        iframe.classList.add('hidden');
+        if (iframe) {
+          iframe.removeAttribute('src');
+          delete iframe.dataset.src;
+          iframe.classList.add('hidden');
+        }
         empty.classList.add('hidden');
         currentFilmForPlayer = film;
         const fullVideo = videoSrc.startsWith('http') ? videoSrc : `${location.origin}${videoSrc}`;
@@ -731,6 +692,13 @@ function renderRoom(room) {
           showProgressUi(true);
           bindProgressEvents();
           updateProgressBar();
+          if (room?.playback?.playing) {
+            suppressPlaybackReport = true;
+            void video.play().then(() => {
+              reportPlayback();
+              setTimeout(() => { suppressPlaybackReport = false; }, 400);
+            }).catch(() => { suppressPlaybackReport = false; });
+          }
         }, { once: true });
       }
     }
@@ -1036,16 +1004,14 @@ async function playFilm(url, title) {
     if (data.url === playUrl) source = data.source || '';
     c.classList.toggle('playing', data.url === playUrl);
   });
-  showPlayerLoading();
+  $('#player-loading')?.classList.remove('hidden');
   $('#now-title').textContent = title || 'Memuat...';
   $('#now-meta').textContent = 'Menyiapkan player...';
   try {
     const d = await api('/play', 'POST', { sessionId, url: playUrl, title, source }, 3);
     renderRoom(d.room);
     const film = d.room?.film;
-    if (film?.hls || film?.playUseHls || film?.videoUrl) toast(`▶ ${film.title || title} — klik ▶ di player`);
-    else if (film?.embedUrl || film?.playEmbedUrl) toast(`▶ ${film.title || title} — klik play di layar`);
-    else toast(`Memutar: ${title}`);
+    toast(`▶ ${film?.title || title || 'Film'}`);
   } catch (e) {
     $('#player-loading')?.classList.add('hidden');
     cards.forEach((c) => c.classList.remove('playing'));
@@ -1263,8 +1229,7 @@ function bindPlaybackEvents() {
     notifyFilmFinished();
   });
   video.addEventListener('error', () => {
-    if (currentFilmForPlayer) fallbackToEmbed(currentFilmForPlayer, 'Stream gagal.');
-    else toast('Stream gagal. Coba film lain.');
+    failPlayer('Stream gagal — coba film lain.');
   });
 }
 

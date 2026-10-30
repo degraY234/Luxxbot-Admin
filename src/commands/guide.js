@@ -31,4 +31,5 @@ export function getGuideText() {
 
 export async function handleGuideCommand({ sock, from, msg }) {
     await sock.sendMessage(from, { text: getGuideText() }, { quoted: msg });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }

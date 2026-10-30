@@ -42,11 +42,13 @@ export async function handleBuatCommand({ sock, from, msg, args }) {
             image: result.buffer,
             caption
         }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     } catch (e) {
         await sock.sendMessage(from, {
             text:
                 `❌ *Gagal buat gambar*\n_${(e.message || 'error').slice(0, 280)}_\n\n` +
                 `💡 Coba prompt lebih spesifik atau ulang 1–2 menit.`
         }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     }
 }

@@ -4,6 +4,8 @@ import * as cheerio from 'cheerio';
 
 const DEFAULT_BASES = [
     process.env.LK21_BASE_URL?.trim(),
+    'https://tv1.lk21official.life',
+    'https://d21.team',
     'https://lk21.lat',
     'https://lk21.us',
     'https://lk21.one',
@@ -13,6 +15,20 @@ const DEFAULT_BASES = [
     'https://lk21.dev',
     'https://lk21.my.id',
     'https://lk21.diy'
+].filter(Boolean);
+
+const SEARCH_STOP_WORDS = new Set([
+    'film', 'movie', 'the', 'dan', 'sub', 'indo', 'subindo', 'nonton',
+    'download', 'streaming', 'hd', 'bluray', 'cam', 'india', 'bollywood', 'lk21'
+]);
+
+const SEARCH_PRIORITY_BASES = [
+    'https://d21.team',
+    'https://tv1.lk21official.life',
+    process.env.LK21_BASE_URL?.trim(),
+    'https://lk21.us',
+    'https://lk21.one',
+    'https://lk21.lat'
 ].filter(Boolean);
 
 const REBAHIN_BASES = [
@@ -101,7 +117,7 @@ function isBlockedMirror(html) {
     return h.includes('safesurf') || h.includes('biznetnetworks') || h.includes('we are sorry');
 }
 
-async function fetchHtml(url) {
+async function fetchHtml(url, timeout = 22000) {
     const u = new URL(url);
     const hostname = u.hostname;
     const cookieStr = getLk21Cookies(hostname);
@@ -113,7 +129,7 @@ async function fetchHtml(url) {
     });
 
     const { data, headers: respHeaders } = await axios.get(url, {
-        timeout: 22000,
+        timeout,
         httpsAgent: lk21Https,
         headers,
         maxRedirects: 5,
@@ -156,6 +172,243 @@ function titleFromSlug(url = '') {
         .replace(/\b(sub indo|subindo|film)\b/gi, '')
         .replace(/\s+/g, ' ')
         .trim();
+}
+
+function normalizeForMatch(text = '') {
+    return String(text)
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function queryTokens(query = '') {
+    return normalizeForMatch(query)
+        .split(' ')
+        .filter((w) => w.length > 1 && !SEARCH_STOP_WORDS.has(w));
+}
+
+function tokenVariants(token = '') {
+    if (token === 'na') return ['na', 'naa'];
+    if (token === 'naa') return ['naa', 'na'];
+    return [token];
+}
+
+function textHasToken(text = '', token = '') {
+    const norm = normalizeForMatch(text);
+    return tokenVariants(token).some((v) => norm.includes(v));
+}
+
+function titleMatchesQuery(title = '', query = '', minRatio = 0.45) {
+    const tokens = queryTokens(query);
+    if (!tokens.length) return true;
+    if (tokens.length === 1) return textHasToken(title, tokens[0]);
+
+    const hay = `${normalizeForMatch(title)} ${normalizeForMatch(titleFromSlug(title))}`;
+    let hits = 0;
+    for (const t of tokens) {
+        if (tokenVariants(t).some((v) => hay.includes(v))) hits++;
+    }
+    return hits >= Math.max(2, Math.ceil(tokens.length * minRatio));
+}
+
+function scoreSearchRelevance(item, query = '') {
+    const tokens = queryTokens(query);
+    if (!tokens.length) return 1;
+
+    const title = normalizeForMatch(item?.title || '');
+    const url = normalizeForMatch(item?.url || '');
+    let score = 0;
+
+    for (const t of tokens) {
+        for (const v of tokenVariants(t)) {
+            if (title.includes(v)) score += 4;
+            if (url.includes(v)) score += 3;
+        }
+    }
+
+    const phrase = tokens.join(' ');
+    const slugPhrase = phrase.replace(/ /g, '-');
+    if (title.includes(phrase) || url.includes(slugPhrase)) score += 12;
+
+    return score;
+}
+
+function normalizeSlugKey(slug = '') {
+    return String(slug)
+        .toLowerCase()
+        .replace(/\bnaa\b/g, 'na')
+        .replace(/-\d{4}$/, '')
+        .replace(/-sub-indo$/, '');
+}
+
+function resultDedupeKey(item = {}) {
+    const slug = slugFromPageUrl(item.url || '');
+    if (slug) return normalizeSlugKey(slug);
+    return normalizeForMatch(item.title || '').replace(/ /g, '-');
+}
+
+function rankSearchResults(results, query = '') {
+    const tokens = queryTokens(query);
+    const ranked = [...results].sort((a, b) => scoreSearchRelevance(b, query) - scoreSearchRelevance(a, query));
+
+    const seen = new Set();
+    const deduped = [];
+    for (const item of ranked) {
+        const key = resultDedupeKey(item);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(item);
+    }
+
+    if (tokens.length < 2) return deduped;
+
+    const filtered = deduped.filter((item) => scoreSearchRelevance(item, query) > 0);
+    return filtered.length ? filtered : deduped.slice(0, 6);
+}
+
+function queryToSlugVariants(query = '') {
+    const raw = String(query || '').trim().toLowerCase();
+    const yearMatch = raw.match(/\b(19|20)\d{2}\b/);
+    const year = yearMatch?.[0] || '';
+    const words = raw
+        .replace(/\b(19|20)\d{2}\b/g, '')
+        .replace(/\b(film|movie|sub|indo|subindo|india|bollywood|nonton|download|streaming|hd|bluray|cam)\b/gi, '')
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 1);
+
+    if (!words.length) return [];
+
+    const baseSlug = words.join('-');
+    const variants = new Set([baseSlug]);
+
+    const naaSlug = baseSlug.replace(/\bna\b/g, 'naa');
+    const naSlug = baseSlug.replace(/\bnaa\b/g, 'na');
+    variants.add(naaSlug);
+    if (naSlug !== baseSlug) variants.add(naSlug);
+
+    if (year) {
+        variants.add(`${baseSlug}-${year}`);
+        variants.add(`${naaSlug}-${year}`);
+        if (naSlug !== baseSlug) variants.add(`${naSlug}-${year}`);
+    }
+
+    return [...variants];
+}
+
+function buildSearchUrls(base, query, page = 1) {
+    const b = base.replace(/\/$/, '');
+    const enc = encodeURIComponent(query);
+    const slugQ = normalizeForMatch(query).replace(/ /g, '-');
+
+    if (page <= 1) {
+        return [
+            `${b}/?s=${enc}`,
+            `${b}/search?s=${enc}`,
+            `${b}/search/${slugQ}`,
+            `${b}/search/${enc}`
+        ];
+    }
+
+    return [
+        `${b}/page/${page}/?s=${enc}`,
+        `${b}/?s=${enc}&paged=${page}`
+    ];
+}
+
+function isLikelyFilmPage(html = '') {
+    const h = String(html).slice(0, 12000).toLowerCase();
+    if (h.includes('page not found') || h.includes('404 not found') || h.includes('tidak ditemukan')) return false;
+    return /og:type["'\s]+content=["']article/i.test(h)
+        || /property=["']og:title/i.test(h)
+        || /muvipro-player|gmr-player|entry-title|sinopsis/i.test(h);
+}
+
+async function probeSlugOnMirrors(query, bases, limit = 12) {
+    const slugs = queryToSlugVariants(query).slice(0, 4);
+    if (!slugs.length) return [];
+
+    const results = [];
+    const seen = new Set();
+    const pathsFor = (slug) => [`/${slug}`, `/${slug}/`, `/sinopsis/${slug}/`];
+
+    for (const base of bases.slice(0, 5)) {
+        for (const slug of slugs) {
+            for (const path of pathsFor(slug)) {
+                const url = `${base.replace(/\/$/, '')}${path}`;
+                if (seen.has(url)) continue;
+                try {
+                    const tProbe = Date.now();
+                    const html = await fetchHtml(url, 8000);
+                    if (!isLikelyFilmPage(html)) continue;
+
+                    const $ = cheerio.load(html);
+                    const title = cleanTitle(
+                        $('meta[property="og:title"]').attr('content')
+                        || $('h1.entry-title').first().text()
+                        || $('h1').first().text()
+                        || titleFromSlug(url)
+                    );
+                    if (!title || !titleMatchesQuery(title, query)) continue;
+
+                    const poster = $('meta[property="og:image"]').attr('content')
+                        || $('figure img').first().attr('src') || '';
+
+                    pushResult(results, seen, {
+                        title: title.slice(0, 120),
+                        year: yearFromTitle(title),
+                        poster: poster ? absUrl(base, poster) : '',
+                        url,
+                        source: 'lk21'
+                    });
+                    if (results.length >= limit || scoreSearchRelevance(results[results.length - 1], query) >= 9) {
+                        return results;
+                    }
+                } catch (_) {}
+            }
+            if (results.length >= limit) break;
+        }
+        if (results.length >= limit) break;
+    }
+
+    return results;
+}
+
+async function searchOnMirror(base, query, limit = 24) {
+    const results = [];
+    const seen = new Set();
+
+    for (const url of buildSearchUrls(base, query, 1)) {
+        try {
+            const html = await fetchHtml(url, 10000);
+            for (const item of parseSearchHtml(html, base, limit)) {
+                if (!titleMatchesQuery(item.title, query) && scoreSearchRelevance(item, query) < 3) continue;
+                pushResult(results, seen, item);
+            }
+            if (results.length >= 4) break;
+        } catch (_) {}
+    }
+
+    return results;
+}
+
+async function searchMirrorsBatch(bases, query, limit = 24) {
+    const merged = [];
+    const seen = new Set();
+    const batchSize = 3;
+
+    for (let i = 0; i < bases.length; i += batchSize) {
+        const batch = bases.slice(i, i + batchSize);
+        const settled = await Promise.allSettled(batch.map((base) => searchOnMirror(base, query, limit)));
+        for (const entry of settled) {
+            if (entry.status !== 'fulfilled') continue;
+            for (const item of entry.value) pushResult(merged, seen, item);
+        }
+        if (rankSearchResults(merged, query).length >= 6) break;
+    }
+
+    return merged;
 }
 
 function pushResult(results, seen, item) {
@@ -750,13 +1003,14 @@ async function searchRebahin(query, limit = 24) {
         if (results.length >= limit) break;
         try {
             const url = `${rb.replace(/\/$/, '')}/?s=${encodeURIComponent(q)}`;
-            const html = await fetchHtml(url);
+            const html = await fetchHtml(url, 9000);
             for (const item of parseRebahinHtml(html, rb, limit)) {
                 if (!seen.has(item.url)) {
                     seen.add(item.url);
                     results.push(item);
                 }
             }
+            if (results.length >= 4) break;
         } catch (e) {
             console.log(`Rebahin search skip ${rb}:`, e.message);
         }
@@ -885,49 +1139,67 @@ export async function searchLk21(query, page = 1) {
     const q = String(query || '').trim();
     if (!q) return (await browseLk21({ page, sort: 'newest' })).results;
 
-    const base = getBase();
     const merged = [];
     const seen = new Set();
     const pg = Math.max(1, Number(page) || 1);
+    const priorityBases = [...new Set(SEARCH_PRIORITY_BASES)];
+    const allBases = [...new Set([...priorityBases, ...DEFAULT_BASES])];
+    const extraBases = allBases.filter((b) => !priorityBases.includes(b));
 
-    const searchUrls = pg <= 1
-        ? [
-            `${base.replace(/\/$/, '')}/?s=${encodeURIComponent(q)}`,
-            `${base.replace(/\/$/, '')}/search?s=${encodeURIComponent(q)}`
-        ]
-        : [
-            `${base.replace(/\/$/, '')}/page/${pg}/?s=${encodeURIComponent(q)}`,
-            `${base.replace(/\/$/, '')}/?s=${encodeURIComponent(q)}&paged=${pg}`
-        ];
+    const mergeItems = (items = []) => {
+        for (const item of items) pushResult(merged, seen, item);
+    };
 
-    for (const url of searchUrls) {
+    const relevantCount = () => rankSearchResults(merged, q).length;
+    const hasStrongMatch = () => {
+        const ranked = rankSearchResults(merged, q);
+        return ranked.length > 0 && scoreSearchRelevance(ranked[0], q) >= 9;
+    };
+
+    if (pg <= 1) {
         try {
-            const html = await fetchHtml(url);
-            for (const item of parseSearchHtml(html, base, 48)) {
-                pushResult(merged, seen, item);
+            const s1 = await probeSlugOnMirrors(q, [priorityBases[0]], 4);
+            mergeItems(s1);
+            if (!hasStrongMatch() && priorityBases[1]) {
+                mergeItems(await probeSlugOnMirrors(q, [priorityBases[1]], 4));
             }
-            if (merged.length >= 12) break;
+            if (!hasStrongMatch() && priorityBases[2]) {
+                mergeItems(await probeSlugOnMirrors(q, [priorityBases[2]], 4));
+            }
         } catch (e) {
-            console.log(`LK21 search skip ${url}:`, e.message);
+            console.log('LK21 slug probe skip:', e.message);
         }
     }
 
-    // Try other LK21 mirrors
-    for (const alt of DEFAULT_BASES) {
-        if (alt === base || merged.length >= 48) break;
+    if (pg <= 1 && !hasStrongMatch() && relevantCount() < 4) {
         try {
-            const html = await fetchHtml(`${alt.replace(/\/$/, '')}/?s=${encodeURIComponent(q)}`);
-            for (const item of parseSearchHtml(html, alt, 48)) {
-                pushResult(merged, seen, item);
-            }
-        } catch (_) {}
+            mergeItems(await searchMirrorsBatch(priorityBases.slice(0, 3), q, 16));
+        } catch (e) {
+            console.log('LK21 priority search skip:', e.message);
+        }
     }
 
-    // Merge Rebahin search results
-    if (pg <= 1) {
+    if (!hasStrongMatch() && relevantCount() < 3 && extraBases.length) {
         try {
-            const rebahinResults = await searchRebahin(q, 24);
+            mergeItems(await searchMirrorsBatch(extraBases.slice(0, 4), q, 12));
+        } catch (e) {
+            console.log('LK21 extra search skip:', e.message);
+        }
+    }
+
+    if (pg <= 1 && !hasStrongMatch() && relevantCount() < 2) {
+        try {
+            mergeItems(await probeSlugOnMirrors(q, extraBases.slice(0, 3), 4));
+        } catch (e) {
+            console.log('LK21 extra slug probe skip:', e.message);
+        }
+    }
+
+    if (pg <= 1 && !hasStrongMatch() && relevantCount() < 6) {
+        try {
+            const rebahinResults = await searchRebahin(q, 8);
             for (const item of rebahinResults) {
+                if (!titleMatchesQuery(item.title, q) && scoreSearchRelevance(item, q) < 3) continue;
                 pushResult(merged, seen, item);
             }
         } catch (e) {
@@ -935,7 +1207,7 @@ export async function searchLk21(query, page = 1) {
         }
     }
 
-    return merged.slice(0, 60);
+    return rankSearchResults(merged, q).slice(0, 60);
 }
 
 function normalizeFilmPageUrl(url) {
@@ -947,7 +1219,9 @@ function normalizeFilmPageUrl(url) {
 }
 
 function slugFromPageUrl(url = '') {
-    const m = String(url).match(/\/sinopsis\/([^/]+)\/?$/i);
+    let m = String(url).match(/\/sinopsis\/([^/]+)\/?$/i);
+    if (m) return m[1];
+    m = String(url).match(/(?:https?:\/\/[^/]+)\/([a-z0-9][a-z0-9-]+)\/?$/i);
     return m?.[1] || '';
 }
 

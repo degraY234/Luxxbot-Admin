@@ -1,7 +1,7 @@
 // File: menu.js — menu per-section + main menu ringkas
 
 const DIVIDER = '━━━━━━━━━━━━━━━━━━━━━━━';
-const BOT_VERSION = '3.1.0';
+const BOT_VERSION = '3.2.0';
 
 function section(title) {
     return `\n${DIVIDER}\n${title}\n`;
@@ -152,21 +152,17 @@ function buildMenuMusik() {
 function buildMenuHiburan() {
     let m = '';
     m += `🎌 *MENU HIBURAN & SASTRA*\n`;
-    m += `_Anime, puisi, humor & konten hiburan dari seluruh dunia._\n`;
+    m += `_Anime, puisi, humor & konten hiburan pilihan._\n`;
     m += DIVIDER + '\n';
     m += item('!sastra', 'Puisi dari berbagai negara dunia', '📜');
-    m += item('!anime', 'Info & detail anime favorit', '🎌');
-    m += item('!football', 'Jadwal pertandingan bola terkini', '⚽');
-    m += item('!character', 'Cari karakter anime apapun', '👤');
-    m += item('!waifu', 'Random waifu anime', '💖');
-    m += item('!quotesanime', 'Quote inspiratif dari anime', '📜');
+    m += item('!anime', 'Cari info anime lengkap & trending (Fast AniList)', '🎌');
+    m += item('!waifu', 'Random waifu anime cantik', '💖');
+    m += item('!quotesanime', 'Quote inspiratif dari karakter anime', '📜');
     m += item('!darkjokes', 'Dark humor & lelucon gelap', '😈');
-    m += item('!pantun', 'Pantun live dari berbagai daerah', '🎭');
-    m += item('!cerpen', 'Cerpen pendek AI', '📖');
     m += lastItem('!meme', 'Meme random lucu', '😂');
     m += `\n${DIVIDER}\n`;
-    m += `_Alias: \`!jadwalbola\` = \`!football\`_\n`;
-    m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
+    m += '_Tips: !anime naruto atau ketik !anime saja untuk anime trending._\n';
+    m += '_Kembali: `!menu` · Detail: `!help [perintah]`_';
     return m;
 }
 

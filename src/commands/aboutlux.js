@@ -72,7 +72,7 @@ function buildFullText(meta, version) {
         `\`!play\` \`!nowplaying\` \`!discord\` \`!queue\` \`!skip\` \`!lirik\` \`!watch\`\n` +
         `_Luxx Watch — nonton bareng via web_\n\n` +
         `🎌 *Hiburan & Sastra*\n` +
-        `\`!sastra\` \`!anime\` \`!football\` \`!character\` \`!waifu\` \`!quotesanime\` \`!darkjokes\` \`!pantun\` \`!cerpen\` \`!meme\`\n\n` +
+        `\`!sastra\` \`!anime\` \`!waifu\` \`!quotesanime\` \`!darkjokes\` \`!meme\`\n\n` +
         `🎨 *Media & Tools*\n` +
         `\`!buat\` \`!sp\` \`!quote\` \`!s\` \`!dl\` \`!ocr\` \`!qr\` \`!kalkulator\` \`!cuaca\` \`!stalk\`\n\n` +
         `🎲 *Fun & Games*\n` +
@@ -112,10 +112,12 @@ export async function handleAboutLuxCommand({ sock, from, msg }) {
             caption: buildPhotoCaption(meta, version)
         }, { quoted: msg });
         await sock.sendMessage(from, { text: fullText }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     } catch (e) {
         console.error('ABOUTLUX ERROR:', e.message);
         await sock.sendMessage(from, {
             text: fullText + `\n\n_⚠️ Gagal kirim foto: ${e.message?.slice(0, 80)}_`
         }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     }
 }

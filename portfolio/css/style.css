@@ -972,6 +972,29 @@ main { position: relative; z-index: 1; }
   color: var(--cyan);
 }
 
+/* Marketing page layout */
+.pricing-grid,
+.service-grid,
+.steps-grid {
+  display: grid;
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.pricing-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+.service-grid,
+.steps-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+@media (max-width: 960px) {
+  .pricing-grid,
+  .service-grid,
+  .steps-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Contact */
 .contact-grid {
   display: grid;

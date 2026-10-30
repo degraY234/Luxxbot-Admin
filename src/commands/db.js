@@ -126,10 +126,12 @@ export async function handleDbCommand({ sock, from, sender, isGroup, isAdmin, ms
                     `_Atau pakai \`!coding\` buat kode aplikasinya_ 🚀`
             });
         }
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     } catch (e) {
         console.error('DB CMD ERROR:', e?.message || e);
         await sock.sendMessage(from, {
             text: '❌ Gagal memproses permintaan database. Coba lagi sebentar.'
         }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     }
 }

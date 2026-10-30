@@ -40,4 +40,5 @@ export async function handleQuoteCommand({ sock, from, msg, args }) {
 
     const caption = formatWisdomCaption(custom, true);
     await sock.sendMessage(from, { text: caption }, { quoted: msg });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }

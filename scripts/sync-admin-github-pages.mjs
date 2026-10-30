@@ -66,6 +66,10 @@ wipeExceptGit(pagesDir);
 cpFile(path.join(adminSrc, 'index.html'), path.join(pagesDir, 'index.html'));
 cpDir(path.join(adminSrc, 'css'), path.join(pagesDir, 'css'));
 cpDir(path.join(adminSrc, 'js'), path.join(pagesDir, 'js'));
+const botManifest = path.join(adminSrc, 'luxx-bot-url.json');
+if (fs.existsSync(botManifest)) {
+    cpFile(botManifest, path.join(pagesDir, 'luxx-bot-url.json'));
+}
 
 const nojekyll = path.join(adminSrc, '.nojekyll');
 if (fs.existsSync(nojekyll)) {

@@ -29,6 +29,7 @@ config/cloudflared-credentials.json
 # Runtime / local
 data/sounds/
 data/youtube-cookies.txt
+data/watch-subtitles/
 temp/
 terminals/
 backup/
@@ -59,3 +60,13 @@ Thumbs.db
 # Accidental / one-off clutter
 $null
 CLEANUP_AND_COMMIT.md
+/_*
+_*.txt
+_*.mjs
+_*.html
+_*.json
+*.sqlite3*
+data/*.sqlite3*
+.kilo/
+admin/luxx-bot-url.json
+portfolio/luxx-bot-url.json

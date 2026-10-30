@@ -76,7 +76,7 @@
         </div>
         <div id="player-shell" class="player-frame">
           <iframe id="player" class="hidden" title="Player LK21" allowfullscreen referrerpolicy="no-referrer-when-downgrade" allow="autoplay; encrypted-media; picture-in-picture; fullscreen; clipboard-write"></iframe>
-          <video id="player-video" class="hidden" controls playsinline webkit-playsinline></video>
+          <video id="player-video" class="hidden" controls playsinline webkit-playsinline crossorigin="anonymous"></video>
           <div id="player-progress-ui" class="player-progress-ui hidden">
             <div id="progress-tooltip" class="progress-tooltip hidden"></div>
             <div id="progress-track" class="progress-track" role="slider" aria-label="Posisi film" tabindex="0">
@@ -97,15 +97,8 @@
             <p>Belum ada film diputar</p>
             <small class="muted">Pilih film di katalog lalu klik ▶ Putar</small>
           </div>
-          <div id="player-play-overlay" class="player-play-overlay hidden">
-            <button id="btn-play-overlay" class="play-overlay-btn" type="button" aria-label="Putar">▶</button>
-          </div>
-          <div id="server-switcher" class="server-switcher hidden">
-            <span class="server-switcher-label">SRV</span>
-            <button class="server-btn active" data-idx="0">1</button>
-            <button class="server-btn" data-idx="1">2</button>
-            <button class="server-btn" data-idx="2">3</button>
-          </div>
+          <div id="player-play-overlay" class="player-play-overlay hidden" aria-hidden="true"></div>
+          <div id="server-switcher" class="server-switcher hidden" aria-hidden="true"></div>
         </div>
         <div class="now-bar">
           <img id="now-poster" class="now-poster hidden" alt="" />
@@ -215,6 +208,6 @@
 
   <div id="toast" class="toast hidden"></div>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
-  <script src="/watch/js/app.js?v=3.5.0"></script>
+  <script src="/watch/js/app.js?v=3.9.0"></script>
 </body>
 </html>

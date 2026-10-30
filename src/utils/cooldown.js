@@ -47,6 +47,6 @@ export function getUserContext(userId) {
 
 export function addToContext(userId, role, text) {
     const ctx = getUserContext(userId);
-    ctx.push({ role, text });
+    ctx.push({ role, text, timestamp: Date.now() });
     if (ctx.length > MAX_MEMORY) ctx.shift();
 }

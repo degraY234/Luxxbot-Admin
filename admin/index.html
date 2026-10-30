@@ -38,7 +38,7 @@
 
       <div class="field">
         <label for="api-base">API Base URL</label>
-        <input id="api-base" type="url" placeholder="https://healing-java-searched-continues.trycloudflare.com" autocomplete="url" />
+        <input id="api-base" type="url" placeholder="http://localhost:3920 atau https://xxx.trycloudflare.com" autocomplete="url" />
         <span class="field-hint">GitHub Pages: isi URL server bot (RADIO_PUBLIC_URL / tunnel / VPS) — tanpa /admin. Bukan link github.io.</span>
       </div>
 
@@ -70,6 +70,7 @@
         <button type="button" class="nav-item" data-panel="bot">◈ Bot Health</button>
         <button type="button" class="nav-item" data-panel="radio">◈ Radio & Cari</button>
         <button type="button" class="nav-item" data-panel="watch">◈ Luxx Watch</button>
+        <button type="button" class="nav-item" data-panel="premium">◈ Premium</button>
         <button type="button" class="nav-item" data-panel="system">◈ System</button>
         <button type="button" class="nav-item" data-panel="tools">◈ Tools</button>
       </nav>
@@ -117,9 +118,21 @@
               <div id="service-pills" class="pill-row"></div>
             </article>
 
+            <article class="card reveal">
+              <h3>Guardian Alerts</h3>
+              <div id="guardian-box" class="info-box">Memuat alert...</div>
+              <ul id="guardian-alerts" class="alerts-list"></ul>
+            </article>
+
             <article class="card span-2 reveal">
               <h3>Ringkasan Bot</h3>
               <div id="status-grid" class="stat-grid"></div>
+            </article>
+
+            <article class="card span-2 reveal">
+              <h3>Ops — Tunnel & Runtime</h3>
+              <div id="ops-box" class="info-box">Memuat…</div>
+              <div class="ops-hints muted" id="ops-hints"></div>
             </article>
           </div>
         </section>
@@ -130,6 +143,11 @@
             <article class="card span-2 reveal">
               <h3>Status Bot & WhatsApp</h3>
               <div id="bot-health-box" class="info-box"></div>
+            </article>
+            <article class="card reveal">
+              <h3>Guardian Alerts</h3>
+              <div id="guardian-box" class="info-box">Memuat alert...</div>
+              <ul id="guardian-alerts" class="alerts-list"></ul>
             </article>
             <article class="card reveal">
               <h3>Discord</h3>
@@ -242,6 +260,32 @@
                 </div>
               </div>
               <div id="watch-box" class="info-box muted">Memuat...</div>
+            </article>
+          </div>
+        </section>
+
+        <!-- PREMIUM -->
+        <section id="panel-premium" class="panel">
+          <div class="grid">
+            <article class="card span-2 reveal">
+              <div class="row-between">
+                <h3>Premium Users</h3>
+                <button id="btn-refresh-premium" class="btn" type="button">↻ Reload</button>
+              </div>
+              <p class="muted hint">Daftarkan nomor WA agar bisa memakai fitur premium: stiker, download, dan create image.</p>
+              <div class="field">
+                <label for="premium-number">Nomor WA</label>
+                <input id="premium-number" type="text" placeholder="contoh: 628123456789" />
+              </div>
+              <div class="btn-row">
+                <button id="btn-add-premium" class="btn primary" type="button">➕ Tambah</button>
+                <button id="btn-remove-premium" class="btn danger" type="button">➖ Hapus</button>
+              </div>
+              <div id="premium-message" class="info-box muted">Daftar premium akan muncul di bawah.</div>
+            </article>
+            <article class="card span-2 reveal">
+              <h3>Daftar User Premium</h3>
+              <div id="premium-list" class="info-box premium-list">Memuat...</div>
             </article>
           </div>
         </section>

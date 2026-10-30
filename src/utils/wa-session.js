@@ -119,7 +119,7 @@ export function restoreSessionFromBackupIfNeeded() {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
 
     const backupCreds = path.join(SESSION_BACKUP_DIR, 'creds.json');
-    if (fs.existsSync(backupCreds)) {
+    if (fs.existsSync(backupCreds) && fs.statSync(backupCreds).size > 20) {
         const n = copyDirContents(SESSION_BACKUP_DIR, SESSION_DIR);
         if (n > 0) {
             console.log(`\x1b[32m♻️  Session dipulihkan dari backup (${n} file)\x1b[0m`);
@@ -127,7 +127,7 @@ export function restoreSessionFromBackupIfNeeded() {
         }
     }
 
-    if (fs.existsSync(CREDS_SNAPSHOT)) {
+    if (fs.existsSync(CREDS_SNAPSHOT) && fs.statSync(CREDS_SNAPSHOT).size > 20) {
         fs.copyFileSync(CREDS_SNAPSHOT, CREDS_FILE);
         copyDirContents(SESSION_BACKUP_DIR, SESSION_DIR);
         console.log('\x1b[32m♻️  Session dipulihkan dari wa-creds.json\x1b[0m');

@@ -59,6 +59,7 @@ export async function handlePlayCommand({ sock, from, msg, args }) {
         } catch (e) {
             await sock.sendMessage(from, { text: `❌ Gagal menambahkan lagu.\n_${(e.message || 'error').slice(0, 120)}_` }, { quoted: msg });
         }
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
         return;
     }
 
@@ -87,6 +88,7 @@ export async function handlePlayCommand({ sock, from, msg, args }) {
         };
 
         await sock.sendMessage(from, { text: listText }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     } catch (e) {
         console.error('Play command error:', e);
         await sock.sendMessage(from, { text: '❌ Error saat mencari musik.' }, { quoted: msg });
@@ -102,6 +104,7 @@ export async function handleRadioCommand({ sock, from, msg }) {
             statusText: getRadioStatusText() + `\n\n${getDiscordRadioStatus()}`,
             quoted: msg
         });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     } catch (e) {
         console.error('Radio error:', e);
         await sock.sendMessage(from, { text: '❌ Gagal ambil info radio.' }, { quoted: msg });
@@ -132,6 +135,7 @@ export async function handleQueueCommand({ sock, from, msg }) {
         text += `_Tidak ada lagu berikutnya di antrian._\n`;
     }
     await sendWaRadioLink(sock, from, { statusText: text, quoted: msg });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }
 
 // ============================================================
@@ -146,6 +150,7 @@ export async function handleSkipCommand({ sock, from, msg }) {
         statusText: result.message,
         quoted: msg
     });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }
 
 // ============================================================
@@ -157,6 +162,7 @@ export async function handleStopCommand({ sock, from, msg, isAdmin }) {
     }
     clearRadioQueue();
     await sock.sendMessage(from, { text: '🛑 Radio dihentikan dan antrian dikosongkan.' }, { quoted: msg });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }
 
 // ============================================================
@@ -174,7 +180,9 @@ export async function handleLyricsCommand({ sock, from, msg, args }) {
 
     const result = await fetchLyrics(songQuery);
     if (result) {
-        return await sock.sendMessage(from, { text: result }, { quoted: msg });
+        await sock.sendMessage(from, { text: result }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
+        return;
     }
 
     await sock.sendMessage(from, {

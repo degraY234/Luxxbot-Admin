@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import fs from 'fs';
 import express from 'express';
 import { registerWaQrRoutes } from './src/services/wa-qr.js';
@@ -7,12 +8,34 @@ import { getWaHealth } from './src/wa-status.js';
 import { getSessionDiagnostics } from './src/utils/wa-session.js';
 import { getYoutubeCookiesStatus } from './src/utils/youtube-cookies.js';
 import { getPairLink } from './src/utils/startup-banner.js';
+import { applyLuxxAppCors } from './src/utils/app-cors.js';
+import { getPublicUrlFromRequest } from './src/utils/request-public-url.js';
 
 process.on('uncaughtException', (err) => {
     console.error('❌ uncaughtException (server tetap jalan):', err?.message || err);
 });
 process.on('unhandledRejection', (reason) => {
     console.error('❌ unhandledRejection (server tetap jalan):', reason);
+});
+process.on('SIGINT', async () => {
+    console.log('\x1b[31m🛑 Graceful shutdown...\x1b[0m');
+    try {
+        const { clearRadioQueue } = await import('./src/services/radio-server.js');
+        clearRadioQueue();
+    } catch (_) {}
+    try {
+        const { stopDiscordRadio } = await import('./src/services/discord-radio.js');
+        stopDiscordRadio?.();
+    } catch (_) {}
+    process.exit(0);
+});
+process.on('SIGTERM', async () => {
+    console.log('\x1b[31m🛑 SIGTERM received...\x1b[0m');
+    try {
+        const { clearRadioQueue } = await import('./src/services/radio-server.js');
+        clearRadioQueue();
+    } catch (_) {}
+    process.exit(0);
 });
 
 if (!fs.existsSync('./temp')) fs.mkdirSync('./temp', { recursive: true });
@@ -27,8 +50,25 @@ global.__luxxApp = app;
 global.__luxxRadioMounted = false;
 
 registerWaQrRoutes(app);
-app.get('/health', async (_req, res) => {
+
+// CORS middleware for health
+app.use((req, res, next) => {
+    if (req.path !== '/health') return next();
+    if (applyLuxxAppCors(req, res)) return;
+    next();
+});
+
+app.get('/health', async (req, res) => {
     let radio = null;
+    let publicUrl = getPublicUrlFromRequest(req);
+    if (publicUrl) {
+        try {
+            if (/localhost|127\.0\.0\.1/i.test(new URL(publicUrl).hostname)) publicUrl = null;
+        } catch {
+            publicUrl = null;
+        }
+    }
+    const localBase = `http://localhost:${PORT}`;
     try {
         if (global.__luxxRadioMounted) {
             const { radio: r } = await import('./src/services/radio-server.js');
@@ -36,17 +76,23 @@ app.get('/health', async (_req, res) => {
                 current: r.current?.title || null,
                 queue: r.queue.length,
                 isPreparing: r.isPreparing,
+                sessionActive: r.sessionActive,
                 lastPrepareError: r.lastPrepareError?.message || null
             };
         }
     } catch { /* radio belum load */ }
     const wa = getWaHealth();
     const session = getSessionDiagnostics();
+    const httpUp = true;
     res.json({
-        ok: wa.connected && wa.handlersReady,
+        ok: httpUp,
+        waOk: wa.connected && wa.handlersReady,
         uptime: Math.floor(process.uptime()),
         railway: isRailwayRuntime(),
         port: PORT,
+        publicUrl,
+        adminUrl: publicUrl ? `${publicUrl}/admin` : `${localBase}/admin`,
+        localAdminUrl: `${localBase}/admin`,
         pairUrl: getPairLink(),
         wa,
         session,
@@ -72,11 +118,20 @@ const server = app.listen(PORT, HOST, () => {
     printPairLinkBanner();
     bootRadioAndDiscord();
     bootWaOnly();
+    if (!isRailwayRuntime()) {
+        setTimeout(() => {
+            import('./src/utils/ensure-pm2-tunnel.js')
+                .then(({ ensurePm2Tunnel }) => ensurePm2Tunnel({ quiet: true }))
+                .catch(() => {});
+        }, 5000);
+    }
 });
 
 server.on('error', (err) => {
     console.error('❌ HTTP server error:', err?.message || err);
 });
+
+let publicUrlSyncTimer = null;
 
 async function bootRadioAndDiscord() {
     try {
@@ -89,6 +144,23 @@ async function bootRadioAndDiscord() {
             global.__luxxRadioMounted = true;
             console.log('\x1b[32m✅ Radio / admin / watch aktif\x1b[0m');
         }
+        const { syncPublicUrl } = await import('./src/utils/radio-url.js');
+        syncPublicUrl({ persist: true, quiet: false }).catch(() => {});
+        if (!publicUrlSyncTimer) {
+            publicUrlSyncTimer = setInterval(() => {
+                syncPublicUrl({ persist: true, quiet: true }).catch(() => {});
+            }, 120_000);
+        }
+        import('./src/utils/ytdlp-download.js')
+            .then((m) => {
+                const ytdlp = m.checkYtDlpAvailable?.();
+                if (ytdlp && !ytdlp.ok) {
+                    console.warn(`\x1b[33m⚠️ yt-dlp tidak ditemukan — radio !play gagal unduh. ${ytdlp.hint}\x1b[0m`);
+                } else if (ytdlp?.ok) {
+                    console.log(`\x1b[32m✅ yt-dlp: ${ytdlp.path}\x1b[0m`);
+                }
+            })
+            .catch(() => {});
         const { startDiscordRadio } = await import('./src/services/discord-radio.js');
         startDiscordRadio();
     } catch (e) {

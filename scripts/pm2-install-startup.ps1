@@ -3,38 +3,56 @@
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-$BootScript = Join-Path $Root 'scripts\pm2-boot.ps1'
+$BootCmd = Join-Path $Root 'scripts\pm2-boot.cmd'
+$BootVbs = Join-Path $Root 'scripts\pm2-boot-launch.vbs'
 
-Write-Host "=== LuxxBot PM2 Auto-Start (Windows) ===" -ForegroundColor Cyan
+function Set-EnvFlag($name, $value) {
+    $envFile = Join-Path $Root '.env'
+    if (-not (Test-Path $envFile)) { return }
+    $lines = Get-Content $envFile -Encoding UTF8
+    $found = $false
+    $out = foreach ($line in $lines) {
+        if ($line -match "^\s*$name\s*=") {
+            $found = $true
+            "$name=$value"
+        } else {
+            $line
+        }
+    }
+    if (-not $found) { $out += "$name=$value" }
+    Set-Content -Path $envFile -Value $out -Encoding UTF8
+}
+
+Write-Host "=== LuxxBot PM2 Auto-Start (Windows, tanpa CMD) ===" -ForegroundColor Cyan
 Write-Host "Folder: $Root"
 
 Set-Location $Root
 
+# Hapus entri PM2 bawaan — cegah startup ganda + jendela CMD dari pm2_resurrect.cmd
 $hasStartup = Get-Command pm2-startup -ErrorAction SilentlyContinue
-if (-not $hasStartup) {
-    Write-Host "Menginstall pm2-windows-startup (global)..." -ForegroundColor Yellow
-    npm install -g pm2-windows-startup
+if ($hasStartup) {
+    Write-Host "[1/4] Hapus pm2-startup lama (hindari ganda)..." -ForegroundColor Yellow
+    pm2-startup uninstall 2>$null
 }
 
-Write-Host "[1/3] PM2 resurrect saat login..." -ForegroundColor Yellow
-pm2-startup install
-
-Write-Host "[2/3] Task login: selalu nyalakan luxx (kecuali pm2 delete)..." -ForegroundColor Yellow
+Write-Host "[2/4] Task login tersembunyi (VBS + node)..." -ForegroundColor Yellow
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $taskName = 'LuxxBot-PM2-Boot'
-$cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$BootScript`""
+$cmd = "wscript.exe `"$BootVbs`" `"$BootCmd`""
 
 Set-ItemProperty -Path $runKey -Name $taskName -Value $cmd -Type String
 
-Write-Host "[3/3] Daftarkan luxx + simpan..." -ForegroundColor Yellow
+Write-Host "[3/4] Aktifkan LUXX_AUTO_START di .env..." -ForegroundColor Yellow
+Set-EnvFlag 'LUXX_AUTO_START' '1'
+Set-EnvFlag 'LUXX_AUTO_TUNNEL' '1'
+
+Write-Host "[4/4] Daftarkan luxx + simpan..." -ForegroundColor Yellow
 pm2 start ecosystem.config.cjs --update-env
 pm2 save
 
 Write-Host ""
-Write-Host "Selesai." -ForegroundColor Green
-Write-Host "  pm2 stop luxx   = mati sementara (hidup lagi setelah restart/login)"
-Write-Host "  pm2 delete luxx = hilang permanen dari PM2"
-Write-Host "  Link !radio     = jalankan manual: scripts/radio-tunnel.ps1"
-Write-Host "  npm run pm2:start = nyalakan manual"
+Write-Host "Selesai — luxx + luxx-tunnel hidup otomatis setelah login/restart." -ForegroundColor Green
+Write-Host "  npm run pm2:disable-startup = matikan auto-start (disarankan jika ganggu)"
+Write-Host "  npm run pm2:start = nyalakan manual tanpa auto-start"
 Write-Host ""
 Write-Host "Cek: pm2 status" -ForegroundColor Cyan

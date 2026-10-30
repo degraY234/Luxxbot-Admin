@@ -6,13 +6,14 @@ import { configureFluentFfmpeg } from '../utils/ffmpeg-path.js';
 
 configureFluentFfmpeg(ffmpeg);
 import { downloadYoutubeToMp3 } from '../utils/ytdlp-download.js';
-import { enrichTrackMeta, formatDurationSec } from '../utils/youtube-meta.js';
+import { enrichTrackMeta, formatDurationSec, youtubeThumbnail } from '../utils/youtube-meta.js';
 import { mountAdminApi } from './admin-api.js';
 import { mountWatchServer } from './watch-server.js';
 import { mountPortfolioServer } from './portfolio-server.js';
-import { getRadioPublicUrl as resolvePublicUrl } from '../utils/radio-url.js';
+import { getRadioPublicUrl as resolvePublicUrl, getLanIPv4, extractTunnelUrlsFromLogs } from '../utils/radio-url.js';
 import { getListenPort } from '../utils/listen-port.js';
 import { registerWaQrRoutes } from './wa-qr.js';
+import { applyLuxxAppCors } from '../utils/app-cors.js';
 import {
     getCachedLyricsForTrack,
     getLyricsPrefetchStatus,
@@ -34,16 +35,25 @@ function getDiscordRadioBlock() {
     return { enabled: true, inVoice: d.inVoice, voiceChannel: d.voiceChannel };
 }
 
+function requestDiscordSync(reason, delayMs = 500) {
+    discordRadioApi?.requestDiscordRadioSync?.(reason, delayMs);
+}
+
 const RADIO_PORT = getListenPort();
 const RADIO_DIR = './temp/radio';
 
 let trackIdCounter = 0;
 let serverStarted = false;
+const playbackHistory = [];
+const playerModes = { shuffle: false, repeat: 'off' };
+let lastFinishedTrack = null;
 let advanceTimer = null;
 let radioGeneration = 0;
 let playbackSeq = 0;
 let loadMutex = Promise.resolve();
 let activeMp3Path = null;
+/** @type {Map<number, Promise<void>>} */
+const prefetchJobs = new Map();
 const trackChangeListeners = new Set();
 const playbackStateListeners = new Set();
 
@@ -78,7 +88,11 @@ function pruneOldRadioFiles(keepPath = null) {
         for (const name of fs.readdirSync(RADIO_DIR)) {
             const full = path.join(RADIO_DIR, name);
             if (full === keepPath) continue;
-            if (!/^(play-|parked-|track-|current\.mp3)/.test(name)) continue;
+            if (/\.(webm|part)$/i.test(name)) {
+                try { fs.unlinkSync(full); } catch { /* ignore */ }
+                continue;
+            }
+            if (!/^(play-|parked-|track-|prefetch-|current\.mp3)/.test(name)) continue;
             try {
                 const age = now - fs.statSync(full).mtimeMs;
                 if (age > 30 * 60 * 1000) parkMp3File(full);
@@ -116,6 +130,8 @@ function bumpRadioGeneration() {
 function resetPlayPipeline() {
     bumpRadioGeneration();
     radio.isPreparing = false;
+    prefetchJobs.clear();
+    abortActiveYtDlpDownload();
 }
 
 function withLoadLock(fn) {
@@ -124,11 +140,12 @@ function withLoadLock(fn) {
     return run;
 }
 
-function stopCurrentPlayback() {
+function stopCurrentPlayback({ keepSession = false } = {}) {
     clearAdvanceTimer();
     radio.current = null;
     radio.playbackActive = false;
     radio.paused = false;
+    if (!keepSession) radio.sessionActive = false;
     if (activeMp3Path) {
         parkMp3File(activeMp3Path);
         activeMp3Path = null;
@@ -177,6 +194,8 @@ export const radio = {
     current: null,
     isPreparing: false,
     playbackActive: false,
+    /** True setelah Putar pertama — lagu berikutnya auto-advance + prefetch antrian */
+    sessionActive: false,
     paused: false,
     listeners: 0,
     lastPrepareError: null,
@@ -189,6 +208,10 @@ export function isRadioPlaying() {
 
 export function isRadioPaused() {
     return Boolean(radio.paused && isRadioPlaying());
+}
+
+export function isRadioSessionActive() {
+    return Boolean(radio.sessionActive);
 }
 
 function getPlaybackPositionSec() {
@@ -324,6 +347,7 @@ export function resumeRadioPlayback() {
     radio.current.preparedAt = Date.now() - positionSec * 1000;
     delete radio.current.pausedPositionSec;
     radio.paused = false;
+    radio.sessionActive = true;
     playbackSeq += 1;
     scheduleAutoAdvance();
     console.log(`📻 Radio lanjut @ ${formatDurationSec(positionSec)}`);
@@ -406,7 +430,32 @@ async function handleTrackEnded() {
     if (radio.isPreparing && radio.current) return;
     clearAdvanceTimer();
     console.log('📻 Radio: lagu selesai');
-    stopCurrentPlayback();
+    const finished = radio.current ? { ...radio.current } : null;
+    if (finished) lastFinishedTrack = finished;
+    const hadSession = radio.sessionActive;
+    stopCurrentPlayback({ keepSession: hadSession });
+
+    if (hadSession && playerModes.repeat === 'one' && finished) {
+        try {
+            const entry = await addTrackToRadio(finished, finished.requestedBy || 'Web');
+            radio.queue.unshift(entry);
+            syncGlobalQueue();
+            await autoPlayNextTrack('repeat-one');
+            return;
+        } catch (e) {
+            console.error('📻 Radio repeat-one:', e?.message || e);
+        }
+    }
+
+    if (hadSession && playerModes.repeat === 'all' && finished) {
+        try {
+            await addTrackToRadio(finished, finished.requestedBy || 'Web');
+        } catch (e) {
+            console.error('📻 Radio repeat-all:', e?.message || e);
+        }
+    }
+
+    if (!hadSession || !radio.queue.length) return;
     try {
         await autoPlayNextTrack('lagu selesai');
     } catch (e) {
@@ -422,29 +471,211 @@ export function getRadioListenUrl() {
     return `${getRadioPublicUrl()}/portfolio/radio`;
 }
 
-const PREPARE_TIMEOUT_BASE_MS = Number(process.env.RADIO_PREPARE_TIMEOUT_MS || 300_000);
-const PREPARE_TIMEOUT_MAX_MS = Number(process.env.RADIO_PREPARE_TIMEOUT_MAX_MS || 1_800_000);
+const MAX_RADIO_DURATION_SEC = Number(process.env.RADIO_MAX_DURATION_SEC || 6000);
+
+const PREPARE_TIMEOUT_BASE_MS = Number(process.env.RADIO_PREPARE_TIMEOUT_MS || 120_000);
+const PREPARE_TIMEOUT_MAX_MS = Number(process.env.RADIO_PREPARE_TIMEOUT_MAX_MS || 3_600_000);
+
+function isTrackTooLong(track = {}) {
+    const dur = track.durationSec || 0;
+    return dur > MAX_RADIO_DURATION_SEC;
+}
+
+function longTrackMessage(track = {}) {
+    return `Lagu terlalu panjang (${formatDurationSec(track.durationSec) || '?'}) — maks ${formatDurationSec(MAX_RADIO_DURATION_SEC)}`;
+}
 
 function getPrepareTimeoutMs(track = {}) {
-    const dur = track.durationSec || 0;
-    const scaled = dur > 0 ? dur * 2500 + 180_000 : PREPARE_TIMEOUT_BASE_MS;
-    return Math.min(PREPARE_TIMEOUT_MAX_MS, Math.max(PREPARE_TIMEOUT_BASE_MS, scaled));
+    const dur = Math.min(track.durationSec || 0, MAX_RADIO_DURATION_SEC);
+    const scaled = dur > 0 ? dur * 800 + 90_000 : PREPARE_TIMEOUT_BASE_MS;
+    return Math.min(PREPARE_TIMEOUT_MAX_MS, Math.max(90_000, scaled));
+}
+
+function getPrefetchPath(track) {
+    return path.join(RADIO_DIR, `prefetch-${track.id}.mp3`);
+}
+
+function isTrackPrefetched(track) {
+    const p = track.prefetchPath || getPrefetchPath(track);
+    try {
+        return fs.existsSync(p) && fs.statSync(p).size > 4096;
+    } catch {
+        return false;
+    }
+}
+
+async function downloadTrackToMp3(track, destPath) {
+    ensureDirs();
+    const prepareTimeoutMs = getPrepareTimeoutMs(track);
+    await Promise.race([
+        downloadYoutubeToMp3(track.url, destPath, { abortable: true }),
+        new Promise((_, reject) => {
+            setTimeout(
+                () => reject(new Error(`Download radio timeout (${Math.round(prepareTimeoutMs / 1000)}s)`)),
+                prepareTimeoutMs
+            );
+        })
+    ]);
+}
+
+function clearTrackPrefetch(track) {
+    if (!track) return;
+    prefetchJobs.delete(track.id);
+    const p = track.prefetchPath || getPrefetchPath(track);
+    if (fs.existsSync(p)) {
+        try { fs.unlinkSync(p); } catch { /* ignore */ }
+    }
+    track.prefetchReady = false;
+    track.prefetchPath = null;
+    track.prefetchState = 'pending';
+}
+
+async function prefetchSingleTrack(track) {
+    if (!radio.sessionActive) return;
+    if (isTrackPrefetched(track)) {
+        track.prefetchReady = true;
+        track.prefetchPath = track.prefetchPath || getPrefetchPath(track);
+        track.prefetchState = 'ready';
+        return;
+    }
+    if (track.prefetchState === 'downloading' && prefetchJobs.has(track.id)) {
+        return prefetchJobs.get(track.id);
+    }
+
+    const dest = getPrefetchPath(track);
+    track.prefetchState = 'downloading';
+    const job = (async () => {
+        try {
+            await downloadTrackToMp3(track, dest);
+            if (!radio.sessionActive) return;
+            if (!radio.queue.some((t) => t.id === track.id)) {
+                try { fs.unlinkSync(dest); } catch { /* ignore */ }
+                return;
+            }
+            track.prefetchPath = dest;
+            track.prefetchReady = true;
+            track.prefetchState = 'ready';
+            console.log(`📻 Prefetch siap: ${track.title} (${radio.queue.length} di antrian)`);
+            emitPlaybackStateChange();
+        } catch (e) {
+            track.prefetchState = 'failed';
+            if (fs.existsSync(dest)) try { fs.unlinkSync(dest); } catch { /* ignore */ }
+            console.warn(`📻 Prefetch gagal: ${track.title} — ${e.message}`);
+        } finally {
+            prefetchJobs.delete(track.id);
+        }
+    })();
+
+    prefetchJobs.set(track.id, job);
+    return job;
+}
+
+const PREFETCH_AHEAD = Math.max(1, Math.min(4, Number(process.env.RADIO_PREFETCH_AHEAD || 3)));
+
+/** Unduh beberapa lagu berikutnya saja — hindari beban berat saat antrian panjang */
+function scheduleQueuePrefetch() {
+    if (!radio.sessionActive) return;
+    if (!isRadioPlaying() && !radio.isPreparing) return;
+
+    const start = isRadioPlaying() ? 0 : 1;
+    const tracks = radio.queue.slice(start, start + PREFETCH_AHEAD);
+    for (const track of tracks) {
+        if (isTrackTooLong(track)) continue;
+        void prefetchSingleTrack(track);
+    }
+}
+
+async function validateDownloadedAudio(filePath, track = {}) {
+    let stat;
+    try {
+        stat = fs.statSync(filePath);
+    } catch {
+        throw new Error('File audio tidak ditemukan setelah unduhan');
+    }
+    if (stat.size < 4096) {
+        throw new Error('File audio terlalu kecil — unduhan gagal');
+    }
+    const maxBytes = Number(process.env.RADIO_MAX_FILE_BYTES || 360_000_000);
+    if (stat.size > maxBytes) {
+        throw new Error(
+            `File terlalu besar (${Math.round(stat.size / 1e6)}MB) — kemungkinan video panjang, bukan lagu`
+        );
+    }
+    const dur = await getMp3DurationSec(filePath);
+    if (dur > MAX_RADIO_DURATION_SEC) {
+        throw new Error(longTrackMessage({ durationSec: dur }));
+    }
+    const expected = Number(track.durationSec) || 0;
+    if (expected >= 30 && dur > expected * 2 + 180) {
+        throw new Error(
+            `Durasi unduhan (${formatDurationSec(dur)}) tidak cocok metadata (${formatDurationSec(expected)})`
+        );
+    }
+    return dur;
+}
+
+async function activateTrackFromFile(track, sourcePath, gen) {
+    if (gen !== radioGeneration) return false;
+    if (!fs.existsSync(sourcePath) || fs.statSync(sourcePath).size < 4096) return false;
+
+    let fileDuration;
+    try {
+        fileDuration = await validateDownloadedAudio(sourcePath, track);
+    } catch (e) {
+        try { fs.unlinkSync(sourcePath); } catch { /* ignore */ }
+        throw e;
+    }
+
+    if (activeMp3Path) parkMp3File(activeMp3Path);
+
+    const playPath = promoteTmpToPlayFile(sourcePath, gen, track.id);
+    if (gen !== radioGeneration) {
+        parkMp3File(playPath);
+        return false;
+    }
+
+    activeMp3Path = playPath;
+    pruneOldRadioFiles(playPath);
+
+    const durationSec = fileDuration || track.durationSec || 0;
+    radio.playbackActive = true;
+    radio.paused = false;
+    playbackSeq += 1;
+    if (radio.current?.title) {
+        playbackHistory.unshift({
+            id: radio.current.id,
+            title: radio.current.title,
+            author: radio.current.author,
+            requestedBy: radio.current.requestedBy,
+            thumbnail: radio.current.thumbnail,
+            videoId: radio.current.videoId,
+            url: radio.current.url,
+            duration: radio.current.duration,
+            durationSec: radio.current.durationSec
+        });
+        if (playbackHistory.length > 25) playbackHistory.length = 25;
+    }
+    radio.current = {
+        ...track,
+        durationSec,
+        duration: formatDurationSec(durationSec) || track.duration || '-',
+        preparedAt: Date.now(),
+        filePath: playPath,
+        prefetchReady: false,
+        prefetchPath: null,
+        prefetchState: 'played'
+    };
+    emitTrackChange();
+    scheduleAutoAdvance();
+    scheduleQueuePrefetch();
+    return true;
 }
 
 async function prepareTrack(track, gen) {
     ensureDirs();
     const tmpPath = path.join(RADIO_DIR, `track-${track.id}.mp3`);
     try {
-        const prepareTimeoutMs = getPrepareTimeoutMs(track);
-        await Promise.race([
-            downloadYoutubeToMp3(track.url, tmpPath),
-            new Promise((_, reject) => {
-                setTimeout(
-                    () => reject(new Error(`Download radio timeout (${Math.round(prepareTimeoutMs / 1000)}s)`)),
-                    prepareTimeoutMs
-                );
-            })
-        ]);
+        await downloadTrackToMp3(track, tmpPath);
     } catch (e) {
         if (fs.existsSync(tmpPath)) try { fs.unlinkSync(tmpPath); } catch (_) {}
         throw e;
@@ -455,32 +686,7 @@ async function prepareTrack(track, gen) {
         return false;
     }
 
-    if (activeMp3Path) parkMp3File(activeMp3Path);
-
-    const playPath = promoteTmpToPlayFile(tmpPath, gen, track.id);
-    if (gen !== radioGeneration) {
-        parkMp3File(playPath);
-        return false;
-    }
-
-    activeMp3Path = playPath;
-    pruneOldRadioFiles(playPath);
-
-    const fileDuration = await getMp3DurationSec(playPath);
-    const durationSec = fileDuration || track.durationSec || 0;
-    radio.playbackActive = true;
-    radio.paused = false;
-    playbackSeq += 1;
-    radio.current = {
-        ...track,
-        durationSec,
-        duration: formatDurationSec(durationSec) || track.duration || '-',
-        preparedAt: Date.now(),
-        filePath: playPath
-    };
-    emitTrackChange();
-    scheduleAutoAdvance();
-    return true;
+    return activateTrackFromFile(track, tmpPath, gen);
 }
 
 async function startQueueHead(gen) {
@@ -495,11 +701,38 @@ async function startQueueHead(gen) {
 
     radio.isPreparing = true;
     radio.lastPrepareError = null;
+
+    while (radio.queue.length && isTrackTooLong(radio.queue[0])) {
+        const skipped = radio.queue.shift();
+        syncGlobalQueue();
+        clearTrackPrefetch(skipped);
+        radio.lastPrepareError = { title: skipped.title, message: longTrackMessage(skipped), at: Date.now() };
+        console.warn(`📻 Lewati terlalu panjang: ${skipped.title} (${skipped.durationSec}s)`);
+    }
+    if (!radio.queue.length) {
+        radio.isPreparing = false;
+        return false;
+    }
+
     const track = radio.queue[0];
 
     try {
-        console.log(`📻 Radio: memuat ${track.title}... (antrian: ${radio.queue.length})`);
-        const ok = await prepareTrack(track, gen);
+        if (prefetchJobs.has(track.id)) {
+            try { await prefetchJobs.get(track.id); } catch { /* unduh ulang di bawah */ }
+        }
+
+        const prefetchPath = isTrackPrefetched(track)
+            ? (track.prefetchPath || getPrefetchPath(track))
+            : null;
+
+        let ok;
+        if (prefetchPath) {
+            console.log(`📻 Radio: langsung putar ${track.title} (prefetch)`);
+            ok = await activateTrackFromFile(track, prefetchPath, gen);
+        } else {
+            console.log(`📻 Radio: memuat ${track.title}... (antrian: ${radio.queue.length})`);
+            ok = await prepareTrack(track, gen);
+        }
         if (!ok || gen !== radioGeneration) {
             console.log(`📻 Radio: dibatalkan — ${track.title}`);
             return false;
@@ -588,11 +821,18 @@ export async function startRadioPlayback({ autoAdvance = false } = {}) {
         };
     }
 
+    if (!autoAdvance) radio.sessionActive = true;
+    scheduleQueuePrefetch();
     return withLoadLock(() => playNextInQueue(autoAdvance ? 'auto' : 'manual'));
 }
 
 export async function addTrackToRadio(track, requestedBy = 'user') {
     const meta = enrichTrackMeta(track);
+    if (isTrackTooLong(meta)) {
+        const err = new Error(longTrackMessage(meta));
+        err.code = 'TRACK_TOO_LONG';
+        throw err;
+    }
     const entry = {
         id: nextId(),
         title: meta.title || 'Unknown',
@@ -602,17 +842,19 @@ export async function addTrackToRadio(track, requestedBy = 'user') {
         thumbnail: meta.thumbnail,
         videoId: meta.videoId,
         author: meta.author?.name || meta.author || 'Unknown',
-        requestedBy
+        requestedBy,
+        prefetchReady: false,
+        prefetchPath: null,
+        prefetchState: 'pending'
     };
     radio.queue.push(entry);
     scheduleLyricsPrefetch(entry);
     syncGlobalQueue();
     console.log(`📻 Antrian +1: ${entry.title} (total ${radio.queue.length})`);
-    if (!isRadioPlaying() && !radio.isPreparing) {
-        void autoPlayNextTrack('antrian baru').catch((e) => {
-            console.error('📻 Radio auto-play:', e?.message || e);
-        });
+    if (radio.sessionActive && (isRadioPlaying() || radio.isPreparing)) {
+        scheduleQueuePrefetch();
     }
+    emitPlaybackStateChange();
     return entry;
 }
 
@@ -637,21 +879,34 @@ export async function skipRadioTrack() {
         }
 
         const wasPlaying = isRadioPlaying();
-        stopCurrentPlayback();
+        const keepSession = radio.sessionActive || wasPlaying;
+        if (keepSession) radio.sessionActive = true;
+        stopCurrentPlayback({ keepSession });
 
         if (wasPlaying) {
             /* lagu yang diputar sudah di-shift saat startQueueHead — tidak perlu shift lagi */
         } else if (wasPreparingOnly && radio.queue.length) {
+            const skippedTrack = radio.queue[0];
+            clearTrackPrefetch(skippedTrack);
             radio.queue.shift();
             syncGlobalQueue();
         } else if (radio.queue.length) {
+            if (playerModes.shuffle && radio.queue.length > 1) {
+                const idx = Math.floor(Math.random() * radio.queue.length);
+                if (idx > 0) {
+                    const [pick] = radio.queue.splice(idx, 1);
+                    radio.queue.unshift(pick);
+                }
+            }
+            const skippedTrack = radio.queue[0];
+            clearTrackPrefetch(skippedTrack);
             radio.queue.shift();
             syncGlobalQueue();
         }
 
         const nextTitle = radio.queue[0]?.title;
         console.log(`📻 Skip selesai · sisa antrian ${radio.queue.length}${nextTitle ? ` · berikutnya: ${nextTitle}` : ''}`);
-        if (radio.queue.length) {
+        if (radio.queue.length && radio.sessionActive) {
             try {
                 await playNextInQueue('skip');
             } catch (e) {
@@ -670,9 +925,92 @@ export async function skipRadioTrack() {
     });
 }
 
+export function seekRadioPlayback(positionSec) {
+    if (!isRadioPlaying()) return { ok: false, error: 'Tidak ada lagu aktif' };
+    const dur = radio.current.durationSec || 0;
+    const pos = dur > 0
+        ? Math.max(0, Math.min(Math.max(0, dur - 0.5), Number(positionSec) || 0))
+        : Math.max(0, Number(positionSec) || 0);
+    radio.current.preparedAt = Date.now() - pos * 1000;
+    if (isRadioPaused()) radio.current.pausedPositionSec = pos;
+    playbackSeq += 1;
+    emitPlaybackStateChange();
+    scheduleAutoAdvance();
+    return {
+        ok: true,
+        positionSec: pos,
+        playbackSeq,
+        streamEpoch: radioGeneration
+    };
+}
+
+export function getPlayerModes() {
+    return { ...playerModes };
+}
+
+export function setPlayerModes({ shuffle, repeat } = {}) {
+    if (typeof shuffle === 'boolean') playerModes.shuffle = shuffle;
+    if (repeat === 'off' || repeat === 'one' || repeat === 'all') playerModes.repeat = repeat;
+    return { ...playerModes };
+}
+
+export async function prevRadioTrack() {
+    if (!playbackHistory.length) {
+        return { ok: false, error: 'Belum ada lagu sebelumnya' };
+    }
+    const prev = playbackHistory.shift();
+    return withLoadLock(async () => {
+        resetPlayPipeline();
+        const keepSession = radio.sessionActive || isRadioPlaying();
+        stopCurrentPlayback({ keepSession });
+        radio.sessionActive = true;
+        const entry = await addTrackToRadio(prev, prev.requestedBy || 'Web');
+        radio.queue = [entry, ...radio.queue.filter((t) => t.id !== entry.id)];
+        syncGlobalQueue();
+        const gen = radioGeneration;
+        await startQueueHead(gen);
+        requestDiscordSync('radio-prev', 600);
+        return {
+            ok: true,
+            message: `⏮️ ${prev.title}`,
+            queueLength: radio.queue.length,
+            streamEpoch: radioGeneration
+        };
+    });
+}
+
+export function removeQueueTrack(id) {
+    const idx = radio.queue.findIndex((t) => t.id === id);
+    if (idx < 0) return { ok: false, error: 'Tidak ada di antrian' };
+    const [removed] = radio.queue.splice(idx, 1);
+    clearTrackPrefetch(removed);
+    syncGlobalQueue();
+    return { ok: true, removed, queueLength: radio.queue.length };
+}
+
+export function reorderQueue(ids = []) {
+    const order = ids.map(Number).filter(Boolean);
+    if (!order.length) return { ok: false, error: 'ids wajib' };
+    const byId = new Map(radio.queue.map((t) => [t.id, t]));
+    const reordered = [];
+    for (const id of order) {
+        const t = byId.get(id);
+        if (t) {
+            reordered.push(t);
+            byId.delete(id);
+        }
+    }
+    for (const t of byId.values()) reordered.push(t);
+    radio.queue = reordered;
+    syncGlobalQueue();
+    return { ok: true, queueLength: radio.queue.length };
+}
+
 export function clearRadioQueue() {
+    for (const track of radio.queue) clearTrackPrefetch(track);
     resetPlayPipeline();
     radio.queue = [];
+    radio.sessionActive = false;
     stopCurrentPlayback();
     console.log('📻 Antrian dikosongkan (clear)');
 }
@@ -683,7 +1021,7 @@ export function getRadioStatusText() {
         : radio.isPreparing
             ? '⏳ Sedang memuat lagu...'
             : radio.queue.length
-                ? `⏳ *Memuat:*\n${radio.queue[0].title}\n👤 ${radio.queue[0].author}\n🙋 ${radio.queue[0].requestedBy}`
+                ? `📋 *Antrian:*\n${radio.queue[0].title}\n👤 ${radio.queue[0].author}\n🙋 ${radio.queue[0].requestedBy}\n_Klik Putar di player untuk mulai_`
                 : '_Belum ada lagu di antrian._';
 
     const queueLines = radio.queue.length
@@ -711,6 +1049,28 @@ export function attachRadioServer(app) {
     mountWatchServer(app);
     mountPortfolioServer(app);
 
+    app.get('/luxx-bot-url.json', (req, res) => {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        if (applyLuxxAppCors(req, res)) return;
+        const manifest = path.join(process.cwd(), 'portfolio', 'luxx-bot-url.json');
+        if (fs.existsSync(manifest)) {
+            return res.sendFile(manifest);
+        }
+        const publicUrl = resolvePublicUrl().replace(/\/$/, '');
+        const lan = getLanIPv4();
+        const lanUrl = lan ? `http://${lan}:${getListenPort()}` : null;
+        const recentUrls = extractTunnelUrlsFromLogs()
+            .map((u) => u.replace(/\/$/, ''))
+            .filter((u) => u && !/localhost|127\.0\.0\.1/i.test(u))
+            .slice(0, 10);
+        res.json({
+            publicUrl: publicUrl || null,
+            lanUrl,
+            recentUrls: [...new Set([publicUrl, ...recentUrls].filter(Boolean))].slice(0, 10),
+            updatedAt: new Date().toISOString()
+        });
+    });
+
     app.get('/', (req, res) => {
         res.redirect(302, '/admin');
     });
@@ -725,27 +1085,8 @@ export function attachRadioServer(app) {
         });
     });
 
-    function applyRadioCors(req, res) {
-        const origin = req.headers.origin;
-        if (origin) {
-            res.setHeader('Access-Control-Allow-Origin', origin);
-            res.setHeader('Access-Control-Allow-Credentials', 'true');
-            res.setHeader('Vary', 'Origin');
-        } else {
-            res.setHeader('Access-Control-Allow-Origin', '*');
-        }
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-        res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-        if (req.method === 'OPTIONS') {
-            res.status(204).end();
-            return true;
-        }
-        return false;
-    }
-
     app.use('/radio', (req, res, next) => {
-        if (applyRadioCors(req, res)) return;
+        if (applyLuxxAppCors(req, res)) return;
         next();
     });
 
@@ -802,6 +1143,7 @@ export function attachRadioServer(app) {
 
     app.post('/radio/api/play', async (req, res) => {
         const result = await handleRadioPlayRequest();
+        requestDiscordSync('radio-play', 800);
         res.json({
             ...result,
             queueLength: radio.queue.length,
@@ -813,6 +1155,7 @@ export function attachRadioServer(app) {
 
     app.post('/radio/api/pause', (req, res) => {
         const result = pauseRadioPlayback();
+        requestDiscordSync('radio-pause', 200);
         res.json({
             ...result,
             queueLength: radio.queue.length,
@@ -822,12 +1165,137 @@ export function attachRadioServer(app) {
 
     app.post('/radio/api/resume', (req, res) => {
         const result = resumeRadioPlayback();
+        requestDiscordSync('radio-resume', 400);
         res.json({
             ...result,
             queueLength: radio.queue.length,
             hasStream: Boolean(getActiveMp3Path() && isRadioPlaying()),
             playback: getRadioPlayback()
         });
+    });
+
+    app.get('/radio/api/config', (_req, res) => {
+        const publicUrl = getRadioPublicUrl().replace(/\/$/, '');
+        const recentUrls = extractTunnelUrlsFromLogs()
+            .map((u) => u.replace(/\/$/, ''))
+            .filter((u) => u && !/localhost|127\.0\.0\.1/i.test(u))
+            .slice(0, 10);
+        const lan = getLanIPv4();
+        const lanUrl = lan ? `http://${lan}:${getListenPort()}` : null;
+
+        res.json({
+            ok: true,
+            publicUrl: /localhost|127\.0\.0\.1/i.test(publicUrl) ? null : publicUrl,
+            lanUrl,
+            adminUrl: publicUrl ? `${publicUrl}/admin` : null,
+            recentUrls,
+            serverTime: Date.now()
+        });
+    });
+
+    app.get('/radio/api/search', async (req, res) => {
+        try {
+            const { searchYoutubeTracks } = await import('../utils/radio-yt-search.js');
+            const { query, results } = await searchYoutubeTracks(req.query.q);
+            res.json({ ok: true, query, results });
+        } catch (e) {
+            res.status(400).json({ ok: false, error: e.message || 'Pencarian gagal' });
+        }
+    });
+
+
+    app.post('/radio/api/queue/play-id', async (req, res) => {
+        const id = Number(req.body?.id);
+        if (!id) {
+            return res.status(400).json({ ok: false, error: 'ID lagu wajib.' });
+        }
+        const idx = radio.queue.findIndex((t) => t.id === id);
+        if (idx < 0) {
+            return res.status(404).json({ ok: false, error: 'Lagu tidak ada di antrian.' });
+        }
+        if (idx > 0) {
+            const [track] = radio.queue.splice(idx, 1);
+            radio.queue.unshift(track);
+            syncGlobalQueue();
+            scheduleQueuePrefetch();
+        }
+        const result = await handleRadioPlayRequest();
+        requestDiscordSync('radio-play', 800);
+        res.json({
+            ok: true,
+            message: `"${radio.queue[0]?.title || 'lagu'}" diputar.`,
+            play: result,
+            queueLength: radio.queue.length,
+            isPreparing: radio.isPreparing,
+            paused: isRadioPaused(),
+            hasStream: Boolean(getActiveMp3Path() && isRadioPlaying())
+        });
+    });
+
+    const recentQueueAdds = new Map();
+
+    app.post('/radio/api/queue/add', async (req, res) => {
+        const body = req.body || {};
+        const url = String(body.url || '').trim();
+        if (!url) {
+            return res.status(400).json({ ok: false, error: 'URL lagu wajib.' });
+        }
+        const who = String(body.requestedBy || body.username || 'Web').trim().slice(0, 48) || 'Web';
+        const dedupeKey = `${url}|${Boolean(body.playNow)}|${Boolean(body.playNext)}`;
+        const prev = recentQueueAdds.get(dedupeKey);
+        if (prev && Date.now() - prev.at < 2500) {
+            return res.json({
+                ok: true,
+                message: `"${prev.entry.title}" sudah di antrian.`,
+                track: prev.entry,
+                queueLength: radio.queue.length,
+                deduped: true
+            });
+        }
+        try {
+            const entry = await addTrackToRadio({
+                title: body.title || 'Unknown',
+                url,
+                videoId: body.videoId,
+                thumbnail: body.thumbnail,
+                author: body.author,
+                seconds: body.seconds,
+                duration: body.duration
+            }, who);
+            if (body.playNext && !body.playNow) {
+                radio.queue.pop();
+                radio.queue.unshift(entry);
+                syncGlobalQueue();
+            }
+            let playResult = null;
+            if (body.playNow) {
+                if (radio.queue.length > 1) {
+                    const idx = radio.queue.findIndex((t) => t.id === entry.id);
+                    if (idx > 0) {
+                        const [t] = radio.queue.splice(idx, 1);
+                        radio.queue.unshift(t);
+                        syncGlobalQueue();
+                    }
+                }
+                playResult = await handleRadioPlayRequest();
+            }
+            recentQueueAdds.set(dedupeKey, { at: Date.now(), entry });
+            if (recentQueueAdds.size > 80) {
+                const cutoff = Date.now() - 10_000;
+                for (const [k, v] of recentQueueAdds) {
+                    if (v.at < cutoff) recentQueueAdds.delete(k);
+                }
+            }
+            res.json({
+                ok: true,
+                message: body.playNow ? `"${entry.title}" diputar.` : `"${entry.title}" masuk antrian.`,
+                track: entry,
+                play: playResult,
+                queueLength: radio.queue.length
+            });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message || 'Gagal menambah' });
+        }
     });
 
     app.get('/radio/api/now', (req, res) => {
@@ -838,15 +1306,21 @@ export function attachRadioServer(app) {
             ? { ...getCachedLyricsForTrack(lyricsTrack), trackId: lyricsTrack.id }
             : { found: false, loading: false, lyrics: null, trackId: null };
 
-        const mapTrack = (t) => t ? {
-            id: t.id,
-            title: t.title,
-            author: t.author,
-            requestedBy: t.requestedBy,
-            thumbnail: t.thumbnail,
-            duration: t.duration,
-            durationSec: t.durationSec
-        } : null;
+        const mapTrack = (t) => {
+            if (!t) return null;
+            const e = enrichTrackMeta(t);
+            return {
+                id: e.id,
+                title: e.title,
+                author: e.author,
+                requestedBy: e.requestedBy,
+                thumbnail: e.thumbnail || youtubeThumbnail(e.url, e.videoId),
+                videoId: e.videoId,
+                url: e.url,
+                duration: e.duration,
+                durationSec: e.durationSec
+            };
+        };
 
         res.json({
             current: playing ? mapTrack(radio.current) : null,
@@ -854,16 +1328,24 @@ export function attachRadioServer(app) {
             playbackActive: playing,
             paused: isRadioPaused(),
             waitingPlay: Boolean(!playing && radio.queue.length),
+            sessionActive: radio.sessionActive,
             queue: radio.queue.map((t) => {
                 const ls = getLyricsPrefetchStatus(t);
+                const e = enrichTrackMeta(t);
                 return {
-                    id: t.id,
-                    title: t.title,
-                    author: t.author,
-                    requestedBy: t.requestedBy,
-                    duration: t.duration,
+                    id: e.id,
+                    title: e.title,
+                    author: e.author,
+                    requestedBy: e.requestedBy,
+                    thumbnail: e.thumbnail || youtubeThumbnail(e.url, e.videoId),
+                    videoId: e.videoId,
+                    url: e.url,
+                    duration: e.duration,
+                    durationSec: e.durationSec,
                     lyricsReady: ls.ready,
-                    lyricsLoading: ls.loading
+                    lyricsLoading: ls.loading,
+                    prefetchReady: Boolean(t.prefetchReady || isTrackPrefetched(t)),
+                    prefetchLoading: t.prefetchState === 'downloading'
                 };
             }),
             queueLength: radio.queue.length,
@@ -875,12 +1357,158 @@ export function attachRadioServer(app) {
             streamEpoch: radioGeneration,
             lyrics,
             discord: getDiscordRadioBlock(),
+            playerModes: { ...playerModes },
+            playbackHistory: playbackHistory.slice(0, 10),
             serverTime: Date.now()
         });
     });
 
+
+    app.post('/radio/api/queue/bulk-add', async (req, res) => {
+        const body = req.body || {};
+        const tracks = Array.isArray(body.tracks) ? body.tracks : [];
+        if (!tracks.length) return res.status(400).json({ ok: false, error: 'tracks wajib' });
+        const who = String(body.requestedBy || body.username || 'Web').trim().slice(0, 48) || 'Web';
+        const replace = Boolean(body.replace);
+        const shuffle = Boolean(body.shuffle);
+        const playNow = Boolean(body.playNow);
+        const slice = tracks.slice(0, 40);
+
+        const pushTrack = async (raw) => {
+            const url = String(raw?.url || '').trim();
+            if (!url) return null;
+            try {
+                return await addTrackToRadio({
+                    title: raw.title || 'Unknown',
+                    url,
+                    videoId: raw.videoId,
+                    thumbnail: raw.thumbnail,
+                    author: raw.author,
+                    seconds: raw.seconds,
+                    duration: raw.duration,
+                    durationSec: raw.durationSec
+                }, who);
+            } catch (e) {
+                if (e?.code === 'TRACK_TOO_LONG') {
+                    console.warn(`📻 Bulk skip panjang: ${raw.title || url}`);
+                    return null;
+                }
+                throw e;
+            }
+        };
+
+        const shuffleQueueKeepHead = (head) => {
+            if (!shuffle || radio.queue.length <= 1) return;
+            const anchor = head || (playNow ? radio.queue.shift() : null);
+            for (let i = radio.queue.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [radio.queue[i], radio.queue[j]] = [radio.queue[j], radio.queue[i]];
+            }
+            if (anchor) radio.queue.unshift(anchor);
+            syncGlobalQueue();
+        };
+
+        try {
+            if (replace) clearRadioQueue();
+            const added = [];
+            let playResult = null;
+
+            if (playNow && slice.length > 0) {
+                let firstIdx = -1;
+                for (let i = 0; i < slice.length; i++) {
+                    const entry = await pushTrack(slice[i]);
+                    if (entry) {
+                        added.push(entry);
+                        firstIdx = i;
+                        break;
+                    }
+                }
+                if (!added.length) {
+                    return res.status(400).json({ ok: false, error: 'Semua lagu stasiun terlalu panjang atau tidak valid' });
+                }
+                radio.sessionActive = true;
+                playResult = await handleRadioPlayRequest();
+
+                res.json({
+                    ok: true,
+                    added: added.length,
+                    queueLength: radio.queue.length,
+                    play: playResult,
+                    preparing: Boolean(playResult?.preparing)
+                });
+
+                const rest = slice.slice(firstIdx + 1);
+                if (rest.length) {
+                    void (async () => {
+                        for (const raw of rest) {
+                            const entry = await pushTrack(raw);
+                            if (entry) added.push(entry);
+                        }
+                        shuffleQueueKeepHead(radio.queue[0]);
+                    })().catch((e) => console.error('📻 bulk-add background:', e?.message || e));
+                }
+                return;
+            }
+
+            for (const raw of slice) {
+                const entry = await pushTrack(raw);
+                if (entry) added.push(entry);
+            }
+            shuffleQueueKeepHead(null);
+            if (playNow && radio.queue.length) {
+                radio.sessionActive = true;
+                playResult = await handleRadioPlayRequest();
+            }
+            res.json({
+                ok: true,
+                added: added.length,
+                queueLength: radio.queue.length,
+                play: playResult
+            });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message || 'Gagal bulk add' });
+        }
+    });
+
+    app.get('/radio/api/player/modes', (_req, res) => {
+        res.json({ ok: true, modes: getPlayerModes() });
+    });
+
+    app.post('/radio/api/player/modes', (req, res) => {
+        res.json({ ok: true, modes: setPlayerModes(req.body || {}) });
+    });
+
+    app.post('/radio/api/seek', (req, res) => {
+        const result = seekRadioPlayback(Number(req.body?.positionSec ?? req.body?.position));
+        res.status(result.ok ? 200 : 400).json({ ...result, playback: getRadioPlayback() });
+    });
+
+    app.post('/radio/api/prev', async (_req, res) => {
+        try {
+            const result = await prevRadioTrack();
+            res.status(result.ok ? 200 : 400).json({
+                ...result,
+                playback: getRadioPlayback(),
+                modes: getPlayerModes()
+            });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message || 'Gagal previous' });
+        }
+    });
+
+    app.post('/radio/api/queue/remove', (req, res) => {
+        const result = removeQueueTrack(Number(req.body?.id));
+        res.status(result.ok ? 200 : 400).json(result);
+    });
+
+    app.post('/radio/api/queue/reorder', (req, res) => {
+        const result = reorderQueue(req.body?.ids || []);
+        res.status(result.ok ? 200 : 400).json(result);
+    });
+
     app.post('/radio/api/skip', async (req, res) => {
         const result = await skipRadioTrack();
+        requestDiscordSync('radio-skip', 600);
         res.json({
             ok: result.ok,
             message: result.message,
@@ -901,6 +1529,11 @@ export function attachRadioServer(app) {
 
     app.get('/radio', (_req, res) => {
         res.redirect(302, '/portfolio/radio');
+    });
+
+    app.get('/radio/api/admin/analytics', async (_req, res) => {
+        const { getAnalytics } = await import('./analytics.js');
+        res.json({ ok: true, ...getAnalytics() });
     });
 
 }

@@ -36,6 +36,17 @@ npm run pm2:start
 npm run pm2:restart
 ```
 
+## Premium Users
+
+- Fitur premium mengunci perintah tertentu untuk user berbayar.
+- User premium ditambahkan lewat `admin/` panel, lalu nomor WA disimpan dalam `premium_users`.
+- Perintah premium saat ini:
+  - `!s` / `!sticker`
+  - `!dl`
+  - `!buat` / `!generate`
+- Untuk menambahkan atau menghapus user premium, buka panel admin dan gunakan tab `Premium`.
+- Panel admin memerlukan variabel `ADMIN_API_TOKEN` di `.env`.
+
 ## GitHub
 
 | Item | Nilai |

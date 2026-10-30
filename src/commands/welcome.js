@@ -23,26 +23,34 @@ export async function handleWelcomeCommand({ sock, from, msg, args, isGroup, isA
 
     if (!sub) {
         const cfg = getGroupSettings(from);
-        return sock.sendMessage(from, {
+        await sock.sendMessage(from, {
             text:
                 `${getWelcomeHelpText()}\n\n` +
                 `📌 *Status grup ini:* ${cfg.welcome ? '🟢 ON' : '🔴 OFF'}`
         }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
+        return;
     }
 
     if (sub === 'on') {
         setWelcomeEnabled(from, true);
-        return sock.sendMessage(from, { text: '✅ Welcome grup *aktif*!' }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Welcome grup *aktif*!' }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
+        return;
     }
     if (sub === 'off') {
         setWelcomeEnabled(from, false);
-        return sock.sendMessage(from, { text: '🔴 Welcome grup *nonaktif*.' }, { quoted: msg });
+        await sock.sendMessage(from, { text: '🔴 Welcome grup *nonaktif*.' }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
+        return;
     }
     if (sub === 'set' && rest) {
         setWelcomeMessage(from, rest);
-        return sock.sendMessage(from, {
+        await sock.sendMessage(from, {
             text: `✅ Template welcome disimpan!\n\n_${rest.slice(0, 200)}_`
         }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
+        return;
     }
     if (sub === 'preview') {
         const cfg = getGroupSettings(from);
@@ -52,8 +60,11 @@ export async function handleWelcomeCommand({ sock, from, msg, args, isGroup, isA
             groupName = meta.subject || groupName;
         } catch (_) {}
         const preview = formatWelcomeMessage(cfg.message, msg.key.participant || from, groupName);
-        return sock.sendMessage(from, { text: preview }, { quoted: msg });
+        await sock.sendMessage(from, { text: preview }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
+        return;
     }
 
-    return sock.sendMessage(from, { text: getWelcomeHelpText() }, { quoted: msg });
+    await sock.sendMessage(from, { text: getWelcomeHelpText() }, { quoted: msg });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }

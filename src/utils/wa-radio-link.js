@@ -2,7 +2,7 @@ import {
     discoverLivePublicBase,
     getRadioListenUrlAsync,
     getRadioUrlHint,
-    invalidateRadioUrlCache
+    resolveWaShareBase
 } from './radio-url.js';
 
 const PREVIEW_MS = 6000;
@@ -52,9 +52,13 @@ async function sendTapLink(sock, from, { text, url, title, description }) {
  * Kirim status + link radio yang bisa diketuk di WhatsApp.
  */
 export async function sendWaRadioLink(sock, from, options = {}) {
-    invalidateRadioUrlCache();
-    const status = await discoverLivePublicBase();
-    const base = (status.base || `http://127.0.0.1:3920`).replace(/\/$/, '');
+    const { base: shareBase, status } = await resolveWaShareBase();
+    if (!shareBase) {
+        const failText = '❌ Link radio belum siap — tunnel sedang diperbaiki.\n\nCoba `!radio` lagi dalam 1 menit.\nOwner: `npm run tunnel:reset`';
+        await sock.sendMessage(from, { text: failText }, options.quoted ? { quoted: options.quoted } : {});
+        return;
+    }
+    const base = shareBase.replace(/\/$/, '');
     const url = `${base}/portfolio/radio`;
     const title = '📻 LuxxBot Radio';
     const body = await getLinkBody();

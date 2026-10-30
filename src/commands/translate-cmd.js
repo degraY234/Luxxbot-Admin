@@ -39,4 +39,5 @@ export async function handleTranslateCommand({ sock, from, msg, args }) {
                 `💡 Coba: \`!translate id en <teks>\` atau \`!translate help\``
         }, { quoted: msg });
     }
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }

@@ -42,4 +42,5 @@ export async function handleStatusCommand({ sock, from, msg }) {
         `_Ketik !help <cmd> untuk bantuan perintah_`;
 
     await sock.sendMessage(from, { text }, { quoted: msg });
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }

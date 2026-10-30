@@ -61,6 +61,17 @@ async function loadServicesAndHandlers(activeSock) {
             import('./services/changelog.js')
         ]);
 
+        const { initPersistence } = await import('./utils/persistence.js');
+        const { initGlobalStore } = await import('./utils/global-store.js');
+        const { initPlugins, dispatchHook } = await import('./plugins/plugin-manager.js');
+
+        await initPersistence();
+        await initGlobalStore();
+        await initPlugins();
+
+        const { startGlobalCleanup } = await import('./state.js');
+        startGlobalCleanup();
+
         syncChangelogIfNeeded();
 
         const { state } = await import('./state.js');

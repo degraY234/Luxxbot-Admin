@@ -9,6 +9,8 @@ import { minify } from 'terser';
 import { buildMenuText, buildSectionMenu } from '../../menu.js';
 import { BOT_NAME, OWNER_NUMBER, PM2_APP_NAME, ai, GEMINI_API_KEY, GEMINI_VISION_MODEL, startTime, W2G_ROOM_FILE } from '../config.js';
 import { state, userAIContext } from '../state.js';
+import { getPluginCommand, getMenuPluginButtons, dispatchHook } from '../plugins/plugin-manager.js';
+import { saveGlobalMap, saveGlobalState } from '../utils/global-store.js';
 import { checkCooldown, checkCommandCooldown, getRemainingCooldown } from '../utils/cooldown.js';
 import { runtime } from '../utils/runtime.js';
 import { getOrCreateRoom, createW2GRoom } from '../services/w2g.js';
@@ -18,8 +20,8 @@ import { buildChangelogText } from '../services/changelog.js';
 import { groqAI, tanyakanAI, tryCreatorReply } from '../services/ai.js';
 import { askLuxxAI } from '../services/ai-context.js';
 import { trackGroupBotActivity } from '../services/group-bot-context.js';
+import { trackCommand, trackError } from '../services/analytics.js';
 
-import { fetchFootballSchedule } from '../services/football.js';
 import {
     handlePlayCommand,
     handleRadioCommand,
@@ -33,10 +35,10 @@ import { handleStickerCommand } from '../commands/sticker.js';
 import { handleStatusCommand } from '../commands/status.js';
 import { handleHelpCommand } from '../commands/help-cmd.js';
 import { handleWelcomeCommand } from '../commands/welcome.js';
+import { checkPremiumAccess } from '../services/premium-helpers.js';
 
 import { handleQuoteCommand } from '../commands/quote.js';
 import { handleQuotesAnimeCommand } from '../commands/quotes-anime.js';
-import { handleDarkJokesCommand } from '../commands/darkjokes.js';
 import { handleAboutLuxCommand } from '../commands/aboutlux.js';
 import { handleNowPlayingCommand, handleDiscordCommand } from '../commands/discord-cmd.js';
 import { handleWatchCommand } from '../commands/watch.js';
@@ -47,7 +49,7 @@ import { handleTranslateCommand } from '../commands/translate-cmd.js';
 import { handleBeritaCommand } from '../commands/berita.js';
 import { handleSastraCommand, getSastraSession, handleSastraPick } from '../commands/sastra.js';
 import { handleBuatCommand } from '../commands/buat.js';
-import { handlePantunCommand } from '../commands/pantun.js';
+import { handleAnimeCommand } from '../commands/anime.js';
 import { handleGuideCommand } from '../commands/guide.js';
 import { handleLaporCommand } from '../commands/lapor.js';
 
@@ -60,6 +62,16 @@ const COMMAND_ALIASES = {
     ply: 'play',
     wath: 'watch'
 };
+
+function sendDone(sock, from, msg, baseText = '✅ Done') {
+    if (baseText && typeof baseText === 'object' && baseText.text) {
+        return sock.sendMessage(from, { text: baseText.text }, { quoted: msg });
+    }
+    if (typeof baseText === 'string') {
+        return sock.sendMessage(from, { text: baseText }, { quoted: msg });
+    }
+    return sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
+}
 
 /** Perintah yang pakai `|` — argumen disatukan (bukan split spasi) */
 const PHRASE_COMMANDS = new Set([
@@ -82,21 +94,31 @@ export function registerMessageHandler(sock) {
             if (msg.key.fromMe) return;
             if (msg.messageStubType) return;
 
-            const from = msg.key.remoteJid;
-            const isGroup = from.endsWith('@g.us');
-            const sender = msg.key.participant || from;
+            let from = null;
+            let command = null;
+            let args = [];
+            let isGroup = false;
+            let sender = null;
+            let isAdmin = false;
+            let _localGroupAdminFlag = false;
+            let type = null;
+            let text = '';
+
+            from = msg.key.remoteJid;
+            isGroup = from.endsWith('@g.us');
+            sender = msg.key.participant || from;
 
             // --- Parse message body ---
-            const type = Object.keys(msg.message)[0];
+            type = Object.keys(msg.message)[0];
             let body = '';
             if (type === 'conversation') body = msg.message.conversation;
             else if (type === 'extendedTextMessage') body = msg.message.extendedTextMessage.text;
             else if (type === 'imageMessage' && msg.message.imageMessage.caption) body = msg.message.imageMessage.caption;
             else if (type === 'videoMessage' && msg.message.videoMessage.caption) body = msg.message.videoMessage.caption;
 
-            const text = body.trim();
-            let command = null;
-            let args = [];
+            text = body.trim();
+            command = null;
+            args = [];
             if (text.startsWith('!')) {
                 const raw = text.slice(1).trim();
                 const sp = raw.indexOf(' ');
@@ -177,6 +199,7 @@ export function registerMessageHandler(sock) {
 
             if (playSession && !playSessionFresh) {
                 delete global.playSession[from];
+                void saveGlobalMap('playSession');
             }
 
             // --- Anti-Link ---
@@ -208,6 +231,7 @@ export function registerMessageHandler(sock) {
             if (!command) return;
 
             console.log(`\x1b[90m📩 !${command} dari ${sender.split('@')[0]}\x1b[0m`);
+            trackCommand(command, sender.split('@')[0], from, isGroup);
 
             // Anti-spam hanya untuk perintah ! (per user, 5 detik)
             if (!checkCommandCooldown(sender)) {
@@ -219,19 +243,26 @@ export function registerMessageHandler(sock) {
 
             const senderNumber = sender.split('@')[0];
             // ✅ FIX: isAdmin correctly scoped as const (was shadowing outer let)
-            const isAdmin = OWNER_NUMBER.some(num => senderNumber === num);
+            isAdmin = OWNER_NUMBER.some(num => senderNumber === num);
 
-            let isLocalGroupAdmin = false;
+            _localGroupAdminFlag = false;
             if (isGroup) {
                 try {
                     const groupMetadata = await sock.groupMetadata(from);
                     const userParticipant = groupMetadata.participants.find(p => p.id === sender);
-                    isLocalGroupAdmin = userParticipant?.admin === 'admin'
+                    _localGroupAdminFlag = userParticipant?.admin === 'admin'
                         || userParticipant?.admin === 'superadmin'
                         || isAdmin;
                 } catch (e) {
                     console.log('⚠️ Gagal ambil metadata grup:', e.message);
                 }
+            }
+
+            void dispatchHook('message', { sock, from, msg, text, command, args, sender, isGroup, isAdmin, _localGroupAdminFlag });
+
+            const pluginCommand = getPluginCommand(command);
+            if (pluginCommand) {
+                return await pluginCommand.handler({ sock, from, msg, args, sender, isGroup, isAdmin, _localGroupAdminFlag });
             }
 
             if (state.isSelfMode && !isAdmin) return;
@@ -272,9 +303,20 @@ export function registerMessageHandler(sock) {
                         text: `❓ Section *"${args[0]}"* tidak ditemukan.\n\nPilihan section yang tersedia:\n\`!menu umum\` · \`!menu ai\` · \`!menu musik\`\n\`!menu hiburan\` · \`!menu media\` · \`!menu games\`${isAdmin ? ' · `!menu owner`' : ''}`
                     }, { quoted: msg });
                 }
-                // Tanpa argumen — tampilkan menu utama
+                // Tanpa argumen — tampilkan menu utama dengan tombol interaktif
                 const menuText = buildMenuText(state.isSelfMode, state.isSleeping, state.antiLink, isAdmin, botUptime);
-                return await sock.sendMessage(from, { text: menuText }, { quoted: msg });
+                const sectionButtons = [
+                    { buttonId: '!menu umum', buttonText: { displayText: 'Umum' }, type: 1 },
+                    { buttonId: '!menu musik', buttonText: { displayText: 'Musik' }, type: 1 },
+                    { buttonId: '!menu games', buttonText: { displayText: 'Games' }, type: 1 }
+                ];
+                const pluginButtons = getMenuPluginButtons(1);
+                const buttons = [...pluginButtons, ...sectionButtons].slice(0, 3);
+                return await sock.sendMessage(from, {
+                    text: menuText,
+                    footer: 'Pilih tombol cepat atau ketik !menu [section]',
+                    buttons
+                }, { quoted: msg });
             }
 
             if (command === 'status') {
@@ -286,11 +328,13 @@ export function registerMessageHandler(sock) {
             }
 
             if (command === 'welcome') {
-                return handleWelcomeCommand({ sock, from, msg, args, isGroup, isAdmin: isLocalGroupAdmin || isAdmin });
+                return handleWelcomeCommand({ sock, from, msg, args, isGroup, isAdmin: _localGroupAdminFlag || isAdmin });
             }
 
             if (command === 'sp' || command === 'sound' || command === 'soundpad') {
-                return handleSpCommand({ sock, from, msg, args, sender });
+                const result = await handleSpCommand({ sock, from, msg, args, sender });
+                await saveGlobalMap('spSession');
+                await sendDone(sock, from, msg, result);
             }
 
             if (command === 'quote' || command === 'quotes') {
@@ -302,32 +346,38 @@ export function registerMessageHandler(sock) {
             // =======================================================
             if (command === 'halo') {
                 await sock.sendMessage(from, { text: `Halo juga Kakak manis! 🌸 Ada yang bisa ${BOT_NAME} bantu? Ketik \`!menu\` untuk lihat fiturku! 🥳✨` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'ping') {
                 const latensi = Date.now() - msg.messageTimestamp * 1000;
                 await sock.sendMessage(from, { text: `🏓 *Pong!* Respon: *${Math.abs(latensi)}ms* 🚀💨` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'changelogs' || command === 'changelog') {
                 const logText = buildChangelogText();
                 await sock.sendMessage(from, { text: logText }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'tanggal' || command === 'date') {
                 const waktu = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 await sock.sendMessage(from, { text: `🗓️ *Tanggal & Waktu Jakarta*\n\n${waktu}` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'warna' || command === 'color') {
                 const hex = `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`;
                 await sock.sendMessage(from, { text: `🎨 *Color Picker*\n\nWarna acak: ${hex}\nCocok buat desain, stiker, atau header chat!` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'server') {
                 const uptime = Math.floor(process.uptime());
                 const cpu = os.cpus()[0].model;
                 await sock.sendMessage(from, { text: `🖥️ *Server Info*\n\nPlatform : ${os.platform()}\nArch     : ${os.arch()}\nCPU      : ${cpu}\nMemory   : ${Math.round(os.totalmem() / 1024 / 1024)} MB\nUptime    : ${Math.floor(uptime / 60)} menit` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             // =======================================================
@@ -349,6 +399,7 @@ export function registerMessageHandler(sock) {
                         const noteContent = args.slice(1).join(' ');
                         const noteId = Date.now();
                         global.notes[from].unshift({ id: noteId, content: noteContent, created: new Date().toISOString(), updated: new Date().toISOString() });
+                        await saveGlobalMap('notes');
                         await sock.sendMessage(from, { text: `📝 *Catatan ditambahkan!*\n\n${noteContent}\n\n🆔 ID: ${noteId}` }, { quoted: msg });
                         break;
                     }
@@ -381,6 +432,7 @@ export function registerMessageHandler(sock) {
                         const newContent = args.slice(2).join(' ');
                         global.notes[from][editNum - 1].content = newContent;
                         global.notes[from][editNum - 1].updated = new Date().toISOString();
+                        await saveGlobalMap('notes');
                         await sock.sendMessage(from, { text: `✏️ *Catatan diperbarui!*\n\nSebelum: ${oldContent}\nSesudah: ${newContent}` }, { quoted: msg });
                         break;
                     }
@@ -389,6 +441,7 @@ export function registerMessageHandler(sock) {
                         if (isNaN(deleteNum) || deleteNum < 1 || deleteNum > global.notes[from].length)
                             return await sock.sendMessage(from, { text: '❌ Nomor tidak valid.' }, { quoted: msg });
                         const [deleted] = global.notes[from].splice(deleteNum - 1, 1);
+                        await saveGlobalMap('notes');
                         await sock.sendMessage(from, { text: `🗑️ Catatan dihapus!\n\n${deleted.content}` }, { quoted: msg });
                         break;
                     }
@@ -405,12 +458,14 @@ export function registerMessageHandler(sock) {
                     case 'clear': {
                         const cnt = global.notes[from]?.length || 0;
                         global.notes[from] = [];
+                        await saveGlobalMap('notes');
                         await sock.sendMessage(from, { text: `🧹 ${cnt} catatan dihapus!` }, { quoted: msg });
                         break;
                     }
                     default:
                         await sock.sendMessage(from, { text: '❌ Perintah tidak dikenali. Ketik !notes untuk bantuan.' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             // =======================================================
@@ -450,6 +505,7 @@ export function registerMessageHandler(sock) {
                         const reminderId = Date.now();
                         const reminder = { id: reminderId, time: reminderTime, message: reminderMessage, created: now, chatId: from };
                         global.reminders[from].push(reminder);
+                        await saveGlobalMap('reminders');
                         const timeDiff = reminderTime - now;
                         const hoursDiff = Math.floor(timeDiff / (1000 * 60 * 60));
                         const minutesDiff = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
@@ -462,6 +518,7 @@ export function registerMessageHandler(sock) {
                             if (idx !== -1) {
                                 await sock.sendMessage(from, { text: `⏰ *PENGINGAT!*\n\n${reminderMessage}` });
                                 global.reminders[from].splice(idx, 1);
+                                await saveGlobalMap('reminders');
                             }
                         }, timeDiff);
                         break;
@@ -493,12 +550,14 @@ export function registerMessageHandler(sock) {
                     case 'clear': {
                         const count = global.reminders[from]?.length || 0;
                         global.reminders[from] = [];
+                        await saveGlobalMap('reminders');
                         await sock.sendMessage(from, { text: `🧹 ${count} pengingat dihapus!` }, { quoted: msg });
                         break;
                     }
                     default:
                         await sock.sendMessage(from, { text: '❌ Perintah tidak dikenali. Ketik !reminder untuk bantuan.' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             // =======================================================
@@ -506,7 +565,7 @@ export function registerMessageHandler(sock) {
             // =======================================================
             if (command === 'add') {
                 if (!isGroup) return await sock.sendMessage(from, { text: '⚠️ Ini cuma bisa di dalam grup Kak! 🏡' }, { quoted: msg });
-                if (!isLocalGroupAdmin) return await sock.sendMessage(from, { text: '❌ Cuma admin grup atau Owner yang boleh masukin orang! 👑' }, { quoted: msg });
+                if (!_localGroupAdminFlag) return await sock.sendMessage(from, { text: '❌ Cuma admin grup atau Owner yang boleh masukin orang! 👑' }, { quoted: msg });
                 const targetNum = args[0]?.replace(/[^0-9]/g, '');
                 if (!targetNum) return await sock.sendMessage(from, { text: '⚠️ Masukkan nomor yang benar. Contoh: `!add 628xxx` 📱' }, { quoted: msg });
                 try {
@@ -515,6 +574,7 @@ export function registerMessageHandler(sock) {
                 } catch (e) {
                     await sock.sendMessage(from, { text: '❌ Gagal masukin orang, kayaknya aku belum jadi admin deh! 🥺' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'tagall') {
@@ -529,30 +589,16 @@ export function registerMessageHandler(sock) {
                     mentions.push(jlh.id);
                 }
                 await sock.sendMessage(from, { text: pesanTag, mentions }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             // =======================================================
             // 🌸 ANIME COMMANDS
             // =======================================================
             if (command === 'anime') {
-                try {
-                    const query = args.join(' ') || 'popular';
-                    await sock.sendMessage(from, { text: '🎌 Sedang mencari anime...' }, { quoted: msg });
-                    const url = query === 'popular'
-                        ? 'https://api.jikan.moe/v4/top/anime?limit=25'
-                        : `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(query)}&limit=1`;
-                    const res = await axios.get(url);
-                    const anime = query === 'popular'
-                        ? res.data.data[Math.floor(Math.random() * res.data.data.length)]
-                        : res.data.data[0];
-                    if (!anime) return await sock.sendMessage(from, { text: '❌ Anime tidak ditemukan.' }, { quoted: msg });
-                    await sock.sendMessage(from, {
-                        image: { url: anime.images.jpg.large_image_url },
-                        caption: `╭━━━〔 🎌 ANIME INFO 🎌 〕━━━\n\n📺 Judul : ${anime.title}\n⭐ Rating : ${anime.score || '-'}\n🎭 Genre : ${anime.genres.map(v => v.name).join(', ')}\n📅 Tahun : ${anime.year || '-'}\n🎬 Episode : ${anime.episodes || '?'}\n\n📝 Sinopsis:\n${anime.synopsis?.substring(0, 400) || '-'}\n\n━━━━━━━━━━━━━━━━━━`
-                    }, { quoted: msg });
-                } catch (err) {
-                    await sock.sendMessage(from, { text: '❌ Gagal mengambil info anime.' }, { quoted: msg });
-                }
+                await handleAnimeCommand({ sock, from, msg, args });
+                await sendDone(sock, from, msg);
+                return;
             }
 
             if (command === 'waifu') {
@@ -568,34 +614,18 @@ export function registerMessageHandler(sock) {
                 } catch (err) {
                     await sock.sendMessage(from, { text: '❌ Gagal mengambil waifu.' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'quotesanime') {
                 if (!checkCooldown(sender, 'quotesanime', 8000)) {
                     return await sock.sendMessage(from, { text: '⏳ Tunggu sebentar sebelum quote anime berikutnya.' }, { quoted: msg });
                 }
-                return handleQuotesAnimeCommand({ sock, from, msg });
+                await handleQuotesAnimeCommand({ sock, from, msg });
+                await sendDone(sock, from, msg);
             }
 
-            if (command === 'character' || command === 'chara') {
-                const charQuery = args.join(' ');
-                if (!charQuery) return await sock.sendMessage(from, { text: '⚠️ Format: `!character nama_karakter`' }, { quoted: msg });
-                await sock.sendMessage(from, { text: '🔍 Mencari karakter...' }, { quoted: msg });
-                try {
-                    const res = await axios.get(`https://api.jikan.moe/v4/characters?q=${encodeURIComponent(charQuery)}&limit=1`);
-                    const char = res.data?.data?.[0];
-                    if (!char) return await sock.sendMessage(from, { text: '❌ Karakter tidak ditemukan.' }, { quoted: msg });
-                    const imgUrl = char.images?.jpg?.image_url;
-                    const text2 = `👤 *${char.name}*\n\n📖 Nicknames: ${char.nicknames?.join(', ') || '-'}\n💖 Favorites: ${char.favorites || 0}`;
-                    if (imgUrl) {
-                        await sock.sendMessage(from, { image: { url: imgUrl }, caption: text2 }, { quoted: msg });
-                    } else {
-                        await sock.sendMessage(from, { text: text2 }, { quoted: msg });
-                    }
-                } catch (e) {
-                    await sock.sendMessage(from, { text: '❌ Error saat mencari karakter.' }, { quoted: msg });
-                }
-            }
+            
 
             // =======================================================
             // 🎵 MUSIC & ENTERTAINMENT
@@ -636,23 +666,9 @@ export function registerMessageHandler(sock) {
                 return await handleLyricsCommand({ sock, from, msg, args });
             }
 
-            if (command === 'darkjokes') {
-                if (!checkCooldown(sender, 'darkjokes', 8000)) {
-                    return await sock.sendMessage(from, { text: '⏳ Tunggu sebentar sebelum dark joke berikutnya.' }, { quoted: msg });
-                }
-                return handleDarkJokesCommand({ sock, from, msg });
-            }
+            
 
-            if (command === 'cerpen') {
-                const tema = args.join(' ') || 'petualangan';
-                await sock.sendMessage(from, { text: '📖 Sedang menulis cerpen...' }, { quoted: msg });
-                const hasil = await groqAI(`Buat cerpen Indonesia tema ${tema}.\n\nFormat:\n📖 Judul:\n...\n\n📚 Cerita:\n...\n\n✨ Pesan Moral:\n...\n\nPanjang sekitar 300 kata.`);
-                await sock.sendMessage(from, { text: `╭━━━〔 📖 CERPEN ${tema.toUpperCase()} 📖 〕━━━\n\n${hasil || 'Gagal nulis cerpen 😭'}\n\n━━━━━━━━━━━━━━━━━━` }, { quoted: msg });
-            }
-
-            if (command === 'pantun') {
-                return handlePantunCommand({ sock, from, msg, args });
-            }
+            
 
             if (command === 'meme') {
                 const subreddit = args[0] || 'memes';
@@ -672,10 +688,11 @@ export function registerMessageHandler(sock) {
                         const pick = templates[Math.floor(Math.random() * templates.length)];
                         if (pick?.url) await sock.sendMessage(from, { image: { url: pick.url }, caption: `😂 *${pick.name}*` }, { quoted: msg });
                         else throw new Error('No imgflip');
-                    } catch (_) {
-                        await sock.sendMessage(from, { text: '❌ Gagal dapet meme, coba lagi nanti.' }, { quoted: msg });
-                    }
+                } catch (_) {
+                    await sock.sendMessage(from, { text: '❌ Gagal dapet meme, coba lagi nanti.' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
+            }
             }
 
             // ✅ FIX: !lihat command - missing stream definition added
@@ -702,6 +719,7 @@ export function registerMessageHandler(sock) {
                 } catch (e) {
                     await sock.sendMessage(from, { text: '❌ Gagal muat media! 😭' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'tanya') {
@@ -709,11 +727,14 @@ export function registerMessageHandler(sock) {
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Mau nanya apa? Ketik pertanyaannya! 🤓✨' }, { quoted: msg });
                 try {
                     const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'tanya');
-                    await sock.sendMessage(from, { text: res || '❌ AI tidak merespons. Coba lagi.' }, { quoted: msg });
+                    const answer = (res || '❌ AI tidak merespons. Coba lagi.').trim();
+                    const formatted = `🧠 *Pertanyaan:* ${query.trim()}\n\n💬 *Jawaban:*\n${answer}`;
+                    await sock.sendMessage(from, { text: formatted }, { quoted: msg });
                 } catch (e) {
                     console.error('TANYA ERROR:', e?.message || e);
                     await sock.sendMessage(from, { text: '❌ Gagal memproses pertanyaan. Coba lagi sebentar.' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'db' || command === 'database') {
@@ -725,6 +746,7 @@ export function registerMessageHandler(sock) {
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Kasih kode atau error-nya! 💻✨' }, { quoted: msg });
                 const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'coding');
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'code') {
@@ -732,6 +754,7 @@ export function registerMessageHandler(sock) {
                 if (!queryKode) return await sock.sendMessage(from, { text: '⚠️ Mana kode yang mau di-debug? 💻' }, { quoted: msg });
                 const hasilAI = await askLuxxAI(sock, from, sender, isGroup, isAdmin, `Debug, review, dan jelaskan error serta optimalisasi kode berikut:\n\n${queryKode}`, 'coding');
                 await sock.sendMessage(from, { text: hasilAI }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'rangkum') {
@@ -739,6 +762,7 @@ export function registerMessageHandler(sock) {
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Mana teks yang mau diringkas? 📑' }, { quoted: msg });
                 const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'rangkum');
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'brainstorm') {
@@ -746,6 +770,7 @@ export function registerMessageHandler(sock) {
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Butuh ide apa? Sebutin topiknya! 💡' }, { quoted: msg });
                 const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'brainstorm');
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'translate' || command === 'tr') {
@@ -757,7 +782,9 @@ export function registerMessageHandler(sock) {
             }
 
             if (command === 'sastra' || command === 'puisi') {
-                return handleSastraCommand({ sock, from, msg, args });
+                const result = await handleSastraCommand({ sock, from, msg, args });
+                await saveGlobalMap('sastraSession');
+                return result;
             }
 
             if (command === 'buat' || command === 'generate') {
@@ -777,6 +804,7 @@ export function registerMessageHandler(sock) {
                 if (!queryText) return await sock.sendMessage(from, { text: '⚠️ Ngobrol apa aja bebas! Contoh: `!q halo` 💬' }, { quoted: msg });
                 const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, queryText, 'chat_context');
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'resetai') {
@@ -784,11 +812,13 @@ export function registerMessageHandler(sock) {
                     if (key === from || key.startsWith(`${from}|`)) userAIContext.delete(key);
                 }
                 await sock.sendMessage(from, { text: '♻️ *Memori Terhapus!* Obrolan kita udah aku lupain semua. Yuk mulai dari awal! 🌸' }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'fact') {
                 const hasilAI = await askLuxxAI(sock, from, sender, isGroup, isAdmin, 'Kasih satu fakta unik, menarik, dan jarang orang tahu — satu paragraf singkat.', 'fact');
                 await sock.sendMessage(from, { text: `💡 *FAKTA MENARIK HARI INI:* 🌟\n\n${hasilAI}` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'curhat') {
@@ -796,12 +826,14 @@ export function registerMessageHandler(sock) {
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Ayo cerita, aku siap dengerin! 🫂💖' }, { quoted: msg });
                 const res = await askLuxxAI(sock, from, sender, isGroup, isAdmin, query, 'curhat');
                 await sock.sendMessage(from, { text: res }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'roastme') {
                 const target = args.join(' ') || 'saya';
                 const hasilAI = await askLuxxAI(sock, from, sender, isGroup, isAdmin, `Roasting ${target} dengan sarkasme lucu dan menghibur, tapi sopan.`, 'curhat');
                 await sock.sendMessage(from, { text: `🔥 *WAKTUNYA ROASTING!* 🔥\n\n${hasilAI}` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             // =======================================================
@@ -833,17 +865,21 @@ export function registerMessageHandler(sock) {
                             `_${(err.message || '').slice(0, 120)}_`
                     }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'kalkulator') {
                 const rumus = args.join(' ');
                 if (!rumus) return await sock.sendMessage(from, { text: '⚠️ Contoh: `!kalkulator (10 * 5) / 2` 🧮' }, { quoted: msg });
                 try {
-                    const hasilHitung = new Function(`return (${rumus})`)();
-                    await sock.sendMessage(from, { text: `🧮 *HASIL:* ✨\n\n\`${rumus}\` = *${hasilHitung}*` }, { quoted: msg });
+                    const sanitized = String(rumus).replace(/[^0-9+\-*/().%\s]/g, '');
+                    if (!sanitized.trim()) return await sock.sendMessage(from, { text: '❌ Rumus tidak valid! Coba: `!kalkulator 10 * 5` 😵' }, { quoted: msg });
+                    const hasilHitung = Function('"use strict"; return (' + sanitized + ')')();
+                    await sock.sendMessage(from, { text: `🧮 *HASIL:* ✨\n\n\`${sanitized}\` = *${hasilHitung}*` }, { quoted: msg });
                 } catch (e) {
                     await sock.sendMessage(from, { text: '❌ Rumus salah! Cek lagi ya. 😵' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'qr') {
@@ -851,6 +887,7 @@ export function registerMessageHandler(sock) {
                 if (!teksQr) return await sock.sendMessage(from, { text: '⚠️ Masukkan teks atau URL! 🔳' }, { quoted: msg });
                 const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(teksQr)}`;
                 await sock.sendMessage(from, { image: { url: qrUrl }, caption: `✅ *QR Code siap!* 🥳✨` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'stalk') {
@@ -863,6 +900,7 @@ export function registerMessageHandler(sock) {
                 } catch (e) {
                     await sock.sendMessage(from, { text: '❌ Akun GitHub tidak ditemukan.' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'ocr') {
@@ -883,6 +921,7 @@ export function registerMessageHandler(sock) {
                 } catch (error) {
                     await sock.sendMessage(from, { text: '❌ Gagal baca teks! Gambarnya mungkin buram. 😭' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'remini') {
@@ -898,6 +937,10 @@ export function registerMessageHandler(sock) {
                 if (!checkCooldown(sender, 'sticker', 10000)) {
                     return sock.sendMessage(from, { text: '⏳ Sabar ya, jangan spam 😤' }, { quoted: msg });
                 }
+                const premiumCheck = await checkPremiumAccess(senderNumber, '!s / !sticker');
+                if (!premiumCheck.ok) {
+                    return sock.sendMessage(from, { text: premiumCheck.message }, { quoted: msg });
+                }
                 return handleStickerCommand({ sock, from, msg, args });
             }
 
@@ -908,7 +951,22 @@ export function registerMessageHandler(sock) {
                 if (!checkCooldown(sender, 'dl', 15000)) {
                     return sock.sendMessage(from, { text: '⏳ Tunggu dulu, download butuh waktu~' }, { quoted: msg });
                 }
+                const premiumCheck = await checkPremiumAccess(senderNumber, '!dl');
+                if (!premiumCheck.ok) {
+                    return sock.sendMessage(from, { text: premiumCheck.message }, { quoted: msg });
+                }
                 return handleDlCommand({ sock, from, msg, args });
+            }
+
+            // =======================================================
+            // 🎨 AI IMAGE — !buat
+            // =======================================================
+            if (command === 'buat' || command === 'generate') {
+                const premiumCheck = await checkPremiumAccess(senderNumber, '!buat / !generate');
+                if (!premiumCheck.ok) {
+                    return sock.sendMessage(from, { text: premiumCheck.message }, { quoted: msg });
+                }
+                return handleBuatCommand({ sock, from, msg, args });
             }
 
             // =======================================================
@@ -928,6 +986,7 @@ export function registerMessageHandler(sock) {
                 setTimeout(async () => {
                     await sock.sendMessage(from, { text: `🎲 *HASIL GACHA!* 🎲\n━━━━━━━━━━━━━━━━━━━━━━━\n\n📌 *Topik:* "${topik}"\n🎉 *Keputusan:* ✨ *[ ${opsiTerpilih} ]* ✨\n\n━━━━━━━━━━━━━━━━━━━━━━━\nKeputusan bot bersifat mutlak! 😎` });
                 }, 1500);
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'apakah') {
@@ -935,6 +994,7 @@ export function registerMessageHandler(sock) {
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Tanya apa aja! 🔮' }, { quoted: msg });
                 const jawaban = ['Iya pasti dong! 😍', 'Kelihatannya begitu... 🤔', 'Mungkin aja 🌸', 'Wah itu ga mungkin! 🙅‍♀️', 'Sangat tidak direkomendasikan. 🛑', 'Coba tanya lagi besok 🤭'];
                 await sock.sendMessage(from, { text: `🔮 *Pertanyaan:* Apakah ${query}\n🎲 *Jawaban:* ${jawaban[Math.floor(Math.random() * jawaban.length)]}` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'kapankah') {
@@ -942,6 +1002,7 @@ export function registerMessageHandler(sock) {
                 if (!query) return await sock.sendMessage(from, { text: '⚠️ Tanya waktu apa? ⏳' }, { quoted: msg });
                 const prediksi = ['3 Hari lagi! 🚀', '5 tahun lagi', 'Besok subuh! 🌅', 'Nanti kalau dinosaurus hidup lagi 🦖', 'Abad depan... 👴'];
                 await sock.sendMessage(from, { text: `⏳ *Pertanyaan:* Kapankah ${query}\n🎯 *Prediksi:* ${prediksi[Math.floor(Math.random() * prediksi.length)]}` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'truth') {
@@ -952,6 +1013,7 @@ export function registerMessageHandler(sock) {
                     'Pernahkah kamu menyukai seseorang diam-diam di grup chat ini?'
                 ];
                 await sock.sendMessage(from, { text: `🎲 *WAKTUNYA JUJUR!* 🫣\n\n_"${listTruth[Math.floor(Math.random() * listTruth.length)]}"_` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'dare') {
@@ -961,6 +1023,7 @@ export function registerMessageHandler(sock) {
                     'Tag orang yang paling sering kamu stalk profilnya!'
                 ];
                 await sock.sendMessage(from, { text: `🎲 *TANTANGAN BUAT KAMU!* 😈\n\n⚡ *Wajib Lakuin:* _"${listDare[Math.floor(Math.random() * listDare.length)]}"_` }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             // =======================================================
@@ -1009,10 +1072,21 @@ export function registerMessageHandler(sock) {
                     pemilih: [],
                     timeoutId
                 };
+                await saveGlobalMap('activeVotes');
                 let teksVoting = `📊 *VOTING BARU DIMULAI!* 📊\n━━━━━━━━━━━━━━━━━━━━━━━\n\n📌 *Topik:* "${topik}"\n⏳ *Durasi:* ${teksDurasi}\n\n📋 *Opsi Pilihan:*\n`;
                 global.activeVotes[from].opsi.forEach((item, i) => { teksVoting += `${i + 1}. ${item.nama}\n`; });
                 teksVoting += `\n━━━━━━━━━━━━━━━━━━━━━━━\n👉 Ketik *!pilih [nomor_opsi]*\n🛑 Ketik *!endvoting* untuk menutup.`;
-                await sock.sendMessage(from, { text: teksVoting }, { quoted: msg });
+                const votingButtons = global.activeVotes[from].opsi.slice(0, 3).map((item, idx) => ({
+                    buttonId: `!pilih ${idx + 1}`,
+                    buttonText: { displayText: item.nama },
+                    type: 1
+                }));
+                await sock.sendMessage(from, {
+                    text: teksVoting,
+                    footer: 'Pilih opsi dengan tombol atau balas nomor voting.',
+                    buttons: votingButtons
+                }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             // ✅ FIX: !pilih command was truncated — now complete
@@ -1029,6 +1103,7 @@ export function registerMessageHandler(sock) {
                 // ✅ Cast vote, add to voters list
                 targetVoting.opsi[pilihanIndex].jumlahSuara += 1;
                 targetVoting.pemilih.push(sender);
+                await saveGlobalState();
                 const totalSuara = targetVoting.opsi.reduce((sum, o) => sum + o.jumlahSuara, 0);
                 let teksSkor = `✅ *Suara Berhasil Dicatat!*\n\n📊 *Hasil Sementara:* "${targetVoting.topik}"\n━━━━━━━━━━━━━━━━━━━━━━━\n`;
                 targetVoting.opsi.forEach((item, i) => {
@@ -1037,12 +1112,13 @@ export function registerMessageHandler(sock) {
                 });
                 teksSkor += `━━━━━━━━━━━━━━━━━━━━━━━\n📥 Total Suara: *${totalSuara}*`;
                 await sock.sendMessage(from, { text: teksSkor }, { quoted: msg });
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'endvoting') {
                 const targetVoting = global.activeVotes[from];
                 if (!targetVoting) return await sock.sendMessage(from, { text: '❌ Tidak ada sesi voting yang aktif.' }, { quoted: msg });
-                if (!isAdmin && !isLocalGroupAdmin) return await sock.sendMessage(from, { text: '❌ Hanya *Admin Grup* atau *Owner Bot* yang bisa menutup voting.' }, { quoted: msg });
+                if (!isAdmin && !_localGroupAdminFlag) return await sock.sendMessage(from, { text: '❌ Hanya *Admin Grup* atau *Owner Bot* yang bisa menutup voting.' }, { quoted: msg });
                 const totalSuara = targetVoting.opsi.reduce((sum, o) => sum + o.jumlahSuara, 0);
                 let teksAkhir = `🛑 *VOTING RESMI DITUTUP!* 🛑\n\n📋 *Hasil Akhir:* "${targetVoting.topik}"\n━━━━━━━━━━━━━━━━━━━━━━━\n`;
                 targetVoting.opsi.forEach((item, i) => {
@@ -1053,33 +1129,11 @@ export function registerMessageHandler(sock) {
                 await sock.sendMessage(from, { text: teksAkhir }, { quoted: msg });
                 if (targetVoting.timeoutId) clearTimeout(targetVoting.timeoutId);
                 delete global.activeVotes[from];
+                await saveGlobalState();
+                await sendDone(sock, from, msg);
             }
 
-            // =======================================================
-            // ⚽ FOOTBALL
-            // =======================================================
-            if (command === 'jadwalbola' || command === 'football') {
-                const filter = args.join(' ').trim();
-                await sock.sendMessage(from, { text: '⚽ Mengambil jadwal pertandingan...' }, { quoted: msg });
-                try {
-                    const { text, source } = await fetchFootballSchedule(filter);
-                    const footer = `\n\n_${source} · LuxxBot_`;
-                    const full = text + footer;
-                    if (full.length > 4000) {
-                        const chunks = full.match(/[\s\S]{1,3800}(?=\n|$)/g) || [full];
-                        for (let i = 0; i < chunks.length; i++) {
-                            await sock.sendMessage(from, { text: chunks[i] }, { quoted: i === 0 ? msg : undefined });
-                        }
-                    } else {
-                        await sock.sendMessage(from, { text: full }, { quoted: msg });
-                    }
-                } catch (err) {
-                    console.error('FOOTBALL ERROR:', err.message);
-                    await sock.sendMessage(from, {
-                        text: `❌ Gagal ambil jadwal bola.\n\n💡 Coba lagi nanti.\n_${(err.message || '').slice(0, 100)}_`
-                    }, { quoted: msg });
-                }
-            }
+            
 
             // =======================================================
             // 🛠️ DEVELOPER TOOLS
@@ -1093,6 +1147,7 @@ export function registerMessageHandler(sock) {
                 } catch (e) {
                     await sock.sendMessage(from, { text: '❌ Gagal Minify! Ada kode yang salah tulis.' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'jsonpretty') {
@@ -1104,6 +1159,7 @@ export function registerMessageHandler(sock) {
                 } catch (e) {
                     await sock.sendMessage(from, { text: '❌ Format JSON Error! Cek tanda kurung dan petiknya.' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'dbdiagram') {
@@ -1126,6 +1182,7 @@ export function registerMessageHandler(sock) {
                 } catch (e) {
                     await sock.sendMessage(from, { text: '❌ User GitHub tidak ditemukan. 🥺' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'summarize') {
@@ -1141,6 +1198,7 @@ export function registerMessageHandler(sock) {
                 } catch (e) {
                     await sock.sendMessage(from, { text: '❌ Gagal ambil artikel. Kayaknya web dikunci ketat! 🔒' }, { quoted: msg });
                 }
+                await sendDone(sock, from, msg);
             }
 
             if (command === 'pinghost') {
@@ -1152,6 +1210,7 @@ export function registerMessageHandler(sock) {
                 exec(perintahPing, async (error, stdout) => {
                     if (error) return await sock.sendMessage(from, { text: `❌ Host *${targetHost}* tidak merespons atau tidak valid.` }, { quoted: msg });
                     await sock.sendMessage(from, { text: `📡 *PING REPORT*\n━━━━━━━━━━━━━━━━━━━━━━━\n📌 Target: ${targetHost}\n📊 Status: ONLINE ✅\n\n\`\`\`${stdout.trim()}\`\`\`` }, { quoted: msg });
+                    await sendDone(sock, from, msg);
                 });
             }
 
@@ -1163,12 +1222,17 @@ export function registerMessageHandler(sock) {
                     const script = args.join(' ');
                     if (!script) return await sock.sendMessage(from, { text: '⚠️ Masukkan ekspresi JavaScript Bos!' }, { quoted: msg });
                     try {
-                        let evaled = eval(script);
-                        if (typeof evaled !== 'string') evaled = await import('util').then(u => u.inspect(evaled));
-                        await sock.sendMessage(from, { text: `🟢 *EVAL SUKSES:*\n\`\`\`javascript\n${evaled}\n\`\`\`` }, { quoted: msg });
+                        const restrictedScript = script.replace(/process\.|require\(|import |fs\.|child_process|exec\(|spawn\(|global\./g, '');
+                        if (restrictedScript !== script) {
+                            return await sock.sendMessage(from, { text: '⛔ Eval dibatasi: tidak boleh akses process/fs/child_process/require/import.' }, { quoted: msg });
+                        }
+                        const result = new Function('"use strict"; return (' + restrictedScript + ')')();
+                        const output = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+                        await sock.sendMessage(from, { text: `🟢 *EVAL SUKSES:*\n\`\`\`javascript\n${String(output).slice(0, 2000)}\n\`\`\`` }, { quoted: msg });
                     } catch (e) {
                         await sock.sendMessage(from, { text: `❌ *EVAL ERROR:*\n\`\`\`text\n${e.message}\n\`\`\`` }, { quoted: msg });
                     }
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'resetroom') {
@@ -1182,27 +1246,32 @@ export function registerMessageHandler(sock) {
                     } catch (e) {
                         await sock.sendMessage(from, { text: `❌ Gagal buat room baru: ${e.message}` }, { quoted: msg });
                     }
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'self') {
                     state.isSelfMode = true;
                     await sock.sendMessage(from, { text: '🔒 *Sistem VIP Terkunci!* Sekarang aku cuma nurut sama Bos! 😝🎀' }, { quoted: msg });
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'public') {
                     state.isSelfMode = false;
                     await sock.sendMessage(from, { text: '🔓 *Sistem Dibuka Umum!* Sekarang aku bisa dipakai siapa aja! 🥳🌸' }, { quoted: msg });
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'turu') {
                     state.isSleeping = true;
                     await sock.sendMessage(from, { text: '🛌 *Aku izin turu dulu ya...* Ketik `!bangun` kalau butuh aku lagi! 💤' }, { quoted: msg });
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'bangun') {
                     if (!state.isSleeping) return await sock.sendMessage(from, { text: '☀️ *Aku udah bangun dari tadi Bos!* 🔥🚀' }, { quoted: msg });
                     state.isSleeping = false;
                     await sock.sendMessage(from, { text: '☀️ *Yeayy Aku Bangun!* Semangat lagi bantuin Bos! 🤖💖' }, { quoted: msg });
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'antilink') {
@@ -1210,6 +1279,7 @@ export function registerMessageHandler(sock) {
                     if (status === 'on') { state.antiLink = true; await sock.sendMessage(from, { text: '🛡️ *Anti-Link Nyala!*' }, { quoted: msg }); }
                     else if (status === 'off') { state.antiLink = false; await sock.sendMessage(from, { text: '🔓 *Anti-Link Dimatikan.*' }, { quoted: msg }); }
                     else await sock.sendMessage(from, { text: '⚠️ Format: `!antilink on` atau `!antilink off`' }, { quoted: msg });
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'spek') {
@@ -1217,6 +1287,7 @@ export function registerMessageHandler(sock) {
                     const totalRAM = (os.totalmem() / (1024 ** 3)).toFixed(2);
                     const freeRAM = (os.freemem() / (1024 ** 3)).toFixed(2);
                     await sock.sendMessage(from, { text: `💻 *JEROAN SERVER* 💻\n━━━━━━━━━━━━━━━━━━━━━━━\n⚙️ OS: ${os.platform()} (${os.release()})\n🧠 CPU: ${coreCPU[0].model}\n📈 RAM: ${(totalRAM - freeRAM).toFixed(2)}/${totalRAM} GB\n⏳ Uptime PC: ${Math.floor(os.uptime() / 3600)} jam` }, { quoted: msg });
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'systeminfo') {
@@ -1224,6 +1295,7 @@ export function registerMessageHandler(sock) {
                     const freeRAM = (os.freemem() / (1024 ** 3)).toFixed(2);
                     const loadAvg = os.loadavg().map(l => l.toFixed(2)).join(', ');
                     await sock.sendMessage(from, { text: `📊 *INFO SISTEM VIP* 📊\n━━━━━━━━━━━━━━━━━━━━━━━\n💻 OS: ${os.platform()} (${os.arch()})\n⚙️ CPU Load: [${loadAvg}]\n🧠 Core: ${os.cpus().length}\n📈 RAM: ${freeRAM} GB bebas (pakai ${(totalRAM - freeRAM).toFixed(2)} GB)` }, { quoted: msg });
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'speedtest') {
@@ -1232,26 +1304,7 @@ export function registerMessageHandler(sock) {
                     await new Promise(r => setTimeout(r, 10));
                     const latensi = Date.now() - t;
                     await sock.sendMessage(from, { text: `🚀 *HASIL UJI SERVER:* 🚀\n\n🌐 Latensi: *${latensi}ms*\n📊 Status: *SANGAT SEHAT* 🟢` }, { quoted: msg });
-                }
-
-                if (command === 'broadcast' || command === 'bc') {
-                    const teksBc = args.join(' ');
-                    if (!teksBc) return await sock.sendMessage(from, { text: '⚠️ Teksnya mana Bos? 🥺' }, { quoted: msg });
-                    await sock.sendMessage(from, { text: '📢 Sebarin pesan ke semua grup...' }, { quoted: msg });
-                    try {
-                        const semuaGrup = await sock.groupFetchAllParticipating();
-                        let sukses = 0;
-                        for (let jid of Object.keys(semuaGrup)) {
-                            try {
-                                await sock.sendMessage(jid, { text: `📢 *PENGUMUMAN* 📢\n━━━━━━━━━━━━━━━━━━━━━━━\n\n${teksBc}\n\n🎀 _Dari Bos DoxxBorx_ 👑` });
-                                sukses++;
-                                await new Promise(r => setTimeout(r, 1500));
-                            } catch (err) { console.error(`Gagal ke grup ${jid}:`, err.message); }
-                        }
-                        await sock.sendMessage(from, { text: `✅ Beres! Tersebar ke *${sukses}* grup. 🥳` }, { quoted: msg });
-                    } catch (e) {
-                        await sock.sendMessage(from, { text: '❌ Error waktu ambil data grup!' }, { quoted: msg });
-                    }
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'grup') {
@@ -1260,6 +1313,7 @@ export function registerMessageHandler(sock) {
                     if (!isGroup) return await sock.sendMessage(from, { text: '⚠️ Harus di grup Bos!' }, { quoted: msg });
                     if (aksi === 'open') { await sock.groupSettingUpdate(from, 'not_announcement'); await sock.sendMessage(from, { text: '🔓 Grup dibuka! Semua bisa ngobrol. 🗣️🌸' }, { quoted: msg }); }
                     else if (aksi === 'close') { await sock.groupSettingUpdate(from, 'announcement'); await sock.sendMessage(from, { text: '🔒 Grup dikunci! Cuma admin yang bisa ngomong. 🤫' }, { quoted: msg }); }
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'join') {
@@ -1270,6 +1324,7 @@ export function registerMessageHandler(sock) {
                     if (!isGroup) return await sock.sendMessage(from, { text: '⚠️ Harus diketik di grup yang mau ditinggalin Bos!' }, { quoted: msg });
                     await sock.sendMessage(from, { text: '👋 Dadah semuanya! 🌸💨' });
                     await sock.groupLeave(from);
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'block') {
@@ -1277,6 +1332,7 @@ export function registerMessageHandler(sock) {
                     if (!target || target === '@s.whatsapp.net') return await sock.sendMessage(from, { text: '⚠️ Tag orangnya yang mau diblokir Bos! 😠' }, { quoted: msg });
                     await sock.updateBlockStatus(target, 'block');
                     await sock.sendMessage(from, { text: '🚫 Diblokir! Nggak bakal bisa chat lagi. Hmph! 😤' }, { quoted: msg });
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'unblock') {
@@ -1284,12 +1340,14 @@ export function registerMessageHandler(sock) {
                     if (!target || target === '@s.whatsapp.net') return await sock.sendMessage(from, { text: '⚠️ Tag orangnya yang mau dimaafin Bos! 🕊️' }, { quoted: msg });
                     await sock.updateBlockStatus(target, 'unblock');
                     await sock.sendMessage(from, { text: '🔓 Blokir dilepas. Dia dimaafin. 😇🌸' }, { quoted: msg });
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'refresh') {
                     console.clear();
                     if (global.gc) global.gc();
                     await sock.sendMessage(from, { text: '♻️ *Bersih-Bersih RAM Selesai!* Siap ngebut lagi! 🚀💨💖' }, { quoted: msg });
+                    await sendDone(sock, from, msg);
                 }
 
                 if (command === 'pingsan') {
@@ -1305,11 +1363,13 @@ export function registerMessageHandler(sock) {
                             }
                         });
                     }, 3000);
+                    await sendDone(sock, from, msg);
                 }
             }
 
         } catch (err) {
             console.error('💥 Error di message handler:', err);
+            trackError('message-handler', err, { from, command: command || 'unknown' });
         }
     });
 }

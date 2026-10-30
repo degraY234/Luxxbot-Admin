@@ -17,6 +17,7 @@ const PANEL_TITLES = {
   bot: 'Bot Health',
   radio: 'Radio Control',
   watch: 'Luxx Watch',
+  premium: 'Premium Users',
   system: 'System & Cache',
   tools: 'Tools'
 };
@@ -32,6 +33,9 @@ let audioLoadGen = 0;
 let loadedStreamKey = null;
 let lastRenderedTrackId = null;
 let lastPlaybackSeq = null;
+let lastSyncedPlaybackSeq = null;
+const SYNC_DRIFT_SEC = 12;
+const POLL_MS = 2500;
 let lastKnownServerPaused = null;
 let playbackArmed = false;
 let userPaused = false;
@@ -81,12 +85,46 @@ function isSelfHostedAdmin() {
 
 function defaultApiBase() {
   if (isSelfHostedAdmin()) return location.origin.replace(/\/$/, '');
-  return 'https://healing-java-searched-continues.trycloudflare.com';
+  return 'http://localhost:3920';
 }
 
 function resolveApiBase() {
   if (isSelfHostedAdmin()) return location.origin.replace(/\/$/, '');
   return (localStorage.getItem('luxx_api_base') || '').replace(/\/$/, '') || defaultApiBase();
+}
+
+function pickPublicBase(health, fallback) {
+  const pub = (health?.publicUrl || '').trim().replace(/\/$/, '');
+  if (pub && !/localhost|127\.0\.0\.1/i.test(pub)) return pub;
+  return fallback;
+}
+
+async function discoverBotUrl() {
+  const candidates = [
+    location.origin.replace(/\/$/, ''),
+    'http://localhost:3920',
+    (localStorage.getItem('luxx_api_base') || '').replace(/\/$/, '')
+  ].filter((u, i, a) => u && a.indexOf(u) === i);
+
+  for (const probe of candidates) {
+    try {
+      const res = await fetch(`${probe}/health`, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const base = pickPublicBase(data, probe);
+      if (base !== probe && !/localhost|127\.0\.0\.1/i.test(base)) {
+        try {
+          const pubRes = await fetch(`${base}/health`, { cache: 'no-store' });
+          if (pubRes.ok) {
+            const pubData = await pubRes.json();
+            return { base, health: pubData };
+          }
+        } catch { /* tunnel belum siap */ }
+      }
+      return { base, health: data };
+    } catch (_) { /* coba kandidat berikutnya */ }
+  }
+  return null;
 }
 
 function setupLoginForm() {
@@ -100,12 +138,26 @@ function setupLoginForm() {
     if (baseInput) { baseInput.value = origin; baseInput.readOnly = true; }
     if (baseField) baseField.style.display = 'none';
     if (localBtn) localBtn.style.display = 'none';
-    if (hint) hint.textContent = 'Admin jalan di server yang sama — cukup isi Admin Token.';
+    if (hint) {
+      hint.textContent = `Login di URL ini: ${origin}/admin — cukup isi Admin Token (sama dengan ADMIN_API_TOKEN di .env).`;
+    }
+    void discoverBotUrl().then((found) => {
+      if (!found?.health || !hint) return;
+      const adminUrl = found.health.adminUrl || `${found.base}/admin`;
+      hint.textContent = `Bot online · login URL: ${adminUrl} · token = ADMIN_API_TOKEN di .env`;
+    });
   } else {
     if (baseInput) baseInput.readOnly = false;
     if (baseField) baseField.style.display = '';
     if (localBtn) localBtn.style.display = '';
-    if (hint) hint.textContent = 'Isi URL tunnel bot. Tips: buka admin langsung di https://healing-java-searched-continues.trycloudflare.com/admin untuk audio lebih stabil.';
+    if (hint) hint.textContent = 'Tunnel terisi otomatis jika bot jalan di PC ini — atau isi URL bot manual (tanpa /admin).';
+    void discoverBotUrl().then((found) => {
+      if (!found?.health || !baseInput) return;
+      baseInput.value = found.base;
+      localStorage.setItem('luxx_api_base', found.base);
+      const adminUrl = found.health.adminUrl || `${found.base}/admin`;
+      if (hint) hint.textContent = `Tunnel terdeteksi otomatis · ${adminUrl} · token = ADMIN_API_TOKEN`;
+    });
   }
 }
 
@@ -159,6 +211,9 @@ function switchPanel(id) {
       $('#radio-search-hero')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       $('#song-search-input')?.focus({ preventScroll: true });
     });
+  }
+  if (id === 'premium') {
+    void refreshPremiumUsers();
   }
 }
 
@@ -514,8 +569,8 @@ function syncPlayerBadge() {
     return;
   }
   if (!playbackArmed) {
-    badge.textContent = 'LIVE';
-    badge.className = 'player-badge live';
+    badge.textContent = serverPaused ? 'DIJEDA' : 'SIAP';
+    badge.className = 'player-badge load';
     return;
   }
   if (isPlayerPlaying()) {
@@ -542,6 +597,7 @@ function updatePlayBtn() {
   btn.disabled = false;
   const serverPaused = Boolean(lastAdminRadio?.paused ?? lastAdminRadio?.playback?.paused);
   const hasCurrent = Boolean(lastAdminRadio?.current);
+  const hasQueue = (lastAdminRadio?.queue?.length || 0) > 0;
   if (hasCurrent) {
     btn.textContent = serverPaused ? '▶ Lanjut' : '⏸ Jeda';
     if (hint) {
@@ -553,7 +609,11 @@ function updatePlayBtn() {
     return;
   }
   btn.textContent = '▶ Putar';
-  if (hint) hint.textContent = 'Klik Putar untuk mulai lagu dari antrian';
+  if (hint) {
+    hint.textContent = hasQueue
+      ? 'Klik Putar untuk mulai lagu dari antrian (tidak autoplay)'
+      : 'Klik Putar untuk mulai lagu dari antrian';
+  }
   syncPlayerBadge();
 }
 
@@ -626,7 +686,10 @@ function resolvePlaybackPosition(playback = {}, audioEl = null) {
   const serverPos = playback.positionSec ?? 0;
   const serverPaused = Boolean(playback.paused);
 
-  if (!playbackArmed || serverPaused) {
+  if (!playbackArmed) {
+    return { position: 0, duration: serverDur };
+  }
+  if (serverPaused) {
     return { position: serverPos, duration: serverDur };
   }
 
@@ -635,7 +698,7 @@ function resolvePlaybackPosition(playback = {}, audioEl = null) {
     const audioDur = a.duration;
     const duration = Number.isFinite(audioDur) && audioDur > 0 ? audioDur : serverDur;
     const drift = Math.abs(a.currentTime - serverPos);
-    if (drift > 3 && serverPos > 0) {
+    if (drift > SYNC_DRIFT_SEC && serverPos > 0) {
       try { a.currentTime = serverPos; } catch (_) { /* ignore */ }
       return { position: serverPos, duration };
     }
@@ -698,9 +761,13 @@ function syncPlaybackWithServer(r = {}) {
     return;
   }
 
-  const shouldResume = wasPaused === true || audio.paused || (seq != null && wasPaused !== false && !isPlayerPlaying());
-  if (shouldResume || Math.abs((audio.currentTime || 0) - serverPos) > 2) {
+  const trackChanged = seq != null && seq !== lastSyncedPlaybackSeq;
+  const resumedFromPause = wasPaused === true;
+  const drift = Math.abs((audio.currentTime || 0) - serverPos);
+  const needsSeek = trackChanged || resumedFromPause || audio.paused || drift > SYNC_DRIFT_SEC;
+  if (needsSeek) {
     void seekAudioTo(audio, serverPos).then(() => {
+      if (seq != null) lastSyncedPlaybackSeq = seq;
       if (!serverPaused && playbackArmed) {
         audio.play().catch(() => {});
         ensureProgressTick();
@@ -1319,6 +1386,27 @@ function renderServicePills(d) {
   ).join('');
 }
 
+function renderGuardian(d) {
+  const status = d.guardian || {};
+  const box = $('#guardian-box');
+  const list = $('#guardian-alerts');
+  if (!box || !list) return;
+
+  box.innerHTML = `
+    Last check: <strong>${status.lastCheck || '—'}</strong><br>
+    Issues: <strong>${status.issues?.length || 0}</strong><br>
+    Config last changed: <strong>${status.config?.lastChangeAt || '—'}</strong>`;
+
+  list.innerHTML = (status.activeAlerts || []).map((alert) => {
+    const btn = alert.acknowledged ? '✔️' : '⚠️';
+    return `
+      <li class="alert-item ${alert.acknowledged ? 'alert-ack' : ''}">
+        <div><strong>${btn} ${alert.type}</strong> · ${alert.message}</div>
+        <div class="alert-meta">${alert.createdAt}</div>
+      </li>`;
+  }).join('') || '<li class="muted">Tidak ada alert aktif.</li>';
+}
+
 function renderSystem(sys) {
   if (!sys) return;
   lastSystem = sys;
@@ -1354,6 +1442,38 @@ function renderSystem(sys) {
     Load: <strong>${(sys.loadAvg || []).join(', ') || '—'}</strong><br>
     Bot URL: <span class="muted">${sys.runtime?.radioUrl || cfg().base || '—'}</span><br>
     <span class="muted">Stack: WhatsApp · Discord · GitHub Admin</span>`;
+}
+
+function renderPremiumUsers(users) {
+  const listEl = $('#premium-list');
+  if (!listEl) return;
+  if (!Array.isArray(users) || users.length === 0) {
+    listEl.innerHTML = '<div class="muted">Belum ada user premium terdaftar.</div>';
+    return;
+  }
+  listEl.innerHTML = users.map((u) => `
+    <div class="premium-item">
+      <strong>${u}</strong>
+    </div>
+  `).join('');
+}
+
+function showPremiumMessage(message, isError = false) {
+  const msgEl = $('#premium-message');
+  if (!msgEl) return;
+  msgEl.textContent = message || 'Daftar premium akan muncul di bawah.';
+  msgEl.classList.toggle('error', isError);
+}
+
+async function refreshPremiumUsers() {
+  try {
+    const data = await api('/premium-users');
+    renderPremiumUsers(data.users || []);
+    showPremiumMessage(`Daftar premium terbarui: ${data.users.length} nomor.`);
+  } catch (e) {
+    renderPremiumUsers([]);
+    showPremiumMessage(`Gagal muat premium users: ${e.message}`, true);
+  }
 }
 
 function renderStatus(d) {
@@ -1437,6 +1557,27 @@ function renderStatus(d) {
 
   renderServicePills(d);
   renderQuickLinks(cfg().base, lastSystem);
+  void refreshOps();
+}
+
+async function refreshOps() {
+  const box = $('#ops-box');
+  const hints = $('#ops-hints');
+  if (!box) return;
+  try {
+    const ops = await api('/ops');
+    const t = ops.tunnel || {};
+    const dep = ops.deploy || {};
+    box.innerHTML = `
+      Tunnel: <strong>${t.publicUrl || '—'}</strong>${t.quickTunnel ? ' <span class="muted">(quick)</span>' : ''}<br>
+      LAN: <strong>${t.lanUrl || '—'}</strong><br>
+      Runtime: <strong>${dep.railway ? 'Railway' : 'PM2 lokal'}</strong>`;
+    if (hints) {
+      hints.innerHTML = (dep.hints || []).map((h) => `<code>${h}</code>`).join(' · ');
+    }
+  } catch (e) {
+    box.textContent = `Ops gagal dimuat: ${e.message}`;
+  }
 }
 
 async function pollAdminLyrics() {
@@ -1453,15 +1594,17 @@ async function pollAdminLyrics() {
 
 async function refresh() {
   try {
-    const [status, system] = await Promise.all([
+    const [status, system, guardian] = await Promise.all([
       api('/status'),
-      api('/system').catch(() => null)
+      api('/system').catch(() => null),
+      api('/guardian').catch(() => null)
     ]);
     if (system) {
       lastSystem = system;
       renderSystem(system);
     }
     renderStatus(status);
+    if (guardian) renderGuardian(guardian);
   } catch (e) {
     $('#conn-badge').textContent = 'error';
     $('#conn-badge').className = 'badge offline';
@@ -1503,7 +1646,7 @@ async function doLogin() {
     appScreen.classList.remove('hidden');
     requestAnimationFrame(() => $('#beat-canvas')?._resize?.());
     refresh();
-    if (!window._poll) window._poll = setInterval(refresh, 800);
+    if (!window._poll) window._poll = setInterval(refresh, POLL_MS);
     if (!lyricsPollTimer) lyricsPollTimer = setInterval(pollAdminLyrics, 2000);
   } catch (e) {
     showLoginError(e.message);
@@ -1518,9 +1661,11 @@ $$('.nav-item').forEach((btn) => {
 });
 
 $('#btn-login')?.addEventListener('click', doLogin);
-$('#btn-local')?.addEventListener('click', () => {
-  safeEl('#api-base', (el) => { el.value = defaultApiBase(); });
-  showToast('Diisi: localhost bot (port 3920)');
+$('#btn-local')?.addEventListener('click', async () => {
+  const found = await discoverBotUrl();
+  const base = found?.base || defaultApiBase();
+  safeEl('#api-base', (el) => { el.value = base; });
+  showToast(found?.health ? `Bot online: ${base}` : 'Diisi: localhost bot (port 3920)');
 });
 $('#btn-toggle-token')?.addEventListener('click', () => {
   const inp = $('#api-token');
@@ -1678,6 +1823,39 @@ $('#btn-prune-cache')?.addEventListener('click', async () => {
     if (r.system) { lastSystem = r.system; renderSystem(r.system); }
     await refresh();
   } catch (e) { showToast(e.message); }
+});
+$('#btn-refresh-premium')?.addEventListener('click', async () => {
+  await refreshPremiumUsers();
+});
+$('#btn-add-premium')?.addEventListener('click', async () => {
+  const input = $('#premium-number');
+  const number = input?.value.trim() || '';
+  if (!number) {
+    return showPremiumMessage('Isi nomor WA untuk ditambahkan.', true);
+  }
+  try {
+    const result = await api('/premium-users', 'POST', { number });
+    renderPremiumUsers(result.users || []);
+    showPremiumMessage(`Nomor ${number} berhasil ditambahkan.`);
+    if (input) input.value = '';
+  } catch (e) {
+    showPremiumMessage(`Gagal tambah: ${e.message}`, true);
+  }
+});
+$('#btn-remove-premium')?.addEventListener('click', async () => {
+  const input = $('#premium-number');
+  const number = input?.value.trim() || '';
+  if (!number) {
+    return showPremiumMessage('Isi nomor WA untuk dihapus.', true);
+  }
+  try {
+    const result = await api('/premium-users', 'DELETE', { number });
+    renderPremiumUsers(result.users || []);
+    showPremiumMessage(`Nomor ${number} berhasil dihapus.`);
+    if (input) input.value = '';
+  } catch (e) {
+    showPremiumMessage(`Gagal hapus: ${e.message}`, true);
+  }
 });
 $('#btn-song-search')?.addEventListener('click', runSongSearch);
 $('#song-search-input')?.addEventListener('keydown', (e) => {

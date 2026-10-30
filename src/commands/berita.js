@@ -17,4 +17,5 @@ export async function handleBeritaCommand({ sock, from, msg, args }) {
                 `💡 Coba \`!berita indonesia\` atau \`!berita help\``
         }, { quoted: msg });
     }
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }

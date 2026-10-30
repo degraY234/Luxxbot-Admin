@@ -82,8 +82,10 @@ export async function handleJoinCommand({ sock, from, msg, args }) {
                 (jid ? `\n_${jid}_` : '') +
                 '\n\n_Kalau grup pakai approval admin, tunggu disetujui dulu._'
         }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     } catch (e) {
         console.error('JOIN ERROR:', e?.message || e);
         await sock.sendMessage(from, { text: `❌ ${mapJoinError(e)}` }, { quoted: msg });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     }
 }

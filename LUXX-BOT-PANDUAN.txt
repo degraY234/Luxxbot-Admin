@@ -1,0 +1,114 @@
+================================================================================
+  LUXX BOT — PANDUAN PERINTAH & OPERASIONAL 24/7 (Project Bot Wa)
+  Folder: C:\Users\DoxxBorx\Project Bot Wa
+  Branch: feature/railway-deploy
+================================================================================
+
+Buka PowerShell / CMD, masuk folder bot:
+
+    cd "C:\Users\DoxxBorx\Project Bot Wa"
+
+
+================================================================================
+  RINGKASAN SISTEM
+================================================================================
+
+Bot WhatsApp LuxxBot dilengkapi dengan:
+  [x] WhatsApp Bot (Baileys) — pairing via browser di /pair atau terminal
+  [x] Web Radio Server — streaming audio & antrian lagu
+  [x] Discord Radio Voice — sinkron radio ke Discord Voice Channel
+  [x] Luxx Watch (LK21 / streaming film bersama)
+  [x] Admin Panel web — pemantauan sistem, kontrol radio, premium users
+  [x] Cloudflare Quick Tunnel — akses publik instan via PM2 tunnel daemon
+  [x] Railway Ready — deployment 24/7 dengan Docker & persistent volume
+
+
+================================================================================
+  MENJALANKAN BOT DI PC / LOCAL (PM2)
+================================================================================
+
+Perintah 1-baris paling mudah (start bot + tunnel + sync URL):
+
+    npm run pm2:start:all
+
+Perintah PM2 harian:
+  - Cek status proses:     npm run pm2:status
+  - Restart bot:           npm run pm2:restart
+  - Restart semua:         npm run pm2:restart:all
+  - Simpan konfigurasi:    npm run pm2:save
+  - Matikan bot:           npm run pm2:unsave
+
+Auto-start saat Windows Login (24/7 PC):
+  - Pasang startup:        npm run pm2:install-startup
+  - Lepas startup:         npm run pm2:disable-startup
+
+
+================================================================================
+  LOGIN & PAIRING WHATSAPP (QR CODE)
+================================================================================
+
+1. Jalankan bot:
+   npm start   (atau via PM2: npm run pm2:start:all)
+
+2. Buka di browser:
+   http://localhost:3920/pair
+   (atau via URL tunnel: https://<tunnel>.trycloudflare.com/pair)
+
+3. Di HP: Buka WhatsApp → Titik 3 / Pengaturan → Perangkat Tertaut → Tautkan Perangkat.
+4. Scan QR code yang tampil di browser laptop.
+5. Setelah terhubung, session otomatis tersimpan di folder `session/`.
+
+
+================================================================================
+  DEPLOYMENT 24/7 DI RAILWAY (CLOUD)
+================================================================================
+
+Checklist lengkap ada di: scripts/railway-setup-checklist.txt atau DEPLOYMENT-GUIDE.md
+
+Langkah singkat:
+  1. Push branch `feature/railway-deploy` ke GitHub.
+  2. Buka https://railway.app → New Project → Deploy from GitHub Repo.
+  3. Pilih repo LuxxBot.
+  4. Buka Service → Settings → Volumes → Tambah Volume:
+     - Mount Path: `/app/persist`  (WAJIB agar session login tidak hilang tiap redeploy)
+  5. Buka Variables → Masukkan API Keys (.env):
+     - GEMINI_API_KEY
+     - GROK_API_KEY
+     - DISCORD_BOT_TOKEN & DISCORD_GUILD_ID
+     - PERSIST_DIR=/app/persist
+     - JANGAN set RADIO_PORT=3920 (biarkan Railway inject PORT dinamis).
+  6. Networking → Generate Domain (misal: `luxxbot-production.up.railway.app`).
+  7. Scan QR login via https://luxxbot-production.up.railway.app/pair
+
+
+================================================================================
+  PENGUJIAN & VERIFIKASI (SMOKE TEST)
+================================================================================
+
+Uji kesehatan bot dan endpoint web:
+
+    npm run test:smoke
+
+Periksa URL publik yang sedang aktif:
+
+    npm run bot:url
+
+
+================================================================================
+  TROUBLESHOOTING
+================================================================================
+
+1. Tunnel Cloudflare Error 530 / "origin unregistered":
+   Solusi:
+       npm run tunnel:reset
+
+2. WhatsApp disconnect / Session corrupt:
+   Solusi:
+       Hapus isi folder session/ lalu buka /pair untuk scan ulang QR.
+
+3. yt-dlp gagal unduh lagu di PC:
+   Solusi:
+       Update yt-dlp: winget upgrade yt-dlp
+       Pastikan file cookies YouTube diexport jika terkena limit YouTube bot.
+
+================================================================================

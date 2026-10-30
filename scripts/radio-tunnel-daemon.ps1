@@ -35,11 +35,7 @@ function Set-RadioPublicUrl([string]$Url) {
     if (-not $found) { $out += "RADIO_PUBLIC_URL=$url" }
     if (($out -join "`n") -ne ($lines -join "`n")) {
         Set-Content -Path $EnvFile -Value $out -Encoding UTF8
-        Write-Host "[luxx-tunnel] RADIO_PUBLIC_URL -> $url" -ForegroundColor Green
-        $pm2 = Get-Command pm2 -ErrorAction SilentlyContinue
-        if ($pm2) {
-            pm2 restart luxx --update-env 2>$null
-        }
+        Write-Host "[luxx-tunnel] RADIO_PUBLIC_URL -> $url (tanpa restart luxx)" -ForegroundColor Green
     }
 }
 

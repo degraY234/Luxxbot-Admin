@@ -27,20 +27,33 @@ export function runAIQueue(text, type, isAdmin, fromId, meta = null) {
     });
 }
 
+const AI_CONCURRENT_LIMIT = 2;
+let aiActiveJobs = 0;
+
 async function processQueue() {
-    if (state.isProcessingQueue) return;
+    if (state.isProcessingQueue && aiQueue.length === 0) return;
     state.isProcessingQueue = true;
-    while (aiQueue.length > 0) {
+    while (aiQueue.length > 0 && aiActiveJobs < AI_CONCURRENT_LIMIT) {
         const job = aiQueue.shift();
-        try {
-            const res = await tanyakanAI(job.text, job.type, job.isAdmin, job.fromId, job.meta);
-            job.resolve(res);
-            await new Promise((r) => setTimeout(r, 2000));
-        } catch (e) {
-            job.reject(e);
-        }
+        aiActiveJobs++;
+        processJob(job).finally(() => {
+            aiActiveJobs--;
+            if (aiQueue.length > 0) processQueue();
+        });
     }
-    state.isProcessingQueue = false;
+    if (aiActiveJobs === 0 && aiQueue.length === 0) {
+        state.isProcessingQueue = false;
+    }
+}
+
+async function processJob(job) {
+    try {
+        const res = await tanyakanAI(job.text, job.type, job.isAdmin, job.fromId, job.meta);
+        job.resolve(res);
+        await new Promise((r) => setTimeout(r, 500));
+    } catch (e) {
+        job.reject(e);
+    }
 }
 
 const GROQ_TEXT_MODELS = [

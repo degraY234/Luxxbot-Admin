@@ -7,6 +7,12 @@ import {
     syncedLinesToLrc
 } from '../utils/lyrics-sync.js';
 import { parseTrackIdentity } from './google-lyrics.js';
+import { createCircuit } from '../utils/circuit-breaker.js';
+
+const http = axios.create({ timeout: 15000 });
+
+const lrclibCircuit = createCircuit('lrclib', { threshold: 5, resetMs: 30000 });
+const lyricsOvhCircuit = createCircuit('lyrics-ovh', { threshold: 5, resetMs: 30000 });
 
 function cleanTrackTitle(title) {
     return String(title || '')
@@ -46,7 +52,7 @@ async function getLrclibExact(artist, title, durationSec) {
     };
     if (durationSec && durationSec > 0) params.duration = Math.round(durationSec);
 
-    const { data, status } = await axios.get('https://lrclib.net/api/get', {
+    const { data, status } = await http.get('https://lrclib.net/api/get', {
         params,
         timeout: 12000,
         validateStatus: () => true
@@ -57,7 +63,7 @@ async function getLrclibExact(artist, title, durationSec) {
 }
 
 async function searchLrclib(query) {
-    const { data } = await axios.get('https://lrclib.net/api/search', {
+    const { data } = await http.get('https://lrclib.net/api/search', {
         params: { q: query },
         timeout: 12000
     });
@@ -243,7 +249,7 @@ async function fetchLyricsPlainFast(query, track = null) {
 
     for (const [a, t] of pairs) {
         try {
-            const res = await axios.get(
+            const res = await http.get(
                 `https://api.lyrics.ovh/v1/${encodeURIComponent(a)}/${encodeURIComponent(t)}`,
                 { timeout: 7000, validateStatus: () => true }
             );
@@ -279,7 +285,7 @@ async function fetchLyricsPlainOnce(query) {
         const search = await ytSearch(q);
         const video = search.videos?.[0];
         if (video) {
-            const hit2 = await searchLrclib(`${video.title} ${video.author?.name || ''}`);
+            const hit2 = await lrclibCircuit.call(searchLrclib, `${video.title} ${video.author?.name || ''}`);
             if (hit2?.plainLyrics || hit2?.syncedLyrics) {
                 const packed = packLyricsResult({
                     ...hit2,
@@ -304,7 +310,8 @@ async function fetchLyricsPlainOnce(query) {
 
     for (const [a, t] of pairs) {
         try {
-            const res = await axios.get(
+            const res = await lyricsOvhCircuit.call(
+                http.get,
                 `https://api.lyrics.ovh/v1/${encodeURIComponent(a)}/${encodeURIComponent(t)}`,
                 { timeout: 10000, validateStatus: () => true }
             );

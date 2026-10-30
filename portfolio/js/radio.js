@@ -321,7 +321,7 @@
     if (isPlayerAudible() && !serverPaused) return;
     const pb = lastNowData?.playback || {};
     const dur = pb.durationSec || lyricsState.playback.durationSec || 0;
-    const pos = pb.positionSec || 0;
+    const pos = playbackArmed ? (pb.positionSec || 0) : 0;
     updateProgressUI(pos, dur);
   }
 
@@ -341,6 +341,11 @@
 
     if (!d.playbackActive) return;
 
+    if (!playbackArmed) {
+      updateProgressUI(0, pb.durationSec || d.current?.durationSec || 0);
+      return;
+    }
+
     updateProgressUI(serverPos, pb.durationSec || 0);
 
     if (serverPaused) {
@@ -358,7 +363,7 @@
 
     const resumedFromPause = wasPaused === true;
     const drift = Math.abs((player.currentTime || 0) - serverPos);
-    if (resumedFromPause || player.paused || drift > 2) {
+    if (resumedFromPause || player.paused || drift > 12) {
       seekToPosition(serverPos);
       startPlayerPlayback();
     }
@@ -465,8 +470,7 @@
     pendingTrackKey = null;
     streamLoadGen += 1;
     const serverPaused = Boolean(d.paused ?? d.playback?.paused);
-    if (d.playbackActive && d.hasStream && !serverPaused) {
-      if (!playbackArmed) armLocalPlayback();
+    if (d.playbackActive && d.hasStream && !serverPaused && playbackArmed) {
       prepareStream(d);
     } else if (isAutoAdvancePending(d)) {
       setStatus('⏳ Lagu berikutnya dimuat — putar otomatis setelah siap', false);
@@ -474,7 +478,7 @@
       disarmLocalPlayback();
     }
     if (d.waitingPlay || d.upNext) {
-      setStatus('⏳ Lagu sedang dimuat — audio menyala otomatis setelah siap', false);
+      setStatus('📋 Lagu di antrian — klik Putar untuk mulai', false);
     }
     burstLyricsPoll();
     prefetchQueueLyricsClient(d.queue);
@@ -721,12 +725,11 @@
       return;
     }
     if (d.playbackActive && d.hasStream && !playbackArmed) {
-      const pos = d.playback?.elapsedLabel || '0:00';
-      setStatus(`▶️ Live @ ${pos} — klik Putar untuk dengar di browser ini`);
+      setStatus('▶️ Radio aktif di server — klik Putar untuk dengar di browser ini');
       return;
     }
     if (d.waitingPlay && !playbackArmed) {
-      setStatus('⏳ Menunggu lagu siap...');
+      setStatus('📋 Lagu di antrian — klik Putar untuk mulai');
       return;
     }
     if (!disc?.enabled) {
@@ -861,10 +864,7 @@
 
       const hasQueue = (d.queueLength || 0) > 0 || d.waitingPlay || d.upNext;
       if (d.playbackActive && d.hasStream && d.current) {
-        if (!playbackArmed && userInteracted && !userPaused && !(d.paused ?? d.playback?.paused)) {
-          armLocalPlayback();
-          prepareStream(d);
-        } else if (playbackArmed && needsStreamReload(d)) {
+        if (playbackArmed && needsStreamReload(d)) {
           prepareStream(d);
         } else {
           updateProgressDisplay();
@@ -974,6 +974,7 @@
       await new Promise((res) => setTimeout(res, 400));
       await pollNow();
       if (lastNowData?.playbackActive && lastNowData?.hasStream) return true;
+      if (lastNowData?.lastPrepareError && !lastNowData?.isPreparing) break;
       if (!lastNowData?.isPreparing && i > 15 && !lastNowData?.hasStream && !(lastNowData?.queueLength || 0)) break;
     }
     return Boolean(lastNowData?.playbackActive && lastNowData?.hasStream);
@@ -1091,7 +1092,7 @@
 
   pollNow();
   pollLyrics();
-  pollTimer = setInterval(pollNow, 800);
+  pollTimer = setInterval(pollNow, 2500);
   setLyricsPollInterval(true);
 
   window.addEventListener('pageshow', (e) => {

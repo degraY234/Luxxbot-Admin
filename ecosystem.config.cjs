@@ -9,6 +9,7 @@ module.exports = {
             script: 'index.js',
             cwd: root,
             interpreter: 'node',
+            windowsHide: true,
             autorestart: true,
             max_restarts: 100,
             min_uptime: '10s',
@@ -17,7 +18,8 @@ module.exports = {
             exp_backoff_restart_delay: 2000,
             env: {
                 NODE_ENV: 'production',
-                PM2_APP_NAME: 'luxx'
+                PM2_APP_NAME: 'luxx',
+                NODE_OPTIONS: '--max-old-space-size=4096'
             }
         },
         {
@@ -25,9 +27,10 @@ module.exports = {
             script: 'scripts/radio-tunnel-daemon.mjs',
             cwd: root,
             interpreter: 'node',
+            windowsHide: true,
             autorestart: true,
             max_restarts: 50,
-            min_uptime: '5s',
+            min_uptime: '15s',
             restart_delay: 8000,
             watch: false,
             env: {

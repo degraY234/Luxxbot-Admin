@@ -1,6 +1,6 @@
 {
   "name": "luxxbot",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "WhatsApp Bot Premium",
   "main": "index.js",
   "type": "module",
@@ -10,14 +10,22 @@
   "scripts": {
     "start": "node index.js",
     "pm2:start": "pm2 start ecosystem.config.cjs --update-env",
+    "pm2:start:all": "node scripts/pm2-start-all.mjs",
     "pm2:restart": "pm2 restart luxx --update-env",
+    "discord:rebuild": "npm rebuild @discordjs/opus sodium-native @snazzah/davey",
+    "postinstall": "npm run discord:rebuild",
+    "pm2:restart:all": "pm2 restart ecosystem.config.cjs --update-env",
     "pm2:save": "pm2 save",
     "pm2:unsave": "pm2 stop luxx & pm2 stop luxx-tunnel & pm2 save",
+    "pm2:install-startup": "powershell -ExecutionPolicy Bypass -File scripts\\pm2-install-startup.ps1",
     "pm2:disable-startup": "powershell -ExecutionPolicy Bypass -File scripts\\pm2-disable-startup.ps1",
-    "pm2:status": "pm2 status luxx",
+    "pm2:status": "pm2 status luxx luxx-tunnel",
+    "tunnel:ensure": "node scripts/ensure-pm2-tunnel.mjs",
     "watch:setup": "node scripts/setup-public-watch.mjs",
     "tunnel:start": "pm2 start ecosystem.config.cjs --only luxx-tunnel --update-env",
+    "tunnel:stop": "node scripts/tunnel-stop.mjs",
     "tunnel:restart": "pm2 restart luxx-tunnel --update-env",
+    "tunnel:reset": "node scripts/tunnel-reset.mjs",
     "oracle:checklist": "type scripts\\oracle-setup-checklist.txt",
     "zelpstore:checklist": "type scripts\\zelpstore-setup-checklist.txt",
     "railway:checklist": "type scripts\\railway-setup-checklist.txt",
@@ -25,11 +33,16 @@
     "export:portfolio": "node scripts/export-portfolio-repo.mjs",
     "sync:portfolio": "node scripts/sync-portfolio-repo.mjs",
     "portfolio:domain": "node scripts/enable-portfolio-domain.mjs",
-    "cleanup:commit": "node scripts/commit-cleanup.mjs"
+    "cleanup:commit": "node scripts/commit-cleanup.mjs",
+    "discovery:sync": "node scripts/sync-discovery-github.mjs",
+    "bot:url": "node scripts/print-bot-url.mjs",
+    "test:smoke": "node scripts/test-smoke.mjs"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
+    "opusscript": "^0.0.8",
     "@discordjs/voice": "^0.19.2",
+    "@snazzah/davey": "^0.1.9",
     "@distube/ytdl-core": "^4.16.12",
     "@google/genai": "^2.8.0",
     "@hapi/boom": "^10.0.1",
@@ -52,7 +65,9 @@
     "terser": "^5.48.0",
     "wa-sticker-formatter": "^4.4.4",
     "yt-search": "^2.13.1",
-    "ytdl-core": "^4.11.5"
+    "ytdl-core": "^4.11.5",
+    "redis": "^4.6.7",
+    "better-sqlite3": "^8.4.0"
   },
   "allowScripts": {
     "sodium-native@5.1.0": true,

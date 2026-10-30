@@ -27,7 +27,8 @@ import {
     adminWatchStop,
     adminWatchClearQueue
 } from './watch-server.js';
-import { getDiscordDiagnostics } from './discord-radio.js';
+import { getDiscordDiagnostics, requestDiscordRadioSync } from './discord-radio.js';
+import { getGuardianStatus, getGuardianAlerts, acknowledgeGuardianAlert, startGuardian } from './guardian.js';
 import { BOT_NAME, PM2_APP_NAME, startTime } from '../config.js';
 import { state } from '../state.js';
 import { runtime } from '../utils/runtime.js';
@@ -35,6 +36,10 @@ import { getYoutubeCookiesStatus, saveYoutubeCookies } from '../utils/youtube-co
 import { getSessionDiagnostics } from '../utils/wa-session.js';
 import { getCachedLyricsForTrack } from './radio-lyrics.js';
 import { buildSystemDiagnostics, pruneRuntimeCaches } from '../utils/admin-diagnostics.js';
+import { applyLuxxAppCors, isLuxxAppOrigin } from '../utils/app-cors.js';
+import { getRadioPublicUrl, getLanIPv4 } from '../utils/radio-url.js';
+import { getListenPort, isRailwayRuntime } from '../utils/listen-port.js';
+import { addPremiumUser, removePremiumUser, getPremiumUsers } from './premium-users.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const adminStaticDir = path.resolve(__dirname, '../../admin');
@@ -45,25 +50,28 @@ function getAdminToken() {
 
 function isAllowedCorsOrigin(origin) {
     if (!origin) return true;
+    if (isLuxxAppOrigin(origin)) return true;
     const configured = process.env.ADMIN_CORS_ORIGIN?.trim();
     if (!configured || configured === '*') return true;
     const list = configured.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
     if (list.includes(origin)) return true;
     if (/^https:\/\/[a-z0-9-]+\.github\.io$/i.test(origin)) return true;
-    if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
     return false;
 }
 
 function applyCors(req, res) {
+    if (isAllowedCorsOrigin(req.headers.origin)) {
+        return applyLuxxAppCors(req, res);
+    }
     const origin = req.headers.origin;
-    if (origin && isAllowedCorsOrigin(origin)) {
+    if (origin) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Vary', 'Origin');
-    } else if (!origin) {
+    } else {
         res.setHeader('Access-Control-Allow-Origin', '*');
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
     if (req.method === 'OPTIONS') {
         res.status(204).end();
         return true;
@@ -142,6 +150,7 @@ export function mountAdminApi(app) {
         payload.radio.lyrics = payload.radio?.current
             ? getCachedLyricsForTrack(payload.radio.current)
             : { found: false, loading: false, lyrics: null };
+        payload.guardian = getGuardianStatus();
         res.json(payload);
     });
 
@@ -160,6 +169,76 @@ export function mountAdminApi(app) {
         res.json({ ok: true, ...buildSystemDiagnostics() });
     });
 
+    app.get('/admin/api/guardian', (req, res) => {
+        res.json({ ok: true, alerts: getGuardianAlerts(), status: getGuardianStatus() });
+    });
+
+    app.post('/admin/api/guardian/ack', (req, res) => {
+        const id = String(req.body?.id || '').trim();
+        if (!id) return res.status(400).json({ ok: false, error: 'Alert ID wajib.' });
+        const alert = acknowledgeGuardianAlert(id);
+        if (!alert) return res.status(404).json({ ok: false, error: 'Alert tidak ditemukan.' });
+        res.json({ ok: true, alert });
+    });
+
+    app.get('/admin/api/ops', async (_req, res) => {
+        const publicUrl = getRadioPublicUrl().replace(/\/$/, '');
+        const lan = getLanIPv4();
+        const lanUrl = lan ? `http://${lan}:${getListenPort()}` : null;
+        const tunnelPublic = /localhost|127\.0\.0\.1/i.test(publicUrl) ? null : publicUrl;
+        res.json({
+            ok: true,
+            tunnel: {
+                publicUrl: tunnelPublic,
+                lanUrl,
+                quickTunnel: /\.trycloudflare\.com/i.test(publicUrl)
+            },
+            deploy: {
+                railway: isRailwayRuntime(),
+                pm2Local: !isRailwayRuntime(),
+                hints: [
+                    'npm run pm2:start:all',
+                    'npm run tunnel:reset',
+                    'npm run test:smoke'
+                ]
+            }
+        });
+    });
+
+    app.get('/admin/api/premium-users', async (req, res) => {
+        try {
+            const users = await getPremiumUsers();
+            res.json({ ok: true, users });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message || 'Gagal ambil daftar premium.' });
+        }
+    });
+
+    app.post('/admin/api/premium-users', async (req, res) => {
+        const number = String(req.body?.number || '').trim();
+        if (!number) {
+            return res.status(400).json({ ok: false, error: 'Nomor WA premium wajib diisi.' });
+        }
+        const result = await addPremiumUser(number);
+        if (!result.ok) {
+            return res.status(400).json(result);
+        }
+        res.json(result);
+    });
+
+    app.delete('/admin/api/premium-users', async (req, res) => {
+        const number = String(req.body?.number || '').trim();
+        if (!number) {
+            return res.status(400).json({ ok: false, error: 'Nomor WA premium wajib diisi.' });
+        }
+        const result = await removePremiumUser(number);
+        const ok = typeof result === 'boolean' ? result : Boolean(result?.ok);
+        if (!ok) {
+            return res.status(404).json({ ok: false, error: 'Pengguna tidak ditemukan di daftar premium.' });
+        }
+        res.json({ ok: true, message: 'Berhasil menghapus pengguna premium.' });
+    });
+
     app.post('/admin/api/cache/prune', (req, res) => {
         const result = pruneRuntimeCaches();
         res.json({ ok: true, message: 'Cache runtime dibersihkan.', ...result, system: buildSystemDiagnostics() });
@@ -176,6 +255,7 @@ export function mountAdminApi(app) {
 
     app.post('/admin/api/skip', async (req, res) => {
         const result = await skipRadioTrack();
+        requestDiscordRadioSync('admin-skip', 600);
         const nextTitle = radio.queue[0]?.title;
         res.json({
             ok: result.ok,
@@ -190,6 +270,7 @@ export function mountAdminApi(app) {
 
     app.post('/admin/api/play', async (req, res) => {
         const result = await handleRadioPlayRequest();
+        requestDiscordRadioSync('admin-play', 800);
         res.json({
             ...result,
             streamEpoch: getRadioStreamEpoch(),
@@ -202,6 +283,7 @@ export function mountAdminApi(app) {
 
     app.post('/admin/api/pause', (req, res) => {
         const result = pauseRadioPlayback();
+        requestDiscordRadioSync('admin-pause', 200);
         res.json({
             ...result,
             queueLength: radio.queue.length,
@@ -211,6 +293,7 @@ export function mountAdminApi(app) {
 
     app.post('/admin/api/resume', (req, res) => {
         const result = resumeRadioPlayback();
+        requestDiscordRadioSync('admin-resume', 400);
         res.json({
             ...result,
             queueLength: radio.queue.length,
@@ -283,7 +366,7 @@ export function mountAdminApi(app) {
                 author: body.author,
                 seconds: body.seconds,
                 duration: body.duration
-            }, 'Admin Panel');
+            }, String(body.requestedBy || body.username || 'Admin Panel').trim().slice(0, 48) || 'Admin Panel');
 
             let playResult = null;
             if (body.playNow) {
@@ -340,7 +423,8 @@ export function mountAdminApi(app) {
             spawn('pm2', ['restart', PM2_APP_NAME, '--update-env'], {
                 detached: true,
                 stdio: 'ignore',
-                shell: true
+                shell: true,
+                windowsHide: true
             }).unref();
         }, 800);
     });
@@ -352,6 +436,8 @@ export function mountAdminApi(app) {
         app.get('/admin/', sendAdmin);
         app.use('/admin', express.static(adminStaticDir, { index: false, redirect: false }));
     }
+
+    startGuardian();
 
     const token = getAdminToken();
     if (token) {

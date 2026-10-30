@@ -10,6 +10,7 @@ import {
     getStickerHelpText,
     STICKER_STYLES
 } from '../services/media.js';
+import { clampBuffer } from '../utils/sanitize.js';
 
 const TEMP_DIR = './temp';
 
@@ -51,6 +52,7 @@ export async function handleStickerCommand({ sock, from, msg, args }) {
         const stream = await downloadContentFromMessage(mediaMsg, isVideo ? 'video' : 'image');
         let buffer = Buffer.from([]);
         for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+        clampBuffer(buffer, 16 * 1024 * 1024);
 
         if (isVideo) {
             const inputPath = path.join(TEMP_DIR, `input-${Date.now()}.mp4`);
@@ -88,6 +90,7 @@ export async function handleStickerCommand({ sock, from, msg, args }) {
         await sock.sendMessage(from, {
             text: `✅ Stiker *${meta.label}* siap! _\`!s help\` untuk tema & teks_`
         });
+        await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
     } catch (e) {
         console.error('STICKER ERROR:', e);
         await sock.sendMessage(from, {

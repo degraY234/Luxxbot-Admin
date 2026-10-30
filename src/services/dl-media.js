@@ -9,6 +9,9 @@ import {
     downloadVideoForWhatsApp,
     getYtDlpTitle
 } from '../utils/ytdlp-download.js';
+import { clampBuffer } from '../utils/sanitize.js';
+
+const http = axios.create({ timeout: 35000 });
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 const IG_APP_ID = '936619743392459';
@@ -108,7 +111,7 @@ function pickIgVideoMedia(media) {
 }
 
 async function fetchInstagramGraphqlMedia(shortcode, referer, docId) {
-    const res = await axios.get('https://www.instagram.com/graphql/query/', {
+    const res = await http.get('https://www.instagram.com/graphql/query/', {
         params: {
             doc_id: docId,
             variables: JSON.stringify({ shortcode })
@@ -128,7 +131,7 @@ async function fetchInstagramGraphqlMedia(shortcode, referer, docId) {
 }
 
 async function fetchBufferFromUrl(mediaUrl, maxMb = 64, referer) {
-    const res = await axios.get(mediaUrl, {
+    const res = await http.get(mediaUrl, {
         responseType: 'arraybuffer',
         timeout: 180000,
         maxContentLength: maxMb * 1024 * 1024,
@@ -144,7 +147,7 @@ async function fetchBufferFromUrl(mediaUrl, maxMb = 64, referer) {
 
 /** TikTok HD via tikwm */
 async function downloadTiktokApi(url) {
-    const res = await axios.get('https://tikwm.com/api/', {
+    const res = await http.get('https://tikwm.com/api/', {
         params: { url, hd: 1 },
         headers: { 'User-Agent': UA },
         timeout: 45000
@@ -155,7 +158,7 @@ async function downloadTiktokApi(url) {
     if (!videoUrl) throw new Error('Link video TikTok kosong');
     const buffer = await fetchBufferFromUrl(videoUrl);
     return {
-        buffer,
+        buffer: clampBuffer(buffer, 64 * 1024 * 1024),
         title: data.title || 'TikTok Video',
         mimetype: 'video/mp4',
         fileName: 'tiktok_hd.mp4'
@@ -170,7 +173,7 @@ async function downloadTiktokLib(url) {
     if (!videoUrl) throw new Error('Link TikTok tidak ada');
     const buffer = await fetchBufferFromUrl(videoUrl);
     return {
-        buffer,
+        buffer: clampBuffer(buffer, 64 * 1024 * 1024),
         title: result.result.desc || result.result.title || 'TikTok',
         mimetype: 'video/mp4',
         fileName: 'tiktok_hd.mp4'
@@ -178,7 +181,7 @@ async function downloadTiktokLib(url) {
 }
 
 async function downloadSnapinsta(url) {
-    const res = await axios.get('https://snapinsta.app/api/ajaxSearch', {
+    const res = await http.get('https://snapinsta.app/api/ajaxSearch', {
         params: { url },
         headers: { 'User-Agent': UA, Accept: 'application/json' },
         timeout: 35000
@@ -190,7 +193,7 @@ async function downloadSnapinsta(url) {
     if (!videoSrc) throw new Error('Link SnapInsta tidak valid');
     const buffer = await fetchBufferFromUrl(videoSrc);
     return {
-        buffer,
+        buffer: clampBuffer(buffer, 64 * 1024 * 1024),
         title: res.data?.title || 'Instagram',
         mimetype: 'video/mp4',
         fileName: 'instagram_hd.mp4'
@@ -198,7 +201,7 @@ async function downloadSnapinsta(url) {
 }
 
 async function downloadSaveinsta(url) {
-    const res = await axios.post(
+    const res = await http.post(
         'https://saveinsta.io/core/ajax.php',
         new URLSearchParams({ url, submit: '' }),
         {
@@ -223,17 +226,17 @@ async function downloadSaveinsta(url) {
     const videoSrc = pickBestMediaUrl(urls);
     if (!videoSrc) throw new Error('Link SaveInsta tidak ditemukan');
     const buffer = await fetchBufferFromUrl(videoSrc);
-    return { buffer, title: 'Instagram', mimetype: 'video/mp4', fileName: 'instagram_hd.mp4' };
+    return { buffer: clampBuffer(buffer, 64 * 1024 * 1024), title: 'Instagram', mimetype: 'video/mp4', fileName: 'instagram_hd.mp4' };
 }
 
 async function downloadSaveig(url) {
     const body = new URLSearchParams({ q: url.split('?')[0], t: 'media', lang: 'en' });
-    const res = await axios.post('https://v3.saveig.app/api/ajaxSearch', body, {
+    const res = await http.post('https://v3.saveig.app/api/ajaxSearch', body, {
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
             'User-Agent': UA,
-            Origin: 'https://saveig.app',
-            Referer: 'https://saveig.app/'
+            'Origin': 'https://saveig.app',
+            'Referer': 'https://saveig.app/'
         },
         timeout: 35000
     });
@@ -250,7 +253,7 @@ async function downloadSaveig(url) {
     const videoSrc = pickBestMediaUrl(urls);
     if (!videoSrc) throw new Error('Link SaveIG tidak ditemukan');
     const buffer = await fetchBufferFromUrl(videoSrc);
-    return { buffer, title: 'Instagram', mimetype: 'video/mp4', fileName: 'instagram_hd.mp4' };
+    return { buffer: clampBuffer(buffer, 64 * 1024 * 1024), title: 'Instagram', mimetype: 'video/mp4', fileName: 'instagram_hd.mp4' };
 }
 
 async function downloadInstagramGraphql(url) {
@@ -280,7 +283,7 @@ async function downloadInstagramGraphql(url) {
 
     const buffer = await fetchBufferFromUrl(picked.url, 64, 'https://www.instagram.com/');
     return {
-        buffer,
+        buffer: clampBuffer(buffer, 64 * 1024 * 1024),
         title: picked.title,
         mimetype: 'video/mp4',
         fileName: 'instagram_hd.mp4',
@@ -348,8 +351,13 @@ async function downloadViaYtDlp(url, mode, tmpBase, quality = 'wa') {
         await downloadVideoHd(url, out);
     }
 
+    if (!fs.existsSync(out)) {
+        throw new Error('File video tidak ditemukan setelah unduhan');
+    }
+    const buffer = fs.readFileSync(out);
+
     return {
-        buffer: fs.readFileSync(out),
+        buffer: clampBuffer(buffer, 64 * 1024 * 1024),
         title,
         mimetype: 'video/mp4',
         fileName: `${sanitizeFileName(title)}.mp4`,

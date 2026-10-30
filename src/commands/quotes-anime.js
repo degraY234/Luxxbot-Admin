@@ -16,4 +16,5 @@ export async function handleQuotesAnimeCommand({ sock, from, msg }) {
             text: '❌ *Gagal mengambil quote anime.*\n\nCoba lagi beberapa detik ya.'
         }, { quoted: msg });
     }
+    await sock.sendMessage(from, { text: '✅ Done' }, { quoted: msg });
 }

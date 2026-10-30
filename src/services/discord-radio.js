@@ -2,8 +2,11 @@ import fs from 'fs';
 import { createReadStream } from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
+import { createRequire } from 'module';
+import { Client, GatewayIntentBits, REST, Routes, Events } from 'discord.js';
 import prism from 'prism-media';
+
+const require = createRequire(import.meta.url);
 import {
     joinVoiceChannel,
     createAudioPlayer,
@@ -14,7 +17,7 @@ import {
     NoSubscriberBehavior,
     getVoiceConnection,
     generateDependencyReport,
-    demuxProbe
+    StreamType
 } from '@discordjs/voice';
 import { resolveFfmpegPath } from '../utils/ffmpeg-path.js';
 
@@ -43,8 +46,13 @@ let readyHandled = false;
 let activeChannelName = null;
 let cachedInviteUrl = null;
 let joinInProgress = false;
-let activeFfmpegProc = null;
+/** @type {Map<string, Promise<string>>} */
+const discordOggJobs = new Map();
+let activePlaybackProc = null;
 let activePrismStream = null;
+const MAX_STAGE_COPY_BYTES = 12 * 1024 * 1024;
+const MAX_OGG_TRANSCODE_BYTES = 80 * 1024 * 1024;
+const OGG_TRANSCODE_TIMEOUT_MS = 45_000;
 let voiceSubscription = null;
 let discordPlayTimer = null;
 let discordSyncTimer = null;
@@ -54,7 +62,12 @@ let discordPlayInFlight = false;
 let discordLastIdleRetry = 0;
 let discordPlayStartedAt = 0;
 let pendingResumePositionSec = null;
+let discordForceResync = false;
+let discordLastSyncedPositionSec = 0;
+let discordStoppingIntentionally = false;
 let lastTextChannel = null;
+/** Native/JS opus encoder — hanya untuk jalur live PCM (cadangan). */
+let discordOpusEncoderOk = false;
 
 const DISCORD_CACHE_DIR = './temp/radio/discord-cache';
 
@@ -220,14 +233,19 @@ async function joinVoiceChannelEntity(channel) {
         await sleep(400);
     }
 
+    const daveEncryption = process.env.DISCORD_DAVE !== 'false';
     connection = joinVoiceChannel({
         channelId: channel.id,
         guildId: guild.id,
         adapterCreator: guild.voiceAdapterCreator,
         selfDeaf: false,
         selfMute: false,
+        daveEncryption,
         debug: VOICE_DEBUG
     });
+    if (!daveEncryption) {
+        console.log('🎧 Discord: DAVE encryption disabled (DISCORD_DAVE=false)');
+    }
     bindConnectionHandlers(connection);
 
     try {
@@ -264,7 +282,7 @@ async function joinVoiceChannelEntity(channel) {
 
 function resetVoicePlayer() {
     stopPrismStream();
-    stopFfmpegProc();
+    cancelDiscordOggJobs();
     if (voiceSubscription) {
         try { voiceSubscription.unsubscribe(); } catch (_) { /* ignore */ }
         voiceSubscription = null;
@@ -291,25 +309,6 @@ function ensureVoicePlayer() {
         player.on('stateChange', (oldState, newState) => {
             if (oldState.status !== newState.status) {
                 console.log(`🎧 Discord player: ${oldState.status} → ${newState.status}`);
-            }
-            if (
-                newState.status === AudioPlayerStatus.Idle
-                && getActiveConnection()
-                && isRadioPlaying()
-                && !isRadioPaused()
-            ) {
-                const elapsed = Date.now() - discordPlayStartedAt;
-                const pos = getRadioPlayback().positionSec || 0;
-                const dur = radio.current?.durationSec || 0;
-                const nearEnd = dur > 0 && pos >= dur - 8;
-                if (!nearEnd && elapsed < 8000) {
-                    const now = Date.now();
-                    if (now - discordLastIdleRetry > 3000) {
-                        discordLastIdleRetry = now;
-                        discordLastTrackId = null;
-                        scheduleDiscordPlay(800);
-                    }
-                }
             }
         });
     }
@@ -340,32 +339,42 @@ function stopPrismStream() {
     activePrismStream = null;
 }
 
-function stopFfmpegProc() {
-    if (!activeFfmpegProc) return;
-    try { activeFfmpegProc.kill('SIGKILL'); } catch (_) { /* ignore */ }
-    activeFfmpegProc = null;
+function cancelDiscordOggJobs() {
+    discordOggJobs.clear();
 }
 
 function ensureDiscordCacheDir() {
     if (!fs.existsSync(DISCORD_CACHE_DIR)) fs.mkdirSync(DISCORD_CACHE_DIR, { recursive: true });
 }
 
-/** Salin MP3 aktif — hindari file lock Windows saat radio stream + skip */
-function stageMp3ForDiscord(src) {
+/** Path MP3 untuk Discord — file besar tidak disalin (hemat waktu/disk) */
+async function resolveDiscordPlayPath(src) {
+    try {
+        const size = fs.statSync(src).size;
+        if (size > MAX_STAGE_COPY_BYTES) {
+            console.log(`🎧 Discord: pakai file asli (${Math.round(size / 1_048_576)}MB, tanpa salin)`);
+            return src;
+        }
+    } catch { /* fallback salin */ }
+
     ensureDiscordCacheDir();
     const trackId = radio.current?.id ?? Date.now();
     const dest = path.join(DISCORD_CACHE_DIR, `discord-${trackId}.mp3`);
-    try {
-        fs.copyFileSync(src, dest);
-        return dest;
-    } catch (e) {
-        if (e.code === 'EBUSY' || e.code === 'EPERM') {
-            console.warn(`🎧 Discord stage: fallback ke src langsung (${e.code})`);
-        } else {
-            console.error('🎧 Discord stage copy:', e.message);
+    for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+            fs.copyFileSync(src, dest);
+            const size = fs.statSync(dest).size;
+            if (size > 4096) return dest;
+        } catch (e) {
+            if (attempt < 3 && (e.code === 'EBUSY' || e.code === 'EPERM')) {
+                await sleep(150);
+                continue;
+            }
+            console.warn(`🎧 Discord stage: pakai src langsung (${e.message})`);
+            break;
         }
-        return src;
     }
+    return src;
 }
 
 function scheduleDiscordPlay(delayMs = 1200) {
@@ -374,6 +383,39 @@ function scheduleDiscordPlay(delayMs = 1200) {
         discordPlayTimer = null;
         void playCurrentMp3(0);
     }, delayMs);
+}
+
+/** Paksa Discord ikut posisi radio web/admin (debounced). */
+export function requestDiscordRadioSync(reason = 'manual', delayMs = 400) {
+    if (!started || !getActiveConnection()) return;
+    console.log(`🎧 Discord sync: ${reason}`);
+    discordForceResync = true;
+    discordLastTrackId = null;
+    scheduleDiscordPlay(delayMs);
+}
+
+function shouldResyncIdlePlayback() {
+    if (discordPlayInFlight || discordStoppingIntentionally) return false;
+    if (!getActiveConnection() || !isRadioPlaying() || isRadioPaused()) return false;
+    if (player?.state?.status !== AudioPlayerStatus.Idle) return false;
+    if (Date.now() - discordPlayStartedAt < 15_000) return false;
+
+    const pos = getRadioPlayback().positionSec || 0;
+    const dur = radio.current?.durationSec || 0;
+    if (dur > 0 && pos >= dur - 5) return false;
+
+    const now = Date.now();
+    if (now - discordLastIdleRetry < 20_000) return false;
+    discordLastIdleRetry = now;
+    return true;
+}
+
+function triggerIdleResync(reason) {
+    if (!shouldResyncIdlePlayback()) return;
+    console.log(`🎧 Discord idle resync (${reason})`);
+    discordForceResync = true;
+    discordLastTrackId = null;
+    scheduleDiscordPlay(1200);
 }
 
 async function joinMemberVoice(member, guild) {
@@ -408,24 +450,177 @@ async function joinAndPlay(member, guild) {
         }
     }
 
-    // Play immediately without extra timer
-    void playCurrentMp3(0);
+    scheduleDiscordPlay(700);
     return result;
 }
 
 function attachResourceVolume(resource) {
-    if (resource.volume) resource.volume.setVolume(1);
+    if (resource.volume) resource.volume.setVolume(2);
     return resource;
 }
 
-/** Stream file audio lewat demuxProbe — cara resmi @discordjs/voice */
-async function createDiscordAudioResource(filePath) {
-    const abs = path.resolve(filePath);
-    const { stream, type } = await demuxProbe(createReadStream(abs));
-    return attachResourceVolume(createAudioResource(stream, {
-        inputType: type,
-        inlineVolume: true
+function probeDiscordOpusEncoder() {
+    try {
+        const { OpusEncoder } = require('@discordjs/opus');
+        const enc = new OpusEncoder(48_000, 2);
+        enc.encode(Buffer.alloc(3840));
+        discordOpusEncoderOk = true;
+        return '@discordjs/opus';
+    } catch (nativeErr) {
+        try {
+            const OpusScript = require('opusscript');
+            const enc = new OpusScript(48_000, 2);
+            enc.encode(Buffer.alloc(3840));
+            discordOpusEncoderOk = true;
+            return 'opusscript';
+        } catch (scriptErr) {
+            discordOpusEncoderOk = false;
+            console.error(`❌ Discord opus encoder GAGAL: ${nativeErr.message}`);
+            console.error('   Voice pakai jalur OGG (tanpa encoder). Fix: npm install && npm run discord:rebuild');
+            return null;
+        }
+    }
+}
+
+function stopActivePlaybackProc() {
+    if (!activePlaybackProc) return;
+    try { activePlaybackProc.kill('SIGTERM'); } catch (_) { /* ignore */ }
+    activePlaybackProc = null;
+}
+
+/**
+ * Stream PCM langsung dari ffmpeg — mulai cepat walau file MP3 besar (pakai -ss seek).
+ * Tidak menunggu transcode penuh ke OGG.
+ */
+function createLivePcmResource(filePath, startSec = 0) {
+    stopActivePlaybackProc();
+    const seek = Math.floor(Math.max(0, startSec));
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
+    if (seek > 0) args.push('-ss', String(seek));
+    args.push(
+        '-i', path.resolve(filePath),
+        '-vn',
+        '-analyzeduration', '0',
+        '-probesize', '32768',
+        '-f', 's16le',
+        '-ar', '48000',
+        '-ac', '2',
+        'pipe:1'
+    );
+    const proc = spawn(FFMPEG_BIN, args, { windowsHide: true });
+    activePlaybackProc = proc;
+    proc.stderr.on('data', (chunk) => {
+        const msg = chunk.toString().trim();
+        if (msg) console.warn(`🎧 Discord ffmpeg live: ${msg.slice(-200)}`);
+    });
+    proc.on('error', (err) => console.error('🎧 Discord ffmpeg spawn:', err.message));
+    proc.on('close', (code) => {
+        if (activePlaybackProc === proc) activePlaybackProc = null;
+        if (code && code !== 0) console.warn(`🎧 Discord ffmpeg live exit ${code}`);
+    });
+    return attachResourceVolume(createAudioResource(proc.stdout, {
+        inputType: StreamType.Raw,
+        inlineVolume: true,
+        silencePaddingFrames: 5
     }));
+}
+
+/** Resource dari file OGG kecil di disk — inlineVolume:false agar pipeline OggDemuxer aktif */
+function createOggFileResource(oggPath) {
+    const abs = path.resolve(oggPath);
+    return createAudioResource(createReadStream(abs), {
+        inputType: StreamType.OggOpus,
+        inlineVolume: false,
+        silencePaddingFrames: 5
+    });
+}
+
+/**
+ * Stream OGG Opus dari ffmpeg stdout — mulai cepat, tanpa opus encoder Node.
+ * inlineVolume harus false: volume constraint memaksa jalur raw→opus encoder (rusak di PC ini).
+ */
+function createOggPipeResource(filePath, startSec = 0) {
+    stopActivePlaybackProc();
+    const seek = Math.floor(Math.max(0, startSec));
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
+    if (seek > 0) args.push('-ss', String(seek));
+    args.push(
+        '-i', path.resolve(filePath),
+        '-vn',
+        '-map', '0:a:0?',
+        '-c:a', 'libopus',
+        '-b:a', '128k',
+        '-ar', '48000',
+        '-ac', '2',
+        '-application', 'audio',
+        '-f', 'ogg',
+        'pipe:1'
+    );
+    const proc = spawn(FFMPEG_BIN, args, { windowsHide: true });
+    activePlaybackProc = proc;
+    proc.stderr.on('data', (chunk) => {
+        const msg = chunk.toString().trim();
+        if (msg) console.warn(`🎧 Discord ffmpeg ogg pipe: ${msg.slice(-200)}`);
+    });
+    proc.on('error', (err) => console.error('🎧 Discord ffmpeg ogg spawn:', err.message));
+    proc.on('close', (code) => {
+        if (activePlaybackProc === proc) activePlaybackProc = null;
+        if (code && code !== 0) console.warn(`🎧 Discord ffmpeg ogg pipe exit ${code}`);
+    });
+    return createAudioResource(proc.stdout, {
+        inputType: StreamType.OggOpus,
+        inlineVolume: false,
+        silencePaddingFrames: 5
+    });
+}
+
+/** Cadangan: putar MP3 — ffmpeg internal ke OGG lalu OggDemuxer (tanpa opus encoder Node) */
+function createMp3FileResource(filePath, startSec = 0) {
+    const abs = path.resolve(filePath);
+    const seek = Math.floor(Math.max(0, startSec));
+    if (seek <= 0) {
+        return createAudioResource(abs, {
+            inlineVolume: false,
+            silencePaddingFrames: 5
+        });
+    }
+    stopActivePlaybackProc();
+    const args = [
+        '-hide_banner', '-loglevel', 'error', '-nostdin',
+        '-ss', String(seek),
+        '-i', abs,
+        '-vn',
+        '-c:a', 'libopus',
+        '-b:a', '128k',
+        '-ar', '48000',
+        '-ac', '2',
+        '-f', 'ogg',
+        'pipe:1'
+    ];
+    const proc = spawn(FFMPEG_BIN, args, { windowsHide: true });
+    activePlaybackProc = proc;
+    proc.stderr.on('data', (chunk) => {
+        const msg = chunk.toString().trim();
+        if (msg) console.warn(`🎧 Discord ffmpeg mp3 seek: ${msg.slice(-200)}`);
+    });
+    proc.on('close', (code) => {
+        if (activePlaybackProc === proc) activePlaybackProc = null;
+        if (code && code !== 0) console.warn(`🎧 Discord ffmpeg mp3 seek exit ${code}`);
+    });
+    return createAudioResource(proc.stdout, {
+        inputType: StreamType.OggOpus,
+        inlineVolume: false,
+        silencePaddingFrames: 5
+    });
+}
+
+function withTimeout(promise, ms, label) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(`${label} timeout (${ms}ms)`)), ms);
+        })
+    ]);
 }
 
 async function playDiscordResource(resource, fileLabel, startSec, trackId) {
@@ -436,11 +631,122 @@ async function playDiscordResource(resource, fileLabel, startSec, trackId) {
     if (vc.state.status !== VoiceConnectionStatus.Ready) {
         await entersState(vc, VoiceConnectionStatus.Ready, 15_000);
     }
+    if (!player.subscribers?.some((s) => s.connection === vc)) {
+        if (voiceSubscription) {
+            try { voiceSubscription.unsubscribe(); } catch (_) { /* ignore */ }
+            voiceSubscription = null;
+        }
+        voiceSubscription = vc.subscribe(player);
+        if (!voiceSubscription) throw new Error('Gagal subscribe player ke voice connection');
+        console.log(`🎧 Discord: re-subscribed player (${player.subscribers?.length ?? 0} subs)`);
+    }
     player.play(resource);
     discordLastTrackId = trackId;
     discordPlayStartedAt = Date.now();
     await entersState(player, AudioPlayerStatus.Playing, 20_000);
-    console.log(`🎧 Discord: playing ${fileLabel} @ ${startSec.toFixed(1)}s (subs=${player.subscribers?.length ?? 0})`);
+    console.log(`🎧 Discord: playing ${fileLabel} @ ${startSec.toFixed(1)}s (subs=${player.subscribers?.length ?? 0}, vc=${vc.state.status})`);
+    setTimeout(() => {
+        const st = player?.state;
+        const res = st?.resource;
+        if (st?.status === AudioPlayerStatus.Playing) {
+            const dur = Math.round(res?.playbackDuration || st.playbackDuration || 0);
+            const pkts = getActiveConnection()?.state?.networking?.connectionData?.packetsPlayed;
+            console.log(`🎧 Discord: playback ${dur}ms missed=${st.missedFrames ?? 0} udpPkts=${pkts ?? '?'}`);
+            if (dur < 500) {
+                console.warn('🎧 Discord: playback <500ms — pipeline OGG mungkin rusak; coba DISCORD_DAVE=false');
+            }
+        } else if (st?.status === AudioPlayerStatus.Idle) {
+            console.warn('🎧 Discord: player idle setelah 4s — audio tidak mengalir');
+        }
+    }, 4000);
+}
+
+function discordOggCachePath(trackId, seekSec) {
+    return path.join(DISCORD_CACHE_DIR, `voice-${trackId}-at${Math.floor(Math.max(0, seekSec))}.ogg`);
+}
+
+function readCachedOgg(trackId, seekSec) {
+    const out = discordOggCachePath(trackId, seekSec);
+    if (!fs.existsSync(out)) return null;
+    const stat = fs.statSync(out);
+    const trackPreparedAt = radio.current?.preparedAt ?? 0;
+    if (stat.size > 2000 && stat.mtimeMs >= trackPreparedAt) return out;
+    return null;
+}
+
+/** Urutan: cache OGG → OGG pipe → MP3+ffmpeg → transcode file → live PCM (hanya jika opus OK) */
+async function startDiscordPlayback(playPath, label, fileSize, startSec, trackId) {
+    const mb = Math.round(fileSize / 1_048_576);
+    const seekKey = Math.floor(Math.max(0, startSec));
+    const id = trackId ?? 'x';
+
+    const cachedSeek = readCachedOgg(id, seekKey);
+    if (cachedSeek) {
+        try {
+            console.log(`🎧 Discord: cache ogg ${path.basename(cachedSeek)} @ ${seekKey}s`);
+            await playDiscordResource(createOggFileResource(cachedSeek), path.basename(cachedSeek), seekKey, trackId);
+            return seekKey;
+        } catch (e) {
+            console.warn(`🎧 Discord cache ogg gagal (${e.message})`);
+        }
+    }
+
+    if (seekKey > 0) {
+        const cachedZero = readCachedOgg(id, 0);
+        if (cachedZero) {
+            try {
+                console.log(`🎧 Discord: cache ogg dari awal (sync ${seekKey}s → 0s)`);
+                await playDiscordResource(createOggFileResource(cachedZero), path.basename(cachedZero), 0, trackId);
+                return 0;
+            } catch (e) {
+                console.warn(`🎧 Discord cache ogg@0 gagal (${e.message})`);
+            }
+        }
+    }
+
+    try {
+        console.log(`🎧 Discord: ogg pipe @ ${seekKey}s (${label}, ${mb}MB)`);
+        const resource = createOggPipeResource(playPath, seekKey);
+        await playDiscordResource(resource, `${label} [ogg-pipe]`, seekKey, trackId);
+        return seekKey;
+    } catch (pipeErr) {
+        console.warn(`🎧 Discord ogg pipe gagal (${pipeErr.message})`);
+    }
+
+    try {
+        console.log(`🎧 Discord: mp3→ogg @ ${seekKey}s (${label}, ${mb}MB)`);
+        const resource = createMp3FileResource(playPath, seekKey);
+        await playDiscordResource(resource, label, seekKey, trackId);
+        return seekKey;
+    } catch (mp3Err) {
+        console.warn(`🎧 Discord mp3 gagal (${mp3Err.message})`);
+    }
+
+    if (fileSize <= MAX_OGG_TRANSCODE_BYTES) {
+        try {
+            console.log(`🎧 Discord: transcode ogg file @ ${seekKey}s (${label}, ${mb}MB)`);
+            const ogg = await withTimeout(
+                buildDiscordOggFile(playPath, seekKey, id),
+                OGG_TRANSCODE_TIMEOUT_MS,
+                'ogg transcode'
+            );
+            const oggSize = fs.statSync(ogg).size;
+            console.log(`🎧 Discord: putar ogg ${path.basename(ogg)} (${oggSize}B)`);
+            await playDiscordResource(createOggFileResource(ogg), path.basename(ogg), seekKey, trackId);
+            return seekKey;
+        } catch (oggErr) {
+            console.warn(`🎧 Discord ogg file gagal (${oggErr.message})`);
+        }
+    }
+
+    if (!discordOpusEncoderOk) {
+        throw new Error('Semua jalur OGG gagal dan opus encoder tidak tersedia — install @discordjs/opus atau opusscript');
+    }
+
+    console.log(`🎧 Discord: live pcm @ ${seekKey}s (${label}, ${mb}MB)`);
+    const resource = createLivePcmResource(playPath, seekKey);
+    await playDiscordResource(resource, label, seekKey, trackId);
+    return seekKey;
 }
 
 async function playCurrentMp3(retry = 0) {
@@ -476,9 +782,16 @@ async function playCurrentMp3(retry = 0) {
         return;
     }
 
-    const file = getCurrentMp3Path();
-    if (!fs.existsSync(file)) {
-        console.log(`🎧 Discord: file belum ada (${path.basename(file)}) retry=${retry}`);
+    const file = radio.current?.filePath || getCurrentMp3Path();
+    if (!file || !fs.existsSync(file)) {
+        console.log(`🎧 Discord: file belum ada (${file ? path.basename(file) : '—'}) retry=${retry}`);
+        if (retry < 24) setTimeout(() => playCurrentMp3(retry + 1), 500);
+        return;
+    }
+
+    const fileSize = fs.statSync(file).size;
+    if (fileSize < 4096) {
+        console.log(`🎧 Discord: file terlalu kecil (${fileSize}B) retry=${retry}`);
         if (retry < 24) setTimeout(() => playCurrentMp3(retry + 1), 500);
         return;
     }
@@ -491,26 +804,36 @@ async function playCurrentMp3(retry = 0) {
     } else {
         startSec = Math.max(0, getRadioPlayback().positionSec || 0);
     }
+    const dur = radio.current?.durationSec || 0;
+    if (dur > 8) startSec = Math.min(startSec, dur - 3);
     const trackId = radio.current?.id ?? null;
+    const livePos = getRadioPlayback().positionSec || 0;
+    const positionDrifted = trackId != null
+        && trackId === discordLastTrackId
+        && Math.abs(livePos - discordLastSyncedPositionSec) > 45;
     if (
-        trackId != null
+        !discordForceResync
+        && !positionDrifted
+        && trackId != null
         && trackId === discordLastTrackId
         && player.state.status === AudioPlayerStatus.Playing
     ) {
         return;
     }
+    discordForceResync = false;
 
     discordPlayInFlight = true;
+    discordStoppingIntentionally = true;
     stopDiscordPlayback();
+    discordStoppingIntentionally = false;
 
-    const staged = stageMp3ForDiscord(file);
+    const playPath = await resolveDiscordPlayPath(file);
+    const label = path.basename(playPath);
 
     try {
         ensureVoicePlayer();
-        const ogg = await buildDiscordOggFile(staged, startSec, trackId ?? 'x');
-        console.log(`🎧 Discord: stream ogg @ ${startSec.toFixed(1)}s (${path.basename(ogg)}, ${fs.statSync(ogg).size}B)`);
-        const resource = await createDiscordAudioResource(ogg);
-        await playDiscordResource(resource, path.basename(ogg), startSec, trackId);
+        const syncedAt = await startDiscordPlayback(playPath, label, fileSize, startSec, trackId);
+        discordLastSyncedPositionSec = syncedAt;
     } catch (e) {
         console.error('❌ Discord play:', e.message);
         stopDiscordPlayback();
@@ -531,47 +854,71 @@ async function playCurrentMp3(retry = 0) {
     }
 }
 
-/** Transcode ke OGG Opus 48kHz — Discord butuh format ini */
+/** Transcode ke file OGG Opus — jangan pakai pipe (Premature close di Windows) */
 function buildDiscordOggFile(staged, startSec, trackId) {
     ensureDiscordCacheDir();
-    const bucket = Math.floor(Math.max(0, startSec) / 30);
-    const out = path.join(DISCORD_CACHE_DIR, `voice-${trackId}-${bucket}.ogg`);
+    const seekKey = Math.floor(Math.max(0, startSec));
+    const out = discordOggCachePath(trackId, seekKey);
     const trackPreparedAt = radio.current?.preparedAt ?? 0;
+
     if (fs.existsSync(out)) {
         const stat = fs.statSync(out);
-        if (stat.size > 800 && stat.mtimeMs >= trackPreparedAt) {
+        if (stat.size > 2000 && stat.mtimeMs >= trackPreparedAt) {
             return Promise.resolve(out);
         }
     }
+
+    const pending = discordOggJobs.get(out);
+    if (pending) return pending;
+
     const absIn = path.resolve(staged);
     const absOut = path.resolve(out);
-    return new Promise((resolve, reject) => {
-        const args = ['-hide_banner', '-loglevel', 'error', '-y'];
-        if (startSec > 0.5) args.push('-ss', String(startSec));
+    const dur = radio.current?.durationSec || 0;
+    const remaining = dur > seekKey ? Math.min(dur - seekKey + 2, 7200) : 600;
+
+    const job = new Promise((resolve, reject) => {
+        const args = ['-hide_banner', '-loglevel', 'warning', '-y'];
+        if (seekKey > 0) args.push('-ss', String(seekKey));
         args.push(
             '-i', absIn,
-            '-vn', '-c:a', 'libopus', '-b:a', '128k', '-ar', '48000', '-ac', '2',
-            '-application', 'audio', '-f', 'ogg', absOut
+            '-t', String(remaining),
+            '-map', '0:a:0?',
+            '-vn',
+            '-c:a', 'libopus',
+            '-b:a', '128k',
+            '-ar', '48000',
+            '-ac', '2',
+            '-application', 'audio',
+            '-f', 'ogg',
+            absOut
         );
+        console.log(`🎧 Discord transcode: ${path.basename(staged)} → ${path.basename(out)} @ ${seekKey}s`);
         const proc = spawn(FFMPEG_BIN, args, { windowsHide: true });
-        activeFfmpegProc = proc;
         let stderr = '';
         proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
         proc.on('error', reject);
         proc.on('close', (code) => {
-            if (activeFfmpegProc === proc) activeFfmpegProc = null;
-            if (code === 0 && fs.existsSync(absOut) && fs.statSync(absOut).size > 800) resolve(absOut);
-            else reject(new Error(stderr.slice(-280) || `ffmpeg ogg exit ${code}`));
+            discordOggJobs.delete(out);
+            if (code === 0 && fs.existsSync(absOut) && fs.statSync(absOut).size > 2000) {
+                resolve(absOut);
+                return;
+            }
+            reject(new Error(stderr.slice(-320).trim() || `ffmpeg ogg exit ${code}`));
         });
     });
+
+    discordOggJobs.set(out, job);
+    return job;
 }
 
 function stopDiscordPlayback() {
-    stopPrismStream();
-    stopFfmpegProc();
+    discordStoppingIntentionally = true;
     if (player) {
         try { player.stop(true); } catch (_) { /* ignore */ }
     }
+    stopActivePlaybackProc();
+    stopPrismStream();
+    discordStoppingIntentionally = false;
 }
 
 function leaveVoice() {
@@ -809,7 +1156,14 @@ export function startDiscordRadio() {
         } catch (e) {
             console.error('🎧 Discord: ffmpeg tidak ditemukan:', e.message);
         }
+        console.log(`🎧 Discord ffmpeg path: ${FFMPEG_BIN}`);
         console.log(generateDependencyReport());
+        const opusLib = probeDiscordOpusEncoder();
+        if (opusLib) {
+            console.log(`🎧 Discord opus encoder: ${opusLib} OK (cadangan live PCM)`);
+        } else {
+            console.log('🎧 Discord: opus encoder tidak ada — voice pakai jalur OGG saja');
+        }
         try {
             await logDiscordStartup();
         } catch (e) {
@@ -817,7 +1171,7 @@ export function startDiscordRadio() {
             console.error('❌ Discord startup:', discordDiagnostics.lastSlashError);
         }
     };
-    client.once('ready', onDiscordReady);
+    client.once(Events.ClientReady, onDiscordReady);
 
     client.on('guildCreate', async (guild) => {
         console.log(`\x1b[32m✅ Bot baru masuk server: ${guild.name}\x1b[0m`);
@@ -833,8 +1187,9 @@ export function startDiscordRadio() {
 
     onRadioTrackChange((track) => {
         discordLastTrackId = null;
+        discordForceResync = true;
         if (!track) {
-            stopFfmpegProc();
+            cancelDiscordOggJobs();
             if (player) {
                 try { player.stop(true); } catch (_) { /* ignore */ }
             }
@@ -842,11 +1197,17 @@ export function startDiscordRadio() {
             discordLastPaused = null;
             return;
         }
-        if (getActiveConnection() && !isRadioPaused()) scheduleDiscordPlay(500);
+        if (track?.filePath && fs.existsSync(track.filePath)) {
+            void resolveDiscordPlayPath(track.filePath)
+                .then((p) => buildDiscordOggFile(p, 0, track.id))
+                .then((ogg) => console.log(`🎧 Discord prefetch: ${path.basename(ogg)}`))
+                .catch(() => {});
+        }
+        if (getActiveConnection() && isRadioPlaying() && !isRadioPaused()) scheduleDiscordPlay(500);
     });
 
     onRadioPlaybackStateChange((state) => {
-        if (!getActiveConnection()) return;
+        if (!getActiveConnection() || !isRadioPlaying()) return;
         if (state.paused) {
             stopDiscordPlayback();
             discordLastPaused = true;
@@ -854,14 +1215,15 @@ export function startDiscordRadio() {
             return;
         }
         if (state.track) {
-            // Fix 6: capture resume position from event before timer fires
             pendingResumePositionSec = state.positionSec ?? null;
+            discordForceResync = true;
+            discordLastTrackId = null;
             scheduleDiscordPlay(500);
         }
     });
 
     discordSyncTimer = setInterval(() => {
-        if (!getActiveConnection()) return;
+        if (!getActiveConnection() || !isRadioPlaying()) return;
         ensureVoicePlayer();
 
         if (!isRadioPlaying()) return;
@@ -878,40 +1240,9 @@ export function startDiscordRadio() {
             return;
         }
         if (!paused && player?.state?.status === AudioPlayerStatus.Idle) {
-            const elapsed = Date.now() - discordPlayStartedAt;
-            const pos = getRadioPlayback().positionSec || 0;
-            const dur = radio.current?.durationSec || 0;
-            const nearEnd = dur > 0 && pos >= dur - 8;
-            if (!nearEnd && elapsed < 10000) {
-                const now = Date.now();
-                if (now - discordLastIdleRetry > 5000) {
-                    // Fix 7: check OGG cache before scheduling re-transcode
-                    const currentTrackId = radio.current?.id;
-                    const currentPos = getRadioPlayback().positionSec || 0;
-                    const currentBucket = Math.floor(Math.max(0, currentPos) / 30);
-                    const cachedOgg = path.join(DISCORD_CACHE_DIR, `voice-${currentTrackId}-${currentBucket}.ogg`);
-                    const trackPreparedAt = radio.current?.preparedAt ?? 0;
-
-                    const cacheValid = currentTrackId != null
-                        && fs.existsSync(cachedOgg)
-                        && (() => {
-                            try {
-                                const s = fs.statSync(cachedOgg);
-                                return s.size > 800 && s.mtimeMs >= trackPreparedAt;
-                            } catch { return false; }
-                        })();
-
-                    if (cacheValid) {
-                        return; // cache is fresh — skip re-transcode, player will recover on next idle
-                    }
-
-                    discordLastIdleRetry = now;
-                    discordLastTrackId = null;
-                    scheduleDiscordPlay(600);
-                }
-            }
+            triggerIdleResync('sync-timer');
         }
-    }, 2000);
+    }, 12_000);
 
     client.login(token).catch((e) => {
         console.error('❌ Discord login gagal:', e.message);
