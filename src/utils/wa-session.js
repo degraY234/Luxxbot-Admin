@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { isRailwayRuntime, isRenderRuntime } from './listen-port.js';
+import { isHfConfigured, schedulePushToHf } from './hf-storage.js';
 
 const SESSION_DIR = path.resolve('./session');
 const CREDS_FILE = path.join(SESSION_DIR, 'creds.json');
@@ -99,7 +100,7 @@ function copyDirContents(src, dest) {
     return n;
 }
 
-/** Backup session ke volume persist (survive redeploy). */
+/** Backup session ke volume persist (survive redeploy) + schedule push ke HF. */
 export function backupWaSession() {
     if (!fs.existsSync(SESSION_DIR)) return 0;
     fs.mkdirSync(SESSION_BACKUP_DIR, { recursive: true });
@@ -108,6 +109,10 @@ export function backupWaSession() {
     if (fs.existsSync(CREDS_FILE)) {
         fs.copyFileSync(CREDS_FILE, CREDS_SNAPSHOT);
         fs.copyFileSync(CREDS_FILE, path.join(SESSION_BACKUP_DIR, 'creds.json'));
+    }
+    // Kalau HF storage aktif → schedule push ke Hugging Face (debounced 30 detik)
+    if (isHfConfigured()) {
+        schedulePushToHf(30_000);
     }
     return n;
 }

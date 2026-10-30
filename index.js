@@ -10,6 +10,7 @@ import { getYoutubeCookiesStatus } from './src/utils/youtube-cookies.js';
 import { getPairLink } from './src/utils/startup-banner.js';
 import { applyLuxxAppCors } from './src/utils/app-cors.js';
 import { getPublicUrlFromRequest } from './src/utils/request-public-url.js';
+import { isHfConfigured, pullFromHfOnStartup, flushHfBeforeShutdown } from './src/utils/hf-storage.js';
 
 process.on('uncaughtException', (err) => {
     console.error('❌ uncaughtException (server tetap jalan):', err?.message || err);
@@ -35,10 +36,21 @@ process.on('SIGTERM', async () => {
         const { clearRadioQueue } = await import('./src/services/radio-server.js');
         clearRadioQueue();
     } catch (_) {}
+    // Flush HF push terakhir sebelum container mati
+    await flushHfBeforeShutdown();
     process.exit(0);
 });
 
 if (!fs.existsSync('./temp')) fs.mkdirSync('./temp', { recursive: true });
+
+// ─── Hugging Face: pull session di startup (hanya kalau env var di-set) ─────
+// Catatan: docker-entrypoint.sh juga sudah pull, ini sebagai fallback
+// kalau bot dijalankan langsung (bukan via Docker)
+if (isHfConfigured()) {
+    pullFromHfOnStartup().catch(e => {
+        console.warn('[hf] startup pull gagal (non-fatal):', e.message);
+    });
+}
 
 const PORT = getListenPort();
 const HOST = process.env.RADIO_BIND_HOST || '0.0.0.0';
@@ -90,6 +102,8 @@ app.get('/health', async (req, res) => {
         uptime: Math.floor(process.uptime()),
         railway: isRailwayRuntime(),
         render: isRenderRuntime(),
+        hfStorage: isHfConfigured(),
+        hfRepo: isHfConfigured() ? process.env.HF_REPO : null,
         port: PORT,
         publicUrl,
         adminUrl: publicUrl ? `${publicUrl}/admin` : `${localBase}/admin`,

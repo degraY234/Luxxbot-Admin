@@ -1,4 +1,4 @@
-#!/bin/sh
+﻿#!/bin/sh
 set -e
 
 PERSIST="${PERSIST_DIR:-/app/persist}"
@@ -54,40 +54,63 @@ fi
 COOKIES_FILE="$PERSIST/data/youtube-cookies.txt"
 export YTDLP_COOKIES_FILE="${YTDLP_COOKIES_FILE:-$COOKIES_FILE}"
 
-if [ -f "$PERSIST/session/creds.json" ]; then
-  echo "✅ Session WA ada di volume — redeploy tanpa scan QR"
-  echo "   creds size: $(wc -c < "$PERSIST/session/creds.json" 2>/dev/null || echo 0) bytes"
-elif [ -f "$PERSIST/session-backup/creds.json" ]; then
-  echo "♻️  Session backup ada — restore ke session"
-  cp -a "$PERSIST/session-backup/." "$PERSIST/session/" 2>/dev/null || true
-elif [ -f "$PERSIST/data/wa-creds.json" ]; then
-  echo "♻️  Snapshot wa-creds.json ada — restore session"
-  mkdir -p "$PERSIST/session"
-  cp -f "$PERSIST/data/wa-creds.json" "$PERSIST/session/creds.json"
-  cp -a "$PERSIST/session-backup/." "$PERSIST/session/" 2>/dev/null || true
+# â”€â”€â”€ Hugging Face Storage: Pull session saat startup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+if [ -n "$HF_TOKEN" ] && [ -n "$HF_REPO" ]; then
+    echo "â˜ï¸  Hugging Face storage aktif: $HF_REPO"
+    echo "ðŸ“¥ Pulling session & data dari HF..."
+    node --input-type=module scripts/hf-sync.mjs pull 2>&1 || {
+        echo "âš ï¸  HF pull gagal, coba lanjut dengan local state..."
+    }
+    # Setelah pull, link ulang supaya symlink ke /app/session tetap valid
+    if [ -f "$PERSIST/session/creds.json" ]; then
+        echo "âœ… Session WA berhasil di-pull dari HF"
+    fi
 else
-  echo "⚠️  SESSION KOSONG — wajib:"
-  echo "   1) Render / Railway → Mount volume/disk ke /app/persist"
-  echo "   2) Buka /pair → scan QR sekali"
+    echo "â„¹ï¸  HF_TOKEN/HF_REPO tidak diset â€” storage lokal saja"
+fi
+
+# â”€â”€â”€ Cek status session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+if [ -f "$PERSIST/session/creds.json" ]; then
+    echo "âœ… Session WA ada â€” redeploy tanpa scan QR"
+    echo "   creds size: $(wc -c < "$PERSIST/session/creds.json" 2>/dev/null || echo 0) bytes"
+elif [ -f "$PERSIST/session-backup/creds.json" ]; then
+    echo "ðŸ”„ Session backup ada â€” restore ke session"
+    cp -a "$PERSIST/session-backup/." "$PERSIST/session/" 2>/dev/null || true
+elif [ -f "$PERSIST/data/wa-creds.json" ]; then
+    echo "ðŸ”„ Snapshot wa-creds.json ada â€” restore session"
+    mkdir -p "$PERSIST/session"
+    cp -f "$PERSIST/data/wa-creds.json" "$PERSIST/session/creds.json"
+    cp -a "$PERSIST/session-backup/." "$PERSIST/session/" 2>/dev/null || true
+else
+    echo "âš ï¸  SESSION KOSONG â€” wajib:"
+    if [ -n "$HF_TOKEN" ] && [ -n "$HF_REPO" ]; then
+        echo "   â†’ HF aktif: buka /pair â†’ scan QR â†’ session otomatis tersimpan ke HF"
+    else
+        echo "   1) Set HF_TOKEN + HF_REPO di env vars Render"
+        echo "   2) Buka /pair â†’ scan QR sekali"
+    fi
 fi
 
 if [ -f "$COOKIES_FILE" ] && [ "$(wc -c < "$COOKIES_FILE" 2>/dev/null || echo 0)" -gt 80 ]; then
-  echo "✅ YouTube cookies: $COOKIES_FILE ($(wc -c < "$COOKIES_FILE") bytes)"
+    echo "âœ… YouTube cookies: $COOKIES_FILE ($(wc -c < "$COOKIES_FILE") bytes)"
 else
-  echo "⚠️  YouTube cookies belum ada — jalankan scripts/export-youtube-cookies.ps1 di PC"
+    echo "âš ï¸  YouTube cookies belum ada â€” jalankan scripts/export-youtube-cookies.ps1 di PC"
 fi
 
 ls -la "$PERSIST/session" 2>/dev/null | head -5 || true
 
-if command -v yt-dlp >/dev/null 2>&1; then
-  echo "yt-dlp: $(yt-dlp --version 2>/dev/null || echo unknown)"
+if command -v yt-dlp > /dev/null 2>&1; then
+    echo "yt-dlp: $(yt-dlp --version 2>/dev/null || echo unknown)"
 fi
+
 echo "LuxxBot starting (listen ${RADIO_PORT:-3920}, PORT=${PORT:-n/a})"
+
 if [ -n "${RENDER_EXTERNAL_URL:-}" ]; then
-  echo "PAIR (buka di laptop): ${RENDER_EXTERNAL_URL%/}/pair"
+    echo "PAIR (buka di laptop): ${RENDER_EXTERNAL_URL%/}/pair"
 elif [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
-  echo "PAIR (buka di laptop): https://${RAILWAY_PUBLIC_DOMAIN}/pair"
+    echo "PAIR (buka di laptop): https://${RAILWAY_PUBLIC_DOMAIN}/pair"
 elif [ -n "${RADIO_PUBLIC_URL:-}" ]; then
-  echo "PAIR (buka di laptop): ${RADIO_PUBLIC_URL%/}/pair"
+    echo "PAIR (buka di laptop): ${RADIO_PUBLIC_URL%/}/pair"
 fi
+
 exec "$@"
