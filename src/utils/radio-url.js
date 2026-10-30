@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import { spawnSync } from 'child_process';
 import axios from 'axios';
-import { getListenPort, isRailwayRuntime } from './listen-port.js';
+import { getListenPort, isRailwayRuntime, isRenderRuntime } from './listen-port.js';
 import { persistRadioPublicUrl } from './env-persist.js';
 import { publishBotDiscovery } from './bot-discovery-publish.js';
 
@@ -66,12 +66,22 @@ function getRailwayBaseUrl() {
     return '';
 }
 
+function getRenderBaseUrl() {
+    const ext = process.env.RENDER_EXTERNAL_URL?.trim().replace(/\/$/, '');
+    if (ext && !/localhost|127\.0\.0\.1/i.test(ext)) return ext;
+    const host = process.env.RENDER_EXTERNAL_HOSTNAME?.trim();
+    if (host && !/localhost|127\.0\.0\.1/i.test(host)) return `https://${host}`.replace(/\/$/, '');
+    return '';
+}
+
 function getConfiguredBaseUrl() {
     const railway = getRailwayBaseUrl();
     if (railway) return railway;
+    const render = getRenderBaseUrl();
+    if (render) return render;
     const configured = process.env.RADIO_PUBLIC_URL?.trim().replace(/\/$/, '') || '';
-    if (isRailwayRuntime() && /\.trycloudflare\.com/i.test(configured)) {
-        return railway || '';
+    if ((isRailwayRuntime() || isRenderRuntime()) && /\.trycloudflare\.com/i.test(configured)) {
+        return railway || render || '';
     }
     if (configured && !/localhost|127\.0\.0\.1/i.test(configured)) return configured;
     return '';
@@ -156,13 +166,15 @@ export async function discoverLivePublicBase() {
 
     if (localOk) {
         const railway = getRailwayBaseUrl();
-        if (railway) {
+        const render = getRenderBaseUrl();
+        const cloudBase = railway || render;
+        if (cloudBase) {
             try {
-                if (await probeBase(railway)) {
-                    return { base: railway, source: 'railway', localOk };
+                if (await probeBase(cloudBase)) {
+                    return { base: cloudBase, source: railway ? 'railway' : 'render', localOk };
                 }
             } catch { /* lanjut */ }
-            return { base: railway, source: 'railway-local', localOk };
+            return { base: cloudBase, source: railway ? 'railway-local' : 'render-local', localOk };
         }
         const configured = getConfiguredPublicBaseUrl();
         if (configured) {
@@ -187,7 +199,7 @@ export async function ensureLivePublicBase() {
  * Dipanggil saat tunnel di .env mati tapi bot lokal masih jalan.
  */
 export async function tryRecoverTunnelUrl({ force = false } = {}) {
-    if (isRailwayRuntime()) return null;
+    if (isRailwayRuntime() || isRenderRuntime()) return null;
     if (!force && Date.now() - lastTunnelRecoverAt < TUNNEL_RECOVER_COOLDOWN_MS) return null;
     lastTunnelRecoverAt = Date.now();
 
@@ -361,7 +373,7 @@ export async function syncPublicUrl({ persist = true, quiet = false } = {}) {
     try {
         invalidateRadioUrlCache();
         let live = await discoverLivePublicBase();
-        if (live.source === 'stale' && live.localOk && !isRailwayRuntime()) {
+        if (live.source === 'stale' && live.localOk && !isRailwayRuntime() && !isRenderRuntime()) {
             const recovered = await tryRecoverTunnelUrl();
             if (recovered) {
                 live = { base: recovered, source: 'tunnel', localOk: true };

@@ -40,7 +40,8 @@ RUN node --input-type=module -e "const check=async(n,m)=>{try{await m();console.
 
 ENV PM2_APP_NAME=luxx
 
-EXPOSE 3920
+# Render Web Service default port 10000, Railway / Lokal port 3920
+EXPOSE 10000 3920
 
 ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
 CMD ["node", "index.js"]

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { isRailwayRuntime } from './listen-port.js';
+import { isRailwayRuntime, isRenderRuntime } from './listen-port.js';
 
 const PERSIST_DIR = path.resolve(process.env.PERSIST_DIR || '/app/persist');
 const DEFAULT_COOKIES_PATH = path.join(PERSIST_DIR, 'data', 'youtube-cookies.txt');
@@ -57,7 +57,7 @@ export function getYoutubeCookiesStatus() {
         ready: valid,
         hint: valid
             ? 'Cookies YouTube aktif — !play / Discord /radio siap unduh'
-            : isRailwayRuntime()
+            : (isRailwayRuntime() || isRenderRuntime())
                 ? 'Wajib upload cookies: jalankan scripts/export-youtube-cookies.ps1 di PC lalu upload di admin'
                 : 'Export cookies: scripts/export-youtube-cookies.ps1'
     };

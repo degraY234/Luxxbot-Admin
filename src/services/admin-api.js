@@ -38,7 +38,7 @@ import { getCachedLyricsForTrack } from './radio-lyrics.js';
 import { buildSystemDiagnostics, pruneRuntimeCaches } from '../utils/admin-diagnostics.js';
 import { applyLuxxAppCors, isLuxxAppOrigin } from '../utils/app-cors.js';
 import { getRadioPublicUrl, getLanIPv4 } from '../utils/radio-url.js';
-import { getListenPort, isRailwayRuntime } from '../utils/listen-port.js';
+import { getListenPort, isRailwayRuntime, isRenderRuntime } from '../utils/listen-port.js';
 import { addPremiumUser, removePremiumUser, getPremiumUsers } from './premium-users.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -195,7 +195,8 @@ export function mountAdminApi(app) {
             },
             deploy: {
                 railway: isRailwayRuntime(),
-                pm2Local: !isRailwayRuntime(),
+                render: isRenderRuntime(),
+                pm2Local: !isRailwayRuntime() && !isRenderRuntime(),
                 hints: [
                     'npm run pm2:start:all',
                     'npm run tunnel:reset',

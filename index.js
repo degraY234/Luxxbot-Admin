@@ -3,7 +3,7 @@ import fs from 'fs';
 import express from 'express';
 import { registerWaQrRoutes } from './src/services/wa-qr.js';
 import { printPairLinkBanner } from './src/utils/startup-banner.js';
-import { getListenPort, isRailwayRuntime } from './src/utils/listen-port.js';
+import { getListenPort, isRailwayRuntime, isRenderRuntime } from './src/utils/listen-port.js';
 import { getWaHealth } from './src/wa-status.js';
 import { getSessionDiagnostics } from './src/utils/wa-session.js';
 import { getYoutubeCookiesStatus } from './src/utils/youtube-cookies.js';
@@ -89,6 +89,7 @@ app.get('/health', async (req, res) => {
         waOk: wa.connected && wa.handlersReady,
         uptime: Math.floor(process.uptime()),
         railway: isRailwayRuntime(),
+        render: isRenderRuntime(),
         port: PORT,
         publicUrl,
         adminUrl: publicUrl ? `${publicUrl}/admin` : `${localBase}/admin`,
@@ -110,7 +111,11 @@ app.get('/health', async (req, res) => {
 });
 
 const server = app.listen(PORT, HOST, () => {
-    const rail = isRailwayRuntime() ? ` · Railway PORT=${process.env.PORT}` : '';
+    const rail = isRenderRuntime()
+        ? ` · Render PORT=${process.env.PORT || PORT}`
+        : isRailwayRuntime()
+            ? ` · Railway PORT=${process.env.PORT}`
+            : '';
     console.log(`\x1b[35m🚀 LuxxBot online (listen ${PORT}${rail})\x1b[0m`);
     if (isRailwayRuntime() && process.env.PORT && PORT !== Number(process.env.PORT)) {
         console.error('\x1b[31m❌ PORT SALAH: hapus RADIO_PORT=3920 di Railway Variables!\x1b[0m');
@@ -118,7 +123,7 @@ const server = app.listen(PORT, HOST, () => {
     printPairLinkBanner();
     bootRadioAndDiscord();
     bootWaOnly();
-    if (!isRailwayRuntime()) {
+    if (!isRailwayRuntime() && !isRenderRuntime()) {
         setTimeout(() => {
             import('./src/utils/ensure-pm2-tunnel.js')
                 .then(({ ensurePm2Tunnel }) => ensurePm2Tunnel({ quiet: true }))

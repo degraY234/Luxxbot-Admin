@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { isRailwayRuntime } from './listen-port.js';
+import { isRailwayRuntime, isRenderRuntime } from './listen-port.js';
 
 const SESSION_DIR = path.resolve('./session');
 const CREDS_FILE = path.join(SESSION_DIR, 'creds.json');
@@ -72,7 +72,7 @@ export function isWaSessionPaired() {
 }
 
 function isPersistVolumeMounted() {
-    if (!isRailwayRuntime()) return null;
+    if (!isRailwayRuntime() && !isRenderRuntime()) return null;
     try {
         const mounts = fs.readFileSync('/proc/self/mounts', 'utf8');
         if (mounts.split('\n').some((l) => l.includes(' /app/persist '))) return true;
@@ -176,7 +176,7 @@ export function getSessionDiagnostics() {
             : hasBackup
                 ? 'Session backup ada — bot akan restore otomatis'
                 : volumeMounted === false && !onPersistPath
-                    ? 'WAJIB: Railway → Volume mount /app/persist lalu scan /pair sekali'
+                    ? 'WAJIB: Render/Railway → Mount Disk / Volume ke /app/persist lalu scan /pair sekali'
                     : 'Buka /pair di laptop → scan QR sekali (session belum ada)'
     };
 }
@@ -188,7 +188,7 @@ export function logSessionDiagnostics() {
 
     if (d.volumeMounted === false) {
         console.log('\x1b[31m❌ Volume /app/persist TIDAK ter-mount — session hilang tiap redeploy!\x1b[0m');
-        console.log('\x1b[33m   Railway → Service → Volumes → Mount path: /app/persist\x1b[0m');
+        console.log('\x1b[33m   Render/Railway → Service → Disks/Volumes → Mount path: /app/persist\x1b[0m');
     } else if (d.volumeMounted === true) {
         console.log('\x1b[32m✅ Volume /app/persist ter-mount\x1b[0m');
     }

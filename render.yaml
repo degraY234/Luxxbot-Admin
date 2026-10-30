@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: luxxbot
+    runtime: docker
+    plan: starter # Starter plan mendukung persistent disk agar login WA tidak hilang saat restart. Ubah ke 'free' jika ingin paket gratis (lihat panduan).
+    region: singapore # Pilihan: singapore (terdekat), oregon, frankfurt, ohio
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PERSIST_DIR
+        value: /app/persist
+      - key: RADIO_BIND_HOST
+        value: 0.0.0.0
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROK_API_KEY
+        sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: ADMIN_API_TOKEN
+        generateValue: true
+    disk:
+      name: luxx-persist
+      mountPath: /app/persist
+      sizeGB: 1

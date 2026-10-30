@@ -29,6 +29,7 @@
     "oracle:checklist": "type scripts\\oracle-setup-checklist.txt",
     "zelpstore:checklist": "type scripts\\zelpstore-setup-checklist.txt",
     "railway:checklist": "type scripts\\railway-setup-checklist.txt",
+    "render:checklist": "type scripts\\render-setup-checklist.txt",
     "build:pages": "node scripts/build-pages.mjs",
     "export:portfolio": "node scripts/export-portfolio-repo.mjs",
     "sync:portfolio": "node scripts/sync-portfolio-repo.mjs",

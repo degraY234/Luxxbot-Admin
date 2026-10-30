@@ -6,7 +6,7 @@ import { getWaHealth } from '../wa-status.js';
 import { getSessionDiagnostics, clearWaSession } from '../utils/wa-session.js';
 
 function isRailwayOrPublicDeploy() {
-    if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PUBLIC_DOMAIN) return true;
+    if (process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PUBLIC_DOMAIN) return true;
     return Boolean(getConfiguredPublicBaseUrl());
 }
 

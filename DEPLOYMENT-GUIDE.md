@@ -58,7 +58,52 @@ Panduan ini merangkum langkah setup dan verifikasi untuk menjalankan bot WhatsAp
 
 ---
 
-## 💻 Opsi B: Deployment 24/7 di PC Lokal / VPS (PM2)
+## 🟣 Opsi B: Deployment 24/7 di Render.com (Docker Web Service)
+
+### 1. Checklist Persiapan Repositori
+- [x] `Dockerfile` multi-native dependencies siap (`ffmpeg`, `libcairo2`, `yt-dlp`).
+- [x] `render.yaml` Blueprint siap untuk deploy 1-klik.
+- [x] `scripts/docker-entrypoint.sh` otomatis mendeteksi variabel `PORT` & URL Render.
+
+### 2. Langkah Deploy di Render Dashboard
+1. **Daftar / Login:** Buka [render.com](https://render.com).
+2. **Buat Web Service:**
+   - Klik **New +** → **Web Service**.
+   - Hubungkan repo GitHub `Luxxbot-Admin` (atau fork repo Anda).
+   - Branch: `feature/railway-deploy` (atau branch utama Anda).
+3. **Konfigurasi Service:**
+   - **Language / Runtime:** `Docker`
+   - **Region:** `Singapore` (terdekat dengan Indonesia untuk latensi rendah)
+   - **Instance Type:**
+     - *Starter ($7/bln):* Disarankan untuk bot 24/7 resmi yang membutuhkan Persistent Disk.
+     - *Free ($0/bln):* Bisa dipakai untuk tes/gratis (tanpa disk). Agar bot tidak sleep setelah 15 menit, pasang pinger gratis ke `/health` via [UptimeRobot](https://uptimerobot.com).
+4. **Pasang Persistent Disk (Khusus Paket Starter):**
+   - Scroll ke bagian **Disks** → Klik **Add Disk**.
+   - Mount Path: `/app/persist`
+   - Size: `1 GB` (sangat cukup untuk session WA & cache).
+5. **Konfigurasi Environment Variables:**
+   Tambahkan variabel berikut:
+   ```env
+   NODE_ENV=production
+   PERSIST_DIR=/app/persist
+   RADIO_BIND_HOST=0.0.0.0
+   GEMINI_API_KEY=your_gemini_api_key
+   GROK_API_KEY=your_grok_api_key
+   DISCORD_BOT_TOKEN=your_discord_token
+   DISCORD_GUILD_ID=your_discord_guild_id
+   ADMIN_API_TOKEN=your_secure_random_token
+   ```
+   > ⚠️ *JANGAN set `RADIO_PORT=3920`. Render otomatis menyuntikkan `PORT` (default 10000).*
+6. **Deploy & Pairing WhatsApp:**
+   - Klik **Deploy Web Service**.
+   - Setelah status **Live**, salin domain Render Anda (misal: `https://luxxbot.onrender.com`).
+   - Buka browser laptop ke: `https://<domain-render-kamu>/pair`.
+   - Buka WhatsApp di HP → **Perangkat Tertaut** → **Tautkan Perangkat** → Scan QR code di layar laptop.
+   - Selesai! Bot WhatsApp langsung aktif.
+
+---
+
+## 💻 Opsi C: Deployment 24/7 di PC Lokal / VPS (PM2)
 
 ### 1. Jalankan Semua Layanan
 Jalankan satu perintah untuk start bot + tunnel Cloudflare + sync environment:

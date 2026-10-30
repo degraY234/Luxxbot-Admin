@@ -1,5 +1,5 @@
 import { spawnSync } from 'child_process';
-import { isRailwayRuntime } from './listen-port.js';
+import { isRailwayRuntime, isRenderRuntime } from './listen-port.js';
 import { isLuxxAutoTunnelEnabled } from './luxx-pm2-flags.js';
 
 const PM2_OPTS = {
@@ -31,8 +31,8 @@ function pm2Run(args) {
 
 /** Pastikan luxx-tunnel online di PM2 lokal (skip Railway/VPS tanpa tunnel). */
 export function ensurePm2Tunnel({ quiet = false, forceStart = false, manual = false } = {}) {
-    if (isRailwayRuntime()) {
-        return { ok: true, action: 'skip', reason: 'railway' };
+    if (isRailwayRuntime() || isRenderRuntime()) {
+        return { ok: true, action: 'skip', reason: 'cloud' };
     }
     if (!manual && !forceStart && !isLuxxAutoTunnelEnabled()) {
         return { ok: true, action: 'skip', reason: 'manual_only' };

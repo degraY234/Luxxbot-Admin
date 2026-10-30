@@ -1,0 +1,101 @@
+═══════════════════════════════════════════════════════════
+  LUXXBOT — PANDUAN & CHECKLIST DEPLOYMENT RENDER.COM
+═══════════════════════════════════════════════════════════
+
+Render (https://render.com) mendukung deployment via Docker
+secara langsung dari repository GitHub dengan dua opsi:
+1) Opsi Starter Plan ($7/bln) + Persistent Disk (Rekomendasi 24/7 resmi)
+2) Opsi Free Plan ($0/bln) + External Pinger (Gratis, tapi tanpa disk)
+
+───────────────────────────────────────────────────────────
+BAGIAN A — PERSIAPAN REPO GITHUB
+───────────────────────────────────────────────────────────
+1. Pastikan seluruh perubahan kode sudah di-commit dan di-push ke GitHub.
+2. File pendukung yang sudah siap di repo:
+   - Dockerfile (multi-native deps, ffmpeg, yt-dlp, canvas)
+   - scripts/docker-entrypoint.sh (auto mount volume /app/persist)
+   - render.yaml (konfigurasi Blueprint Render otomatis)
+
+───────────────────────────────────────────────────────────
+BAGIAN B — CARA DEPLOY DI DASHBOARD RENDER
+───────────────────────────────────────────────────────────
+
+Metode 1: Manual Web Service (Paling Fleksibel)
+1. Buka https://dashboard.render.com lalu klik "New +" → "Web Service".
+2. Hubungkan repository GitHub kamu (degraY234/Luxxbot-Admin).
+3. Pilih Branch yang aktif (contoh: feature/railway-deploy atau main).
+4. Konfigurasi Service:
+   - Name: luxxbot (atau nama bebas)
+   - Region: Singapore (terdekat dengan Indonesia, latensi rendah)
+   - Language / Runtime: Docker
+   - Instance Type:
+     * Free ($0/month) — untuk coba gratis
+     * Starter ($7/month) — untuk bot 24/7 dengan persistent disk
+5. Setup Disk (Khusus Paket Starter):
+   - Scroll ke bagian "Disks" → Klik "Add Disk"
+   - Name: luxx-persist
+   - Mount Path: /app/persist
+   - Size: 1 GB (sangat cukup untuk session WA)
+   > CATATAN: Free tier Render tidak mendukung Disk. Jika memakai Free tier,
+   > session login WA disimpan di container sementara (akan reset jika redeploy).
+
+6. Environment Variables (Klik "Advanced" → "Add Environment Variable"):
+   - NODE_ENV = production
+   - PERSIST_DIR = /app/persist
+   - RADIO_BIND_HOST = 0.0.0.0
+   - GEMINI_API_KEY = (API key Gemini kamu)
+   - GROK_API_KEY = (API key Grok kamu)
+   - DISCORD_BOT_TOKEN = (Token Discord kamu)
+   - DISCORD_GUILD_ID = (Guild ID Discord kamu)
+   - ADMIN_API_TOKEN = (Token rahasia acak untuk panel admin)
+   > ⚠️ JANGAN menambahkan RADIO_PORT=3920.
+   > Render otomatis menyuntikkan variabel PORT (default 10000).
+
+7. Klik "Create Web Service".
+
+Metode 2: Menggunakan Blueprint (render.yaml)
+1. Di dashboard Render, klik "New +" → "Blueprint".
+2. Pilih repo kamu. Render akan otomatis membaca render.yaml.
+3. Isi Environment Variables yang ditandai butuh input manual.
+4. Klik "Apply".
+
+───────────────────────────────────────────────────────────
+BAGIAN C — PAIRING WHATSAPP (SCAN QR)
+───────────────────────────────────────────────────────────
+1. Setelah Render selesai build dan status service "Live":
+2. Render akan memberikan domain publik:
+   https://luxxbot.onrender.com (contoh)
+3. Buka halaman pair di browser laptop/PC:
+   https://luxxbot.onrender.com/pair
+4. Di HP: Buka WhatsApp → Titik tiga (kanan atas) → "Perangkat Tertaut" → "Tautkan Perangkat".
+5. Arahkan kamera HP ke layar laptop untuk scan QR.
+6. Status akan otomatis berubah menjadi "Terhubung" dan bot langsung aktif!
+
+───────────────────────────────────────────────────────────
+BAGIAN D — TRIK AGAR PAKET FREE TIER TIDAK SLEEP (24/7)
+───────────────────────────────────────────────────────────
+Pada paket Free tier Render, service akan sleep (mati suri)
+jika tidak menerima traffic HTTP selama 15 menit.
+
+Agar bot tetap bangun terus 24/7 tanpa bayar:
+1. Daftar layanan pinger gratis, contoh:
+   - https://uptimerobot.com
+   - https://cron-job.org
+   - https://betteruptime.com
+2. Buat Monitor baru:
+   - Monitor Type: HTTP(s)
+   - URL: https://<domain-render-kamu>.onrender.com/health
+   - Interval: Setiap 5 atau 10 menit
+3. Dengan begini, endpoint /health akan selalu di-ping dan container
+   Render tidak akan pernah sleep!
+
+───────────────────────────────────────────────────────────
+BAGIAN E — PERIKSA STATUS & KESEHATAN BOT
+───────────────────────────────────────────────────────────
+- Health Check: https://<domain-render-kamu>.onrender.com/health
+- Web Admin: https://<domain-render-kamu>.onrender.com/admin
+- Radio Web: https://<domain-render-kamu>.onrender.com/radio
+- Pairing Page: https://<domain-render-kamu>.onrender.com/pair
+- Perintah WA: !status, !ping, !menu, !play
+
+═══════════════════════════════════════════════════════════

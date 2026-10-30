@@ -6,7 +6,7 @@ import { pruneExpiredCooldowns } from './cooldown.js';
 import { getParseCacheStats } from '../services/sastra-api.js';
 import { getLyricsCacheStats } from '../services/radio-lyrics.js';
 import { getRadioListenUrl } from '../services/radio-server.js';
-import { isRailwayRuntime } from './listen-port.js';
+import { isRailwayRuntime, isRenderRuntime } from './listen-port.js';
 
 const TEMP_DIRS = ['./temp', './temp/dl', './temp/radio', './temp/lyrics-subs'];
 
@@ -79,6 +79,7 @@ export function buildSystemDiagnostics() {
         sessions: globals,
         runtime: {
             railway: isRailwayRuntime(),
+            render: isRenderRuntime(),
             radioUrl: getRadioListenUrl() || null
         },
         links: {

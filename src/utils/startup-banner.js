@@ -29,6 +29,10 @@ export function detectPublicBaseUrl() {
         if (clean && !isLocalUrl(clean) && !candidates.includes(clean)) candidates.push(clean);
     };
 
+    push(process.env.RENDER_EXTERNAL_URL);
+    if (process.env.RENDER_EXTERNAL_HOSTNAME?.trim()) {
+        push(`https://${process.env.RENDER_EXTERNAL_HOSTNAME.trim()}`);
+    }
     push(process.env.RAILWAY_STATIC_URL);
     if (process.env.RAILWAY_PUBLIC_DOMAIN?.trim()) {
         push(`https://${process.env.RAILWAY_PUBLIC_DOMAIN.trim()}`);
@@ -37,7 +41,7 @@ export function detectPublicBaseUrl() {
     for (const [key, val] of Object.entries(process.env)) {
         const v = String(val || '').trim();
         if (!v) continue;
-        if (/\.up\.railway\.app/i.test(v)) {
+        if (/\.up\.railway\.app|\.onrender\.com/i.test(v)) {
             push(/^https?:\/\//i.test(v) ? v : `https://${v}`);
         }
         if (/PUBLIC.*URL|STATIC.*URL|SERVICE.*URL/i.test(key) && /^https:\/\//i.test(v)) {

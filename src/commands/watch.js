@@ -43,7 +43,9 @@ export async function handleWatchCommand({ sock, from, msg }) {
 
         // Kalau server down total (tidak ada URL sama sekali)
         if (!status.base && status.source === 'down') {
-            const hint = process.env.RAILWAY_ENVIRONMENT
+            const hint = (process.env.RENDER || process.env.RENDER_EXTERNAL_URL)
+                ? 'Cek Render: service online + domain aktif.'
+                : process.env.RAILWAY_ENVIRONMENT
                 ? 'Cek Railway: service online + `RADIO_PUBLIC_URL=https://domain.up.railway.app`.'
                 : 'Jalankan `npm run pm2:start` di terminal lalu coba lagi.';
             return await sock.sendMessage(from, {
