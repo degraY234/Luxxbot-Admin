@@ -35,7 +35,6 @@ import { handleStickerCommand } from '../commands/sticker.js';
 import { handleStatusCommand } from '../commands/status.js';
 import { handleHelpCommand } from '../commands/help-cmd.js';
 import { handleWelcomeCommand } from '../commands/welcome.js';
-import { checkPremiumAccess } from '../services/premium-helpers.js';
 
 import { handleQuoteCommand } from '../commands/quote.js';
 import { handleQuotesAnimeCommand } from '../commands/quotes-anime.js';
@@ -54,7 +53,6 @@ import { handleGuideCommand } from '../commands/guide.js';
 import { handleLaporCommand } from '../commands/lapor.js';
 import { handleGroupAdminCommand } from '../commands/group-admin.js';
 import { handleToimgCommand } from '../commands/toimg.js';
-import { handleSholatCommand, handleQuranCommand } from '../commands/islami.js';
 import { handleTtsCommand } from '../commands/tts.js';
 import { handleBroadcastCommand } from '../commands/broadcast.js';
 import { handleDarkJokesCommand } from '../commands/darkjokes.js';
@@ -74,8 +72,6 @@ const COMMAND_ALIASES = {
     linkgroup: 'linkgc',
     gc: 'group',
     toimage: 'toimg',
-    jadwalsholat: 'sholat',
-    alquran: 'quran',
     say: 'tts',
     bc: 'broadcast',
     darkjoke: 'darkjokes'
@@ -967,10 +963,6 @@ export function registerMessageHandler(sock) {
                 if (!checkCooldown(sender, 'sticker', 10000)) {
                     return sock.sendMessage(from, { text: '⏳ Sabar ya, jangan spam 😤' }, { quoted: msg });
                 }
-                const premiumCheck = await checkPremiumAccess(senderNumber, '!s / !sticker');
-                if (!premiumCheck.ok) {
-                    return sock.sendMessage(from, { text: premiumCheck.message }, { quoted: msg });
-                }
                 return handleStickerCommand({ sock, from, msg, args });
             }
 
@@ -981,10 +973,6 @@ export function registerMessageHandler(sock) {
                 if (!checkCooldown(sender, 'dl', 15000)) {
                     return sock.sendMessage(from, { text: '⏳ Tunggu dulu, download butuh waktu~' }, { quoted: msg });
                 }
-                const premiumCheck = await checkPremiumAccess(senderNumber, '!dl');
-                if (!premiumCheck.ok) {
-                    return sock.sendMessage(from, { text: premiumCheck.message }, { quoted: msg });
-                }
                 return handleDlCommand({ sock, from, msg, args });
             }
 
@@ -992,10 +980,6 @@ export function registerMessageHandler(sock) {
             // 🎨 AI IMAGE — !buat
             // =======================================================
             if (command === 'buat' || command === 'generate') {
-                const premiumCheck = await checkPremiumAccess(senderNumber, '!buat / !generate');
-                if (!premiumCheck.ok) {
-                    return sock.sendMessage(from, { text: premiumCheck.message }, { quoted: msg });
-                }
                 return handleBuatCommand({ sock, from, msg, args });
             }
 
@@ -1004,21 +988,6 @@ export function registerMessageHandler(sock) {
             // =======================================================
             if (command === 'toimg' || command === 'toimage') {
                 await handleToimgCommand({ sock, from, msg });
-                await sendDone(sock, from, msg);
-                return;
-            }
-
-            // =======================================================
-            // 🕌 ISLAMI — !sholat & !quran
-            // =======================================================
-            if (command === 'sholat' || command === 'jadwalsholat') {
-                await handleSholatCommand({ sock, from, msg, args });
-                await sendDone(sock, from, msg);
-                return;
-            }
-
-            if (command === 'quran' || command === 'alquran') {
-                await handleQuranCommand({ sock, from, msg, args });
                 await sendDone(sock, from, msg);
                 return;
             }

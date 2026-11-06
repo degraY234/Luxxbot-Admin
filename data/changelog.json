@@ -4,12 +4,13 @@
   "gitHead": "a004eac7",
   "highlights": [
     "Group Admin Suite: !kick, !promote, !demote, !hidetag, !tagall, !linkgc, !group",
-    "Fitur Islami: !sholat (518 kota Kemenag) & !quran (teks Arab, latin, terjemahan)",
+    "Akses publik terbuka bebas: !s (stiker), !dl (downloader), !buat (AI gambar) untuk semua member grup",
     "Media Tools: !toimg (stiker ke gambar/video) & !tts (teks ke voice note VN)",
     "Throttled broadcast owner anti-banned: !bc / !broadcast",
+    "Menu Owner/Admin bot eksklusif hanya untuk nomor owner terdaftar",
     "Unwrap pesan ephemeral & viewOnce grup WhatsApp",
     "SQLite resilience pragma busy_timeout & graceful shutdown",
-    "Offline test suite lengkap: npm test (15 passed checks)",
+    "Offline test suite lengkap: npm test (13 passed checks)",
     "Hugging Face sebagai storage session + data",
     "Konfigurasi Docker & blueprint Render",
     "Helper PM2 startup & tunnel management"

@@ -35,7 +35,6 @@ function buildMenuText(isSelfMode, isSleeping, antiLink, isAdmin, botUptime) {
     m += `_Ketik perintah di bawah untuk melihat daftar lengkap tiap kategori:_\n\n`;
     m += `🎮 \`!menu umum\`     · Perintah dasar & info\n`;
     m += `🛡️ \`!menu grup\`     · Moderasi grup & admin tools\n`;
-    m += `🕌 \`!menu islami\`   · Jadwal sholat & Al-Qur'an\n`;
     m += `🧠 \`!menu ai\`       · AI, coding & terjemahan\n`;
     m += `🎵 \`!menu musik\`    · Radio, lagu & Discord\n`;
     m += `🎨 \`!menu media\`    · Stiker, toimg, TTS & downloader\n`;
@@ -95,19 +94,6 @@ function buildMenuGrup() {
     m += lastItem('!welcome', 'Setel pesan sambutan anggota baru', '👋');
     m += `\n${DIVIDER}\n`;
     m += `_Catatan: Bot harus menjadi Admin grup untuk menjalankan kick/promote/linkgc/group._\n`;
-    m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
-    return m;
-}
-
-/** Section ISLAMI */
-function buildMenuIslami() {
-    let m = '';
-    m += `🕌 *MENU ISLAMI*\n`;
-    m += `_Utilitas ibadah harian & Al-Qur'an digital._\n`;
-    m += DIVIDER + '\n';
-    m += item('!sholat [kota]', 'Jadwal sholat harian (contoh: !sholat Bandung)', '🕌');
-    m += lastItem('!quran [surah] [ayat]', 'Teks Arab & terjemahan ayat (contoh: !quran 2 255)', '📖');
-    m += `\n${DIVIDER}\n`;
     m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
     return m;
 }
@@ -248,7 +234,6 @@ function buildSectionMenu(sectionArg, isAdmin) {
     const s = sectionArg.toLowerCase().trim();
     if (s === 'umum' || s === 'general' || s === 'u') return buildMenuUmum();
     if (s === 'grup' || s === 'group' || s === 'admin' || s === 'g') return buildMenuGrup();
-    if (s === 'islami' || s === 'islam' || s === 'sholat' || s === 'quran') return buildMenuIslami();
     if ((s === 'owner' || s === 'o') && isAdmin) return buildMenuOwner();
     if (s === 'ai' || s === 'chat' || s === 'a') return buildMenuAi();
     if (s === 'musik' || s === 'music' || s === 'radio' || s === 'm') return buildMenuMusik();
