@@ -21,7 +21,7 @@ import {
 } from '../services/sound-library.js';
 
 const SESSION_TTL_MS = 5 * 60 * 1000;
-const SEARCH_LIMIT = 10;
+const SEARCH_LIMIT = 15;
 
 export function getSpHelpText() {
     return (
@@ -119,7 +119,7 @@ export async function fetchAndSendSound(sock, from, msg, item, sender, { customN
         text: `⏳ Mengunduh *${item.title}*...`
     }, { quoted: msg });
 
-    const buffer = await downloadSound(item.mp3, item.source);
+    const buffer = await downloadSound(item.mp3, item.source, item.ytUrl);
     const { entry, created } = saveSoundToLibrary(from, {
         title: item.title,
         buffer,
@@ -169,9 +169,10 @@ function describeSources(tracks) {
     const src = new Set(tracks.map(t => t.source).filter(Boolean));
     const labels = [];
     if ([...src].some(s => s?.startsWith('myinstants'))) labels.push('MyInstants');
+    if (src.has('youtube')) labels.push('YouTube');
     if (src.has('pixabay')) labels.push('Pixabay');
     if (src.has('freesound')) labels.push('Freesound');
-    return labels.length ? labels.join(' + ') : 'MyInstants + fallback';
+    return labels.length ? labels.join(' + ') : 'MyInstants + YouTube';
 }
 
 function buildLibraryListText(jid) {

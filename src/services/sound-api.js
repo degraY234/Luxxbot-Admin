@@ -1,7 +1,9 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import fs from 'fs';
+import path from 'path';
+import { downloadAudioToMp3 } from '../utils/ytdlp-download.js';
 
-const API_BASE = process.env.MYINSTANTS_API_URL || 'https://myinstants-api.vercel.app';
 const PIXABAY_KEY = process.env.PIXABAY_API_KEY || '';
 const FREESOUND_RAW = process.env.FREESOUND_API_KEY || '';
 /** Token Freesound = string pendek dari /apiv2/apply — bukan URL browser */
@@ -19,41 +21,30 @@ const axiosCfg = {
 const STOP_WORDS = new Set([
     'the', 'a', 'an', 'and', 'or', 'dan', 'yang', 'itu', 'ini', 'nya', 'ga', 'gak',
     'banget', 'bet', 'dong', 'sih', 'deh', 'lah', 'atau', 'untuk', 'dari', 'ke', 'di',
-    'sound', 'sfx', 'effect', 'audio', 'meme'
+    'sfx', 'effect', 'audio', 'meme'
 ]);
 
+// Durasi maks video YouTube yang dianggap "sound effect" (detik)
+const YT_MAX_DURATION_SEC = 120;
+
 function normalizeItem(raw, source = 'myinstants') {
-    if (!raw?.mp3) return null;
+    if (!raw?.mp3 && !raw?.ytUrl) return null;
     return {
         id: String(raw.id || ''),
         title: String(raw.title || 'Sound').trim(),
-        mp3: String(raw.mp3),
+        mp3: raw.mp3 ? String(raw.mp3) : null,
+        ytUrl: raw.ytUrl || null,
         url: raw.url || '',
         source
     };
 }
 
-async function apiGet(path, params = {}) {
-    try {
-        const res = await axios.get(`${API_BASE}${path}`, {
-            ...axiosCfg,
-            params,
-            validateStatus: s => s < 500
-        });
-        if (res.status !== 200) return [];
-        const items = Array.isArray(res.data?.data) ? res.data.data : [];
-        return items.map(i => normalizeItem(i)).filter(Boolean);
-    } catch (e) {
-        console.warn('⚠️ Sound API:', e.message);
-        return [];
-    }
-}
-
-/** Scrape langsung MyInstants */
-async function scrapeMyInstants(query) {
+/** Scrape satu halaman MyInstants */
+async function scrapeMyInstantsPage(query, page = 1) {
     try {
         const q = encodeURIComponent(query.trim());
-        const res = await axios.get(`https://www.myinstants.com/en/search/?q=${q}`, {
+        const pageParam = page > 1 ? `&page=${page}` : '';
+        const res = await axios.get(`https://www.myinstants.com/en/search/?name=${q}${pageParam}`, {
             ...axiosCfg,
             responseType: 'text',
             validateStatus: s => s < 500
@@ -68,27 +59,50 @@ async function scrapeMyInstants(query) {
             const mp3 = $(el).find('button.small-button').attr('onclick')?.match(/play\('([^']+)'/)?.[1];
             if (!title || !mp3) return;
             const id = link.split('/').filter(Boolean).pop() || title;
-            items.push(normalizeItem({
+            const item = normalizeItem({
                 id,
                 title,
                 mp3: mp3.startsWith('http') ? mp3 : `https://www.myinstants.com${mp3.startsWith('/') ? '' : '/'}${mp3}`,
                 url: link.startsWith('http') ? link : `https://www.myinstants.com${link}`,
-                source: 'myinstants-scrape'
-            }));
+            }, 'myinstants');
+            if (item) items.push(item);
         });
         return items;
     } catch (e) {
-        console.warn('⚠️ MyInstants scrape:', e.message);
+        console.warn(`⚠️ MyInstants scrape page ${page}:`, e.message);
         return [];
     }
 }
 
-async function searchMyInstantsOnce(query) {
-    const [api, scraped] = await Promise.all([
-        apiGet('/search', { q: query }),
-        scrapeMyInstants(query)
-    ]);
-    return dedupeItems([...api, ...scraped]);
+/** Scrape MyInstants multi-halaman secara paralel */
+async function scrapeMyInstants(query, pages = 2) {
+    const pagePromises = Array.from({ length: pages }, (_, i) =>
+        scrapeMyInstantsPage(query, i + 1)
+    );
+    const results = await Promise.all(pagePromises);
+    return dedupeItems(results.flat());
+}
+
+/** Cari YouTube via yt-search, filter video pendek */
+async function searchYouTube(query, limit = 15) {
+    try {
+        const yts = (await import('yt-search')).default;
+        const result = await yts(query);
+        const videos = (result.videos || [])
+            .filter(v => v.seconds > 0 && v.seconds <= YT_MAX_DURATION_SEC)
+            .slice(0, limit);
+
+        return videos.map(v => normalizeItem({
+            id: `yt-${v.videoId}`,
+            title: v.title,
+            mp3: null,
+            ytUrl: v.url,
+            url: v.url
+        }, 'youtube')).filter(Boolean);
+    } catch (e) {
+        console.warn('⚠️ YouTube search:', e.message);
+        return [];
+    }
 }
 
 /** Pixabay — key valid untuk image/video; endpoint sound belum publik (404) */
@@ -114,7 +128,6 @@ async function searchFreesound(query, limit = 8) {
             title: r.name || 'Freesound',
             mp3: r.previews?.['preview-hq-mp3'] || r.previews?.['preview-lq-mp3'],
             url: `https://freesound.org/sounds/${r.id}/`,
-            source: 'freesound'
         }, 'freesound')).filter(Boolean);
     } catch (e) {
         console.warn('⚠️ Freesound:', e.message);
@@ -126,7 +139,7 @@ function dedupeItems(items) {
     const seen = new Set();
     const out = [];
     for (const item of items) {
-        const key = `${item.source}:${item.mp3 || item.id}`;
+        const key = `${item.source}:${item.mp3 || item.ytUrl || item.id}`;
         if (seen.has(key)) continue;
         seen.add(key);
         out.push(item);
@@ -189,11 +202,11 @@ function rankItems(items, keywordPack, fullQuery) {
 }
 
 /**
- * Pencarian pintar:
- * 1. Exact query (API + scrape MyInstants + API opsional)
+ * Pencarian pintar multi-sumber:
+ * 1. MyInstants (multi-page) + YouTube + Freesound — exact query
  * 2. Fallback per kata kunci — gabung & ranking
  */
-export async function searchSounds(query, limit = 10) {
+export async function searchSounds(query, limit = 15) {
     const q = query?.trim();
     if (!q) return { items: [], mode: 'empty', keywords: [] };
 
@@ -202,12 +215,15 @@ export async function searchSounds(query, limit = 10) {
         ? keywordPack.meaningful
         : keywordPack.all;
 
-    // --- Tahap 1: exact full query ---
-    let items = dedupeItems([
-        ...(await searchMyInstantsOnce(q)),
-        ...(await searchPixabay(q, limit)),
-        ...(await searchFreesound(q, limit))
+    // --- Tahap 1: exact full query — semua sumber paralel ---
+    const [myinstants, youtube, freesound, pixabay] = await Promise.all([
+        scrapeMyInstants(q, 2),
+        searchYouTube(q, 15),
+        searchFreesound(q, limit),
+        searchPixabay(q, limit)
     ]);
+
+    let items = dedupeItems([...myinstants, ...youtube, ...pixabay, ...freesound]);
 
     if (items.length) {
         return {
@@ -221,7 +237,8 @@ export async function searchSounds(query, limit = 10) {
     const searchTerms = keywordPack.search.length ? keywordPack.search.slice(0, 6) : [q];
     const pools = await Promise.all(searchTerms.map(term =>
         Promise.all([
-            searchMyInstantsOnce(term),
+            scrapeMyInstants(term, 1),
+            searchYouTube(term, 10),
             searchPixabay(term, 6),
             searchFreesound(term, 6)
         ]).then(parts => parts.flat())
@@ -242,27 +259,74 @@ export async function searchSounds(query, limit = 10) {
     };
 }
 
-export async function fetchTrendingSounds(region = 'id', limit = 8) {
+export async function fetchTrendingSounds(_region = 'id', limit = 10) {
     try {
-        const items = await apiGet('/trending', { q: region });
-        if (items.length) return items.slice(0, limit);
+        const res = await axios.get('https://www.myinstants.com/en/trending/', {
+            ...axiosCfg,
+            responseType: 'text',
+            validateStatus: s => s < 500
+        });
+        if (res.status !== 200) return [];
+        const $ = cheerio.load(res.data);
+        const items = [];
+        $('.instant').each((_, el) => {
+            const link = $(el).find('a.instant-link').attr('href') || '';
+            const title = $(el).find('.instant-link').text().trim();
+            const mp3 = $(el).find('button.small-button').attr('onclick')?.match(/play\('([^']+)'/)?.[1];
+            if (!title || !mp3) return;
+            const id = link.split('/').filter(Boolean).pop() || title;
+            const item = normalizeItem({
+                id, title,
+                mp3: mp3.startsWith('http') ? mp3 : `https://www.myinstants.com${mp3.startsWith('/') ? '' : '/'}${mp3}`,
+                url: link.startsWith('http') ? link : `https://www.myinstants.com${link}`,
+            }, 'myinstants');
+            if (item) items.push(item);
+        });
+        return items.slice(0, limit);
     } catch (e) {
         console.warn('⚠️ Sound trending gagal:', e.message);
+        return [];
     }
-    return [];
 }
 
-export async function fetchBestSounds(region = 'id', limit = 8) {
+export async function fetchBestSounds(_region = 'id', limit = 10) {
     try {
-        const items = await apiGet('/best', { q: region });
-        if (items.length) return items.slice(0, limit);
+        const res = await axios.get('https://www.myinstants.com/en/best_of_all_time/', {
+            ...axiosCfg,
+            responseType: 'text',
+            validateStatus: s => s < 500
+        });
+        if (res.status !== 200) return [];
+        const $ = cheerio.load(res.data);
+        const items = [];
+        $('.instant').each((_, el) => {
+            const link = $(el).find('a.instant-link').attr('href') || '';
+            const title = $(el).find('.instant-link').text().trim();
+            const mp3 = $(el).find('button.small-button').attr('onclick')?.match(/play\('([^']+)'/)?.[1];
+            if (!title || !mp3) return;
+            const id = link.split('/').filter(Boolean).pop() || title;
+            const item = normalizeItem({
+                id, title,
+                mp3: mp3.startsWith('http') ? mp3 : `https://www.myinstants.com${mp3.startsWith('/') ? '' : '/'}${mp3}`,
+                url: link.startsWith('http') ? link : `https://www.myinstants.com${link}`,
+            }, 'myinstants');
+            if (item) items.push(item);
+        });
+        return items.slice(0, limit);
     } catch (e) {
         console.warn('⚠️ Sound best gagal:', e.message);
+        return [];
     }
-    return [];
 }
 
-export async function downloadSound(mp3Url, source = 'myinstants') {
+/**
+ * Download sound — HTTP untuk MyInstants/Freesound, yt-dlp untuk YouTube
+ */
+export async function downloadSound(mp3Url, source = 'myinstants', ytUrl = null) {
+    if (source === 'youtube' && ytUrl) {
+        return downloadYouTubeAudio(ytUrl);
+    }
+
     const referer = source === 'pixabay'
         ? 'https://pixabay.com/'
         : source === 'freesound'
@@ -279,4 +343,23 @@ export async function downloadSound(mp3Url, source = 'myinstants') {
     if (!buffer.length) throw new Error('File sound kosong');
     if (buffer.length > 16 * 1024 * 1024) throw new Error('Sound terlalu besar untuk WhatsApp (max ~16MB)');
     return buffer;
+}
+
+/** Download audio YouTube via yt-dlp, kembalikan Buffer */
+async function downloadYouTubeAudio(url) {
+    const tmpDir = path.join('./temp', 'sp-yt');
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+    const tmpFile = path.join(tmpDir, `sp-${Date.now()}.mp3`);
+    try {
+        await downloadAudioToMp3(url, tmpFile);
+        if (!fs.existsSync(tmpFile)) throw new Error('File audio YouTube tidak ditemukan setelah unduhan');
+        const stat = fs.statSync(tmpFile);
+        if (stat.size === 0) throw new Error('File audio YouTube kosong');
+        if (stat.size > 16 * 1024 * 1024) throw new Error('Audio terlalu besar untuk WhatsApp (max ~16MB)');
+        const buffer = fs.readFileSync(tmpFile);
+        return buffer;
+    } finally {
+        try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (_) {}
+    }
 }
