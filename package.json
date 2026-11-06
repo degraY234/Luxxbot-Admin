@@ -37,7 +37,8 @@
     "cleanup:commit": "node scripts/commit-cleanup.mjs",
     "discovery:sync": "node scripts/sync-discovery-github.mjs",
     "bot:url": "node scripts/print-bot-url.mjs",
-    "test:smoke": "node scripts/test-smoke.mjs"
+    "test:smoke": "node scripts/test-smoke.mjs",
+    "test": "node scripts/test-all.mjs"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",

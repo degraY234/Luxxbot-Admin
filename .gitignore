@@ -30,6 +30,7 @@ config/cloudflared-credentials.json
 data/sounds/
 data/youtube-cookies.txt
 data/watch-subtitles/
+data/usage-tracker.json
 temp/
 terminals/
 backup/
@@ -40,7 +41,6 @@ persist/
 # Script probe/diag lokal (jangan commit)
 scripts/_*
 scripts/probe-*
-scripts/test-*
 
 # Logs
 *.log

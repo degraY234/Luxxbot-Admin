@@ -39,6 +39,7 @@ async function initSqlite() {
         sqliteDb = new Database(SQLITE_PATH, { fileMustExist: false });
         sqliteDb.pragma('journal_mode = WAL');
         sqliteDb.pragma('synchronous = NORMAL');
+        sqliteDb.pragma('busy_timeout = 5000');
         sqliteDb.prepare(
             'CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL)'
         ).run();
@@ -98,9 +99,23 @@ export async function deleteKey(key) {
     db.prepare('DELETE FROM kv_store WHERE key = ?').run(key);
 }
 
+export async function closePersistence() {
+    if (redisClient) {
+        try { await redisClient.quit(); } catch (_) {}
+        redisClient = null;
+    }
+    if (sqliteDb) {
+        try { sqliteDb.close(); } catch (_) {}
+        sqliteDb = null;
+        sqliteInitPromise = null;
+        sqliteInitDone = false;
+    }
+}
+
 export default {
     initPersistence,
     getJson,
     setJson,
-    deleteKey
+    deleteKey,
+    closePersistence
 };

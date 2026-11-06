@@ -1,19 +1,17 @@
 {
-  "version": "3.2.0",
-  "updatedAt": "2026-10-29",
-  "gitHead": "098a0469",
+  "version": "3.3.0",
+  "updatedAt": "2026-11-06",
+  "gitHead": "a004eac7",
   "highlights": [
-    "tambah helper PM2 startup disable",
-    "rapikan struktur repo + hapus clutter",
-    "dark cyber theme + animated robot logo with moving eyes",
-    "sync admin ke branch main GitHub Pages, perbaiki workflow gagal",
-    "$(cat <<'EOF'",
-    "siapkan GitHub dan Zelpstore PM2 sama seperti lokal",
-    "export cookies supports -Local PM2 and reads .env token",
-    "stronger session snapshot backup and reconnect watchdog",
-    "auto-detect Railway origin, login cukup token saja",
-    "handle Chrome DPAPI cookie error, add upload-only path",
-    "Audio APK stabil — resumeAudio() tunggal, EQ graph hanya saat preset aktif",
-    "Mood stasiun cepat — cache server 6 jam + endpoint /radio/api/mood/:id"
+    "Group Admin Suite: !kick, !promote, !demote, !hidetag, !tagall, !linkgc, !group",
+    "Fitur Islami: !sholat (518 kota Kemenag) & !quran (teks Arab, latin, terjemahan)",
+    "Media Tools: !toimg (stiker ke gambar/video) & !tts (teks ke voice note VN)",
+    "Throttled broadcast owner anti-banned: !bc / !broadcast",
+    "Unwrap pesan ephemeral & viewOnce grup WhatsApp",
+    "SQLite resilience pragma busy_timeout & graceful shutdown",
+    "Offline test suite lengkap: npm test (15 passed checks)",
+    "Hugging Face sebagai storage session + data",
+    "Konfigurasi Docker & blueprint Render",
+    "Helper PM2 startup & tunnel management"
   ]
 }

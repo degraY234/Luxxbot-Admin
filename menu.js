@@ -34,14 +34,16 @@ function buildMenuText(isSelfMode, isSleeping, antiLink, isAdmin, botUptime) {
     m += section('📂 *PILIH KATEGORI MENU*');
     m += `_Ketik perintah di bawah untuk melihat daftar lengkap tiap kategori:_\n\n`;
     m += `🎮 \`!menu umum\`     · Perintah dasar & info\n`;
-    if (isAdmin) {
-        m += `👑 \`!menu owner\`    · Kontrol bot (owner only)\n`;
-    }
+    m += `🛡️ \`!menu grup\`     · Moderasi grup & admin tools\n`;
+    m += `🕌 \`!menu islami\`   · Jadwal sholat & Al-Qur'an\n`;
     m += `🧠 \`!menu ai\`       · AI, coding & terjemahan\n`;
     m += `🎵 \`!menu musik\`    · Radio, lagu & Discord\n`;
-    m += `🎌 \`!menu hiburan\`  · Anime, sastra & fun\n`;
-    m += `🎨 \`!menu media\`    · Stiker, download & tools\n`;
+    m += `🎨 \`!menu media\`    · Stiker, toimg, TTS & downloader\n`;
+    m += `🎌 \`!menu hiburan\`  · Anime, sastra & jokes\n`;
     m += `🎲 \`!menu games\`    · Polling, voting & gacha\n`;
+    if (isAdmin) {
+        m += `👑 \`!menu owner\`    · Kontrol bot & broadcast\n`;
+    }
 
     m += `\n${DIVIDER}\n`;
     m += `❓ \`!help [perintah]\` · Detail satu perintah\n`;
@@ -68,12 +70,43 @@ function buildMenuUmum() {
     m += item('!berita', 'Berita terkini multi-negara', '📰');
     m += item('!notes', 'Catatan pribadi (add/list/edit)', '📝');
     m += item('!reminder', 'Atur pengingat (30m / 2h / HH:MM)', '⏰');
-    m += item('!welcome', 'Pesan sambutan otomatis grup', '👋');
-    m += item('!add', 'Tambah member ke grup', '👥');
-    m += item('!tagall', 'Tag semua member grup', '📢');
     m += item('!tanggal', 'Waktu & tanggal Indonesia (WIB)', '🗓️');
     m += item('!warna', 'Generate warna acak + kode hex', '🎨');
     m += lastItem('!server', 'Info server & spesifikasi sistem', '🖥️');
+    m += `\n${DIVIDER}\n`;
+    m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
+    return m;
+}
+
+/** Section GRUP */
+function buildMenuGrup() {
+    let m = '';
+    m += `🛡️ *MENU GRUP & MODERASI*\n`;
+    m += `_Alat bantu manajemen grup untuk admin._\n`;
+    m += DIVIDER + '\n';
+    m += item('!kick @user', 'Keluarkan anggota dari grup', '👋');
+    m += item('!promote @user', 'Naikkan anggota menjadi Admin', '⭐');
+    m += item('!demote @user', 'Turunkan admin jadi anggota biasa', '🔻');
+    m += item('!hidetag [teks]', 'Panggil semua member tanpa tag spam', '📢');
+    m += item('!tagall [pesan]', 'Tag seluruh anggota grup dengan daftar', '📣');
+    m += item('!linkgc', 'Ambil link undangan grup', '🔗');
+    m += item('!group buka/tutup', 'Buka atau tutup izin kirim pesan grup', '🔒');
+    m += item('!antilink', 'Aktifkan proteksi kick sebar link grup', '🛡️');
+    m += lastItem('!welcome', 'Setel pesan sambutan anggota baru', '👋');
+    m += `\n${DIVIDER}\n`;
+    m += `_Catatan: Bot harus menjadi Admin grup untuk menjalankan kick/promote/linkgc/group._\n`;
+    m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
+    return m;
+}
+
+/** Section ISLAMI */
+function buildMenuIslami() {
+    let m = '';
+    m += `🕌 *MENU ISLAMI*\n`;
+    m += `_Utilitas ibadah harian & Al-Qur'an digital._\n`;
+    m += DIVIDER + '\n';
+    m += item('!sholat [kota]', 'Jadwal sholat harian (contoh: !sholat Bandung)', '🕌');
+    m += lastItem('!quran [surah] [ayat]', 'Teks Arab & terjemahan ayat (contoh: !quran 2 255)', '📖');
     m += `\n${DIVIDER}\n`;
     m += `_Kembali: \`!menu\` · Detail: \`!help [perintah]\`_`;
     return m;
@@ -98,7 +131,7 @@ function buildMenuOwner() {
     m += item('!grup', 'Info & atur pengaturan grup', '👥');
     m += item('!antilink', 'Toggle anti-link grup on/off', '🛡️');
     m += item('!speedtest', 'Tes kecepatan koneksi server', '🌐');
-    m += item('!broadcast', 'Kirim pesan ke semua kontak/grup', '📢');
+    m += item('!broadcast', 'Siaran throttled anti-ban ke semua grup', '📢');
     m += item('!bc', 'Alias dari !broadcast', '📣');
     m += item('!systeminfo', 'Info sistem lengkap (CPU/RAM/disk)', '🧠');
     m += lastItem('!resetroom', 'Reset room Watch2Gether', '🔄');
@@ -174,6 +207,8 @@ function buildMenuMedia() {
     m += DIVIDER + '\n';
     m += item('!buat', 'Generate gambar AI HD fotorealistik', '🖼️');
     m += item('!s', 'Buat stiker premium dari foto/video', '🎨');
+    m += item('!toimg', 'Ubah stiker jadi gambar/video kembali', '🖼️');
+    m += item('!tts [teks]', 'Ubah teks jadi pesan suara (voice note WA)', '🗣️');
     m += item('!dl', 'Download video/audio dari YouTube & TikTok', '📥');
     m += item('!sp', 'Sound pad — cari, simpan & putar efek suara', '🔊');
     m += item('!quote', 'Kutipan inspiratif acak', '💬');
@@ -212,12 +247,14 @@ function buildMenuGames() {
 function buildSectionMenu(sectionArg, isAdmin) {
     const s = sectionArg.toLowerCase().trim();
     if (s === 'umum' || s === 'general' || s === 'u') return buildMenuUmum();
-    if ((s === 'owner' || s === 'admin' || s === 'o') && isAdmin) return buildMenuOwner();
+    if (s === 'grup' || s === 'group' || s === 'admin' || s === 'g') return buildMenuGrup();
+    if (s === 'islami' || s === 'islam' || s === 'sholat' || s === 'quran') return buildMenuIslami();
+    if ((s === 'owner' || s === 'o') && isAdmin) return buildMenuOwner();
     if (s === 'ai' || s === 'chat' || s === 'a') return buildMenuAi();
     if (s === 'musik' || s === 'music' || s === 'radio' || s === 'm') return buildMenuMusik();
     if (s === 'hiburan' || s === 'entertainment' || s === 'h') return buildMenuHiburan();
     if (s === 'media' || s === 'tools' || s === 't') return buildMenuMedia();
-    if (s === 'games' || s === 'game' || s === 'fun' || s === 'g') return buildMenuGames();
+    if (s === 'games' || s === 'game' || s === 'fun') return buildMenuGames();
     return null;
 }
 

@@ -52,6 +52,12 @@ import { handleBuatCommand } from '../commands/buat.js';
 import { handleAnimeCommand } from '../commands/anime.js';
 import { handleGuideCommand } from '../commands/guide.js';
 import { handleLaporCommand } from '../commands/lapor.js';
+import { handleGroupAdminCommand } from '../commands/group-admin.js';
+import { handleToimgCommand } from '../commands/toimg.js';
+import { handleSholatCommand, handleQuranCommand } from '../commands/islami.js';
+import { handleTtsCommand } from '../commands/tts.js';
+import { handleBroadcastCommand } from '../commands/broadcast.js';
+import { handleDarkJokesCommand } from '../commands/darkjokes.js';
 
 let boundMessageSock = null;
 
@@ -60,7 +66,19 @@ const COMMAND_ALIASES = {
     halp: 'help',
     radlo: 'radio',
     ply: 'play',
-    wath: 'watch'
+    wath: 'watch',
+    tendang: 'kick',
+    admin: 'promote',
+    unadmin: 'demote',
+    h: 'hidetag',
+    linkgroup: 'linkgc',
+    gc: 'group',
+    toimage: 'toimg',
+    jadwalsholat: 'sholat',
+    alquran: 'quran',
+    say: 'tts',
+    bc: 'broadcast',
+    darkjoke: 'darkjokes'
 };
 
 function sendDone(sock, from, msg, baseText = '✅ Done') {
@@ -108,13 +126,23 @@ export function registerMessageHandler(sock) {
             isGroup = from.endsWith('@g.us');
             sender = msg.key.participant || from;
 
-            // --- Parse message body ---
-            type = Object.keys(msg.message)[0];
+            // --- Parse message body & unwrap containers ---
+            let mContent = msg.message;
+            if (mContent?.ephemeralMessage?.message) mContent = mContent.ephemeralMessage.message;
+            if (mContent?.viewOnceMessage?.message) mContent = mContent.viewOnceMessage.message;
+            if (mContent?.viewOnceMessageV2?.message) mContent = mContent.viewOnceMessageV2.message;
+            if (mContent?.documentWithCaptionMessage?.message) mContent = mContent.documentWithCaptionMessage.message;
+            msg.message = mContent || msg.message;
+
+            type = Object.keys(msg.message || {})[0];
             let body = '';
             if (type === 'conversation') body = msg.message.conversation;
-            else if (type === 'extendedTextMessage') body = msg.message.extendedTextMessage.text;
-            else if (type === 'imageMessage' && msg.message.imageMessage.caption) body = msg.message.imageMessage.caption;
-            else if (type === 'videoMessage' && msg.message.videoMessage.caption) body = msg.message.videoMessage.caption;
+            else if (type === 'extendedTextMessage') body = msg.message.extendedTextMessage?.text || '';
+            else if (type === 'imageMessage' && msg.message.imageMessage?.caption) body = msg.message.imageMessage.caption;
+            else if (type === 'videoMessage' && msg.message.videoMessage?.caption) body = msg.message.videoMessage.caption;
+            else if (type === 'buttonsResponseMessage') body = msg.message.buttonsResponseMessage?.selectedButtonId || '';
+            else if (type === 'templateButtonReplyMessage') body = msg.message.templateButtonReplyMessage?.selectedId || '';
+            else if (type === 'listResponseMessage') body = msg.message.listResponseMessage?.singleSelectReply?.selectedRowId || '';
 
             text = body.trim();
             command = null;
@@ -561,8 +589,24 @@ export function registerMessageHandler(sock) {
             }
 
             // =======================================================
-            // 👥 GROUP MANAGEMENT
+            // 👥 GROUP MANAGEMENT & ADMIN SUITE
             // =======================================================
+            if (['kick', 'tendang', 'promote', 'admin', 'demote', 'unadmin', 'hidetag', 'h', 'tagall', 'linkgc', 'linkgroup', 'group', 'gc'].includes(command)) {
+                await handleGroupAdminCommand({
+                    sock,
+                    from,
+                    msg,
+                    sender,
+                    command,
+                    args,
+                    isGroup,
+                    isAdmin,
+                    isGroupAdmin: _localGroupAdminFlag
+                });
+                await sendDone(sock, from, msg);
+                return;
+            }
+
             if (command === 'add') {
                 if (!isGroup) return await sock.sendMessage(from, { text: '⚠️ Ini cuma bisa di dalam grup Kak! 🏡' }, { quoted: msg });
                 if (!_localGroupAdminFlag) return await sock.sendMessage(from, { text: '❌ Cuma admin grup atau Owner yang boleh masukin orang! 👑' }, { quoted: msg });
@@ -575,21 +619,7 @@ export function registerMessageHandler(sock) {
                     await sock.sendMessage(from, { text: '❌ Gagal masukin orang, kayaknya aku belum jadi admin deh! 🥺' }, { quoted: msg });
                 }
                 await sendDone(sock, from, msg);
-            }
-
-            if (command === 'tagall') {
-                if (!isGroup) return await sock.sendMessage(from, { text: '⚠️ Cuma bisa di grup ya Kak! 🏡' }, { quoted: msg });
-                const groupMetadata = await sock.groupMetadata(from);
-                const peserta = groupMetadata.participants;
-                const teksTambahan = args.join(' ') || 'Panggilan Darurat, Kumpul yuk!';
-                let pesanTag = `📢 *PANGGILAN UNTUK SEMUA!* 📢\n📌 *Pesan:* ${teksTambahan}\n\n`;
-                const mentions = [];
-                for (let jlh of peserta) {
-                    pesanTag += `@${jlh.id.split('@')[0]}\n`;
-                    mentions.push(jlh.id);
-                }
-                await sock.sendMessage(from, { text: pesanTag, mentions }, { quoted: msg });
-                await sendDone(sock, from, msg);
+                return;
             }
 
             // =======================================================
@@ -967,6 +997,57 @@ export function registerMessageHandler(sock) {
                     return sock.sendMessage(from, { text: premiumCheck.message }, { quoted: msg });
                 }
                 return handleBuatCommand({ sock, from, msg, args });
+            }
+
+            // =======================================================
+            // 🖼️ TO IMAGE — !toimg
+            // =======================================================
+            if (command === 'toimg' || command === 'toimage') {
+                await handleToimgCommand({ sock, from, msg });
+                await sendDone(sock, from, msg);
+                return;
+            }
+
+            // =======================================================
+            // 🕌 ISLAMI — !sholat & !quran
+            // =======================================================
+            if (command === 'sholat' || command === 'jadwalsholat') {
+                await handleSholatCommand({ sock, from, msg, args });
+                await sendDone(sock, from, msg);
+                return;
+            }
+
+            if (command === 'quran' || command === 'alquran') {
+                await handleQuranCommand({ sock, from, msg, args });
+                await sendDone(sock, from, msg);
+                return;
+            }
+
+            // =======================================================
+            // 🗣️ TEXT TO SPEECH — !tts
+            // =======================================================
+            if (command === 'tts' || command === 'say') {
+                await handleTtsCommand({ sock, from, msg, args });
+                await sendDone(sock, from, msg);
+                return;
+            }
+
+            // =======================================================
+            // 📢 BROADCAST OWNER — !bc / !broadcast
+            // =======================================================
+            if (command === 'bc' || command === 'broadcast') {
+                await handleBroadcastCommand({ sock, from, msg, args, isAdmin });
+                await sendDone(sock, from, msg);
+                return;
+            }
+
+            // =======================================================
+            // 😈 DARK JOKES — !darkjokes
+            // =======================================================
+            if (command === 'darkjokes' || command === 'darkjoke') {
+                await handleDarkJokesCommand({ sock, from, msg });
+                await sendDone(sock, from, msg);
+                return;
             }
 
             // =======================================================

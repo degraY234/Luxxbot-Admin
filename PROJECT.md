@@ -66,9 +66,9 @@
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | Core System & Service Bug Fixes | Fix state.js, premium-users.js, usage-tracker.js, dl-media.js, payment-gateway.js, wa-qr.js, persistence.js | none | IN_PROGRESS |
-| M2 | High-Impact Commands & Integrations | Implement group-admin, toimg, islami, tts, broadcast, darkjokes, pantun, and menu sync | M1 (Interface Contracts) | PLANNED |
-| M3 | Final Acceptance & Adversarial Hardening | Pass 100% of offline test suite (Tiers 1-4) and adversarial coverage hardening (Tier 5) | M1, M2, E2E Track | PLANNED |
+| M1 | Core System & Service Bug Fixes | Fix state.js, premium-users.js, usage-tracker.js, dl-media.js, payment-gateway.js, wa-qr.js, persistence.js | none | COMPLETED |
+| M2 | High-Impact Commands & Integrations | Implement group-admin, toimg, islami, tts, broadcast, darkjokes, pantun, and menu sync | M1 (Interface Contracts) | COMPLETED |
+| M3 | Final Acceptance & Adversarial Hardening | Pass 100% of offline test suite (Tiers 1-4) and adversarial coverage hardening (Tier 5) | M1, M2, E2E Track | COMPLETED |
 
 ## Interface Contracts
 
