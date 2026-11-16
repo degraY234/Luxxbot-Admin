@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function pm2(...args) {
-    return spawnSync('pm2', args, { cwd: root, stdio: 'inherit', shell: false, windowsHide: true });
+    return spawnSync('pm2', args, { cwd: root, stdio: 'inherit', shell: true, windowsHide: true });
 }
 
 function run(cmd) {
