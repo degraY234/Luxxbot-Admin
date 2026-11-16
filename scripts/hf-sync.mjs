@@ -23,7 +23,7 @@ import { createHash } from 'crypto';
 const HF_TOKEN  = process.env.HF_TOKEN  || '';
 const HF_REPO   = process.env.HF_REPO   || '';
 const HF_BRANCH = process.env.HF_BRANCH || 'main';
-const LOCAL_DIR = process.env.LOCAL_DIR  || '/app';
+const LOCAL_DIR = process.env.LOCAL_DIR || (process.platform === 'win32' ? process.cwd() : (fs.existsSync('/app') ? '/app' : process.cwd()));
 
 // File/folder yang disync ke HF (relatif dari LOCAL_DIR)
 const SYNC_PATHS = [

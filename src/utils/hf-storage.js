@@ -57,7 +57,7 @@ export async function pushToHfNow() {
         console.log('\x1b[36m[hf] 📤 Pushing session ke Hugging Face...\x1b[0m');
         const { stdout, stderr } = await execFileAsync(
             process.execPath,
-            ['--input-type=module', HF_SYNC_SCRIPT, 'push'],
+            [HF_SYNC_SCRIPT, 'push'],
             {
                 env: process.env,
                 timeout: 60_000,
@@ -85,7 +85,7 @@ export async function pullFromHfOnStartup() {
         console.log('\x1b[36m[hf] 📥 Pulling session dari Hugging Face...\x1b[0m');
         const { stdout, stderr } = await execFileAsync(
             process.execPath,
-            ['--input-type=module', HF_SYNC_SCRIPT, 'pull'],
+            [HF_SYNC_SCRIPT, 'pull'],
             {
                 env: process.env,
                 timeout: 60_000,
